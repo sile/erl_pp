@@ -3,6 +3,10 @@ extern crate erl_tokenize;
 extern crate trackable;
 
 pub use erl_tokenize::{Result, Error, ErrorKind};
+
+pub use directive::Directive;
 pub use preprocessor::Preprocessor;
 
+mod directive;
 mod preprocessor;
+mod token_reader;

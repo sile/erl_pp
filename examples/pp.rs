@@ -28,9 +28,9 @@ fn main() {
     let tokenizer = Tokenizer::new(&src);
     let preprocessor = Preprocessor::new(tokenizer);
     for result in preprocessor {
-        let (token, pos) = track_try_unwrap!(result);
+        let token = track_try_unwrap!(result);
         if !silent {
-            println!("[pos:{:?}] {:?}", pos, token);
+            println!("[{:?}] {:?}", token.position(), token.value());
         }
         count += 1;
     }
