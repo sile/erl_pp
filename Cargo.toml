@@ -1,0 +1,11 @@
+[package]
+name = "erl_pp"
+version = "0.1.0"
+authors = ["Takeru Ohta <phjgt308@gmail.com>"]
+
+[dependencies]
+erl_tokenize = "0.2"
+trackable = "0.1"
+
+[dev-dependencies]
+clap = "2"
