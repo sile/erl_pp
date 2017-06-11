@@ -5,7 +5,7 @@ use erl_tokenize::tokens::VariableToken;
 use erl_tokenize::values::Symbol;
 
 use {Result, Directive, ErrorKind};
-use directive::{MacroDef, MacroName, Undef};
+use directive::{self, MacroDef, MacroName, Undef};
 use token_reader::TokenReader;
 
 #[derive(Debug)]
@@ -74,13 +74,47 @@ impl<'a> Preprocessor<'a> {
                 "ifndef" => unimplemented!(),
                 "else" => unimplemented!(),
                 "endif" => unimplemented!(),
-                "error" => unimplemented!(),
-                "warning" => unimplemented!(),
+                "error" => {
+                    let d = track_try!(self.read_error_directive());
+                    return Ok(Some(Directive::Error(d)));
+                }
+                "warning" => {
+                    let d = track_try!(self.read_warning_directive());
+                    return Ok(Some(Directive::Warning(d)));
+                }
                 _ => {}
             }
         }
 
         Ok(None)
+    }
+    fn read_error_directive(&mut self) -> Result<directive::Error> {
+        // '('
+        track_try!(self.reader.skip_whitespace_or_comment());
+        track_try!(self.reader.read_expected_symbol_or_error(Symbol::OpenParen));
+
+        let message_start = self.reader.position();
+        let message_end = track_try!(self.skip_remaining_directive_tokens());
+
+        Ok(directive::Error {
+               message_start,
+               message_end,
+               tokens: self.reader.commit_transaction(),
+           })
+    }
+    fn read_warning_directive(&mut self) -> Result<directive::Warning> {
+        // '('
+        track_try!(self.reader.skip_whitespace_or_comment());
+        track_try!(self.reader.read_expected_symbol_or_error(Symbol::OpenParen));
+
+        let message_start = self.reader.position();
+        let message_end = track_try!(self.skip_remaining_directive_tokens());
+
+        Ok(directive::Warning {
+               message_start,
+               message_end,
+               tokens: self.reader.commit_transaction(),
+           })
     }
     fn read_parenthesized_macro_name(&mut self) -> Result<MacroName> {
         // '('
@@ -173,17 +207,20 @@ impl<'a> Preprocessor<'a> {
         }
         Ok(vars)
     }
-    fn read_macro_replacement(&mut self) -> Result<Position> {
+    fn skip_remaining_directive_tokens(&mut self) -> Result<Position> {
         loop {
             let token = track_try!(self.reader.read_or_error());
             if token.value() == TokenValue::Symbol(Symbol::CloseParen) {
-                let replacement_end = token.position().clone();
+                let end = token.position().clone();
                 track_try!(self.reader.skip_whitespace_or_comment());
                 if track_try!(self.reader.read_symbol_if(Symbol::Dot)).is_some() {
-                    return Ok(replacement_end);
+                    return Ok(end);
                 }
             }
         }
+    }
+    fn read_macro_replacement(&mut self) -> Result<Position> {
+        track!(self.skip_remaining_directive_tokens())
     }
 }
 impl<'a> Iterator for Preprocessor<'a> {

@@ -12,8 +12,22 @@ pub enum Directive {
     Ifndef,
     Else,
     Endif,
-    Error,
-    Warning,
+    Error(Error),
+    Warning(Warning),
+}
+
+#[derive(Debug, Clone)]
+pub struct Error {
+    pub message_start: Position,
+    pub message_end: Position,
+    pub tokens: Vec<Token>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Warning {
+    pub message_start: Position,
+    pub message_end: Position,
+    pub tokens: Vec<Token>,
 }
 
 #[derive(Debug, Clone)]

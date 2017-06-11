@@ -47,3 +47,18 @@ fn undef_works() {
     assert_eq!(tokens.iter().map(|t| t.text()).collect::<Vec<_>>(),
                ["aaa", ".", " ", " ", "bbb", "."]);
 }
+
+#[test]
+fn error_and_warning_works() {
+    let src = r#"aaa. -error("foo"). bbb."#;
+    let tokens = pp(src).collect::<Result<Vec<_>, _>>().unwrap();
+
+    assert_eq!(tokens.iter().map(|t| t.text()).collect::<Vec<_>>(),
+               ["aaa", ".", " ", " ", "bbb", "."]);
+
+    let src = r#"aaa. -warning("foo"). bbb."#;
+    let tokens = pp(src).collect::<Result<Vec<_>, _>>().unwrap();
+
+    assert_eq!(tokens.iter().map(|t| t.text()).collect::<Vec<_>>(),
+               ["aaa", ".", " ", " ", "bbb", "."]);
+}
