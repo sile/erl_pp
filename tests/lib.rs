@@ -31,4 +31,10 @@ fn define_works() {
 
     assert_eq!(tokens.iter().map(|t| t.text()).collect::<Vec<_>>(),
                ["aaa", ".", " ", " ", "bbb", "."]);
+
+    let src = r#"aaa. -define(Foo (A, B), [bar, A, baz, B]). bbb."#;
+    let tokens = pp(src).collect::<Result<Vec<_>, _>>().unwrap();
+
+    assert_eq!(tokens.iter().map(|t| t.text()).collect::<Vec<_>>(),
+               ["aaa", ".", " ", " ", "bbb", "."]);
 }

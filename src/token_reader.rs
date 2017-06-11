@@ -1,8 +1,8 @@
-use erl_tokenize::{Token, Tokenizer};
-use erl_tokenize::tokens::{AtomToken, SymbolToken};
+use erl_tokenize::{Token, Tokenizer, Position};
+use erl_tokenize::tokens::{AtomToken, SymbolToken, VariableToken};
 use erl_tokenize::values::Symbol;
 
-use Result;
+use {Result, ErrorKind};
 
 #[derive(Debug)]
 pub struct TokenReader<'a> {
@@ -17,6 +17,9 @@ impl<'a> TokenReader<'a> {
             unread: Vec::new(),
             transaction: None,
         }
+    }
+    pub fn position(&self) -> Position {
+        self.tokens.next_position().clone()
     }
     pub fn start_transaction(&mut self) {
         assert!(self.transaction.is_none());
@@ -41,10 +44,23 @@ impl<'a> TokenReader<'a> {
             match self.tokens.next() {
                 None => Ok(None),
                 Some(Err(e)) => Err(e),
-                Some(Ok(t)) => Ok(Some(t)),
+                Some(Ok(t)) => {
+                    if let Some(transaction) = self.transaction.as_mut() {
+                        transaction.push(t.clone());
+                    }
+                    Ok(Some(t))
+                }
             }
         }
     }
+    pub fn read_or_error(&mut self) -> Result<Token> {
+        if let Some(token) = track_try!(self.read()) {
+            Ok(token)
+        } else {
+            track_panic!(ErrorKind::UnexpectedEos)
+        }
+    }
+
     pub fn unread(&mut self, token: Token) {
         if let Some(transaction) = self.transaction.as_mut() {
             transaction.pop();
@@ -74,6 +90,48 @@ impl<'a> TokenReader<'a> {
             }
         } else {
             Ok(None)
+        }
+    }
+    pub fn read_symbol(&mut self) -> Result<Option<SymbolToken>> {
+        if let Some(token) = track_try!(self.read()) {
+            if let Token::Symbol(t) = token {
+                Ok(Some(t))
+            } else {
+                self.unread(token);
+                Ok(None)
+            }
+        } else {
+            Ok(None)
+        }
+    }
+    pub fn read_variable(&mut self) -> Result<Option<VariableToken>> {
+        if let Some(token) = track_try!(self.read()) {
+            if let Token::Variable(t) = token {
+                Ok(Some(t))
+            } else {
+                self.unread(token);
+                Ok(None)
+            }
+        } else {
+            Ok(None)
+        }
+    }
+    pub fn read_variable_or_error(&mut self) -> Result<VariableToken> {
+        if let Some(t) = track_try!(self.read_variable()) {
+            Ok(t)
+        } else {
+            track_panic!(ErrorKind::InvalidInput,
+                         "Unexpected token: actual={:?}, expected=VariableToken",
+                         self.read());
+        }
+    }
+    pub fn read_symbol_or_error(&mut self) -> Result<SymbolToken> {
+        if let Some(t) = track_try!(self.read_symbol()) {
+            Ok(t)
+        } else {
+            track_panic!(ErrorKind::InvalidInput,
+                         "Unexpected token: actual={:?}, expected=SymbolToken",
+                         self.read());
         }
     }
     pub fn read_symbol_if(&mut self, expected: Symbol) -> Result<Option<SymbolToken>> {
