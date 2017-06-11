@@ -7,7 +7,7 @@ pub enum Directive {
     Include,
     IncludeLib,
     Define(MacroDef),
-    Undef,
+    Undef(Undef),
     Ifdef,
     Ifndef,
     Else,
@@ -16,6 +16,13 @@ pub enum Directive {
     Warning,
 }
 
+#[derive(Debug, Clone)]
+pub struct Undef {
+    pub name: MacroName,
+    pub tokens: Vec<Token>,
+}
+
+// TODO: rename
 #[derive(Debug, Clone)]
 pub struct MacroDef {
     pub name: MacroName,

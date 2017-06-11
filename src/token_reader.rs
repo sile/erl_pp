@@ -151,4 +151,14 @@ impl<'a> TokenReader<'a> {
             Ok(None)
         }
     }
+    pub fn read_expected_symbol_or_error(&mut self, expected: Symbol) -> Result<SymbolToken> {
+        if let Some(s) = track_try!(self.read_symbol_if(expected)) {
+            Ok(s)
+        } else {
+            track_panic!(ErrorKind::InvalidInput,
+                         "Unexpected token: actual={:?}, expected={:?}",
+                         self.read(),
+                         expected);
+        }
+    }
 }

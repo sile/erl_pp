@@ -5,7 +5,7 @@ use erl_tokenize::tokens::VariableToken;
 use erl_tokenize::values::Symbol;
 
 use {Result, Directive, ErrorKind};
-use directive::{MacroDef, MacroName};
+use directive::{MacroDef, MacroName, Undef};
 use token_reader::TokenReader;
 
 #[derive(Debug)]
@@ -65,7 +65,11 @@ impl<'a> Preprocessor<'a> {
                     self.macros.insert(d.name.clone(), self.directives.len());
                     return Ok(Some(Directive::Define(d)));
                 }
-                "undef" => unimplemented!(),
+                "undef" => {
+                    let d = track_try!(self.read_undef_directive());
+                    self.macros.remove(&d.name);
+                    return Ok(Some(Directive::Undef(d)));
+                }
                 "ifdef" => unimplemented!(),
                 "ifndef" => unimplemented!(),
                 "else" => unimplemented!(),
@@ -78,14 +82,37 @@ impl<'a> Preprocessor<'a> {
 
         Ok(None)
     }
+    fn read_parenthesized_macro_name(&mut self) -> Result<MacroName> {
+        // '('
+        track_try!(self.reader.skip_whitespace_or_comment());
+        track_try!(self.reader.read_expected_symbol_or_error(Symbol::OpenParen));
+
+        // macro name
+        track_try!(self.reader.skip_whitespace_or_comment());
+        let name = track_try!(self.read_macro_name());
+
+        // ')'
+        track_try!(self.reader.skip_whitespace_or_comment());
+        track_try!(self.reader
+                       .read_expected_symbol_or_error(Symbol::CloseParen));
+
+        // '.'
+        track_try!(self.reader.skip_whitespace_or_comment());
+        track_try!(self.reader.read_expected_symbol_or_error(Symbol::Dot));
+
+        Ok(name)
+    }
+    fn read_undef_directive(&mut self) -> Result<Undef> {
+        let name = track_try!(self.read_parenthesized_macro_name());
+        Ok(Undef {
+               name,
+               tokens: self.reader.commit_transaction(),
+           })
+    }
     fn read_define_directive(&mut self) -> Result<MacroDef> {
         // '('
         track_try!(self.reader.skip_whitespace_or_comment());
-        if track_try!(self.reader.read_symbol_if(Symbol::OpenParen)).is_none() {
-            track_panic!(ErrorKind::InvalidInput,
-                         "Unexpected token: actual={:?}, expected=Symbol::OpenParent",
-                         self.reader.read());
-        }
+        track_try!(self.reader.read_expected_symbol_or_error(Symbol::OpenParen));
 
         // macro name
         track_try!(self.reader.skip_whitespace_or_comment());

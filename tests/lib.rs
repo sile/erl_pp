@@ -38,3 +38,12 @@ fn define_works() {
     assert_eq!(tokens.iter().map(|t| t.text()).collect::<Vec<_>>(),
                ["aaa", ".", " ", " ", "bbb", "."]);
 }
+
+#[test]
+fn undef_works() {
+    let src = r#"aaa. -undef(foo). bbb."#;
+    let tokens = pp(src).collect::<Result<Vec<_>, _>>().unwrap();
+
+    assert_eq!(tokens.iter().map(|t| t.text()).collect::<Vec<_>>(),
+               ["aaa", ".", " ", " ", "bbb", "."]);
+}
