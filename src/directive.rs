@@ -1,7 +1,7 @@
 use std::hash::{Hash, Hasher};
 use std::mem;
 use erl_tokenize::{Token, Position, PositionRange};
-use erl_tokenize::tokens::{AtomToken, VariableToken};
+use erl_tokenize::tokens::{AtomToken, VariableToken, SymbolToken};
 
 #[derive(Debug, Clone)]
 pub enum Directive {
@@ -33,23 +33,22 @@ pub enum Directive2 {
 
 #[derive(Debug, Clone)]
 pub struct Define {
-    pub _hyphen: Position,
-    pub _define: Position,
-    pub _open_paren: Position,
+    pub _hyphen: SymbolToken,
+    pub _define: AtomToken,
+    pub _open_paren: SymbolToken,
     pub name: MacroName,
     pub variables: Option<MacroVariables>,
-    pub _comma: Position,
+    pub _comma: SymbolToken,
     pub replacement: Vec<Token>,
-    pub _close_paren: Position,
-    pub _dot: Position,
-    _end: Position,
+    pub _close_paren: SymbolToken,
+    pub _dot: SymbolToken,
 }
 impl PositionRange for Define {
     fn start_position(&self) -> Position {
-        self._hyphen.clone()
+        self._hyphen.start_position()
     }
     fn end_position(&self) -> Position {
-        self._end.clone()
+        self._dot.end_position()
     }
 }
 
@@ -63,7 +62,7 @@ pub enum List<T> {
 pub enum Tail<T> {
     Null,
     Cons {
-        _comma: Position,
+        _comma: SymbolToken,
         head: T,
         tail: Box<Tail<T>>,
     },
@@ -105,10 +104,9 @@ impl<'a, T: 'a> Iterator for ListIterInner<'a, T> {
 
 #[derive(Debug, Clone)]
 pub struct MacroVariables {
-    pub _open_paren: Position,
+    pub _open_paren: SymbolToken,
     pub list: List<VariableToken>,
-    pub _close_paren: Position,
-    _end: Position,
+    pub _close_paren: SymbolToken,
 }
 impl MacroVariables {
     pub fn iter(&self) -> ListIter<VariableToken> {
@@ -117,10 +115,10 @@ impl MacroVariables {
 }
 impl PositionRange for MacroVariables {
     fn start_position(&self) -> Position {
-        self._open_paren.clone()
+        self._open_paren.start_position()
     }
     fn end_position(&self) -> Position {
-        self._end.clone()
+        self._close_paren.end_position()
     }
 }
 

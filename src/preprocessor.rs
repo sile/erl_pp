@@ -1,7 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use erl_tokenize::{Token, Tokenizer, Position, TokenValue, PositionRange};
-use erl_tokenize::tokens::VariableToken;
+use erl_tokenize::tokens::{VariableToken, AtomToken, SymbolToken};
 use erl_tokenize::values::Symbol;
 
 use {Result, Directive, ErrorKind};
@@ -37,7 +37,7 @@ impl<'a> Preprocessor2<'a> {
         }
     }
     fn next_token(&mut self) -> Result<Option<Token>> {
-        if self.can_directive_start {
+        if self.can_directive_start && self.buffer.is_empty() {
             if let Some(d) = track_try!(self.try_read_directive()) {
                 self.directives.push(d);
             }
@@ -57,27 +57,29 @@ impl<'a> Preprocessor2<'a> {
             Ok(None)
         }
     }
-    fn try_read_directive(&mut self) -> Result<Option<Directive2>> {
-        assert!(self.buffer.is_empty());
-        if let Some(token) = track_try!(self.reader.read_symbol_if(Symbol::Hyphen)) {
-            self.buffer.push_back(token.into());
-        } else {
-            return Ok(None);
-        }
-
+    fn skip_whitespace_or_comment(&mut self) -> Result<()> {
         while let Some(token) = track_try!(self.reader.read_whitespace_or_comment()) {
             self.buffer.push_back(token);
         }
+        Ok(())
+    }
+    fn try_read_directive(&mut self) -> Result<Option<Directive2>> {
+        assert!(self.buffer.is_empty());
+        let hyphen = if let Some(token) = track_try!(self.reader.read_symbol_if(Symbol::Hyphen)) {
+            token
+        } else {
+            return Ok(None);
+        };
 
+        track_try!(self.skip_whitespace_or_comment());
         if let Some(atom) = track_try!(self.reader.read_atom()) {
             match atom.value() {
                 "include" => unimplemented!(),
                 "include_lib" => unimplemented!(),
                 "define" => {
-                    // let d = track_try!(self.read_define_directive());
-                    // self.macros.insert(d.name.clone(), self.directives.len());
-                    // return Ok(Some(Directive::Define(d)));
-                    unimplemented!()
+                    let d = track_try!(self.read_define_directive(hyphen, atom));
+                    self.macros.insert(d.name.clone(), self.directives.len());
+                    return Ok(Some(Directive2::Define(d)));
                 }
                 "undef" => {
                     // let d = track_try!(self.read_undef_directive());
@@ -99,11 +101,123 @@ impl<'a> Preprocessor2<'a> {
                     // return Ok(Some(Directive::Warning(d)));
                     unimplemented!()
                 }
-                _ => self.buffer.push_back(atom.into()),
+                _ => {
+                    self.buffer.push_front(hyphen.into());
+                    self.buffer.push_back(atom.into());
+                }
             }
         }
 
         Ok(None)
+    }
+    fn read_macro_name(&mut self) -> Result<MacroName> {
+        if let Some(atom) = track_try!(self.reader.read_atom()) {
+            Ok(MacroName::Atom(atom))
+        } else if let Some(var) = track_try!(self.reader.read_variable()) {
+            Ok(MacroName::Variable(var))
+        } else {
+            track_panic!(ErrorKind::InvalidInput,
+                         "Invalid macro name: {:?}",
+                         self.reader.read());
+        }
+    }
+    fn read_define_directive(&mut self,
+                             _hyphen: SymbolToken,
+                             _define: AtomToken)
+                             -> Result<directive::Define> {
+        // '('
+        track_try!(self.skip_whitespace_or_comment());
+        let _open_paren = track_try!(self.reader.read_expected_symbol_or_error(Symbol::OpenParen));
+
+        // macro name
+        track_try!(self.skip_whitespace_or_comment());
+        let name = track_try!(self.read_macro_name());
+
+        // macro variables
+        track_try!(self.skip_whitespace_or_comment());
+        let variables = if let Some(open) = track_try!(self.reader
+                                                           .read_symbol_if(Symbol::OpenParen)) {
+            Some(track_try!(self.read_macro_variables(open)))
+        } else {
+            None
+        };
+
+        // ','
+        track_try!(self.skip_whitespace_or_comment());
+        let _comma = track_try!(self.reader.read_expected_symbol_or_error(Symbol::Comma));
+
+        // macro replacement, ')', '.'
+        let (replacement, _close_paren, _dot) = track_try!(self.read_macro_replacement());
+
+        Ok(directive::Define {
+               _hyphen,
+               _define,
+               _open_paren,
+               name,
+               variables,
+               _comma,
+               replacement,
+               _close_paren,
+               _dot,
+           })
+    }
+    fn read_macro_replacement(&mut self) -> Result<(Vec<Token>, SymbolToken, SymbolToken)> {
+        let mut tokens = Vec::new();
+        while let Some(token) = track_try!(self.reader.read()) {
+            if let Token::Symbol(symbol) = token {
+                if symbol.value() == Symbol::CloseParen {
+                    let mut ignores = Vec::new();
+                    while let Some(token) = track_try!(self.reader.read_whitespace_or_comment()) {
+                        ignores.push(token);
+                    }
+                    if let Some(dot) = track_try!(self.reader.read_symbol_if(Symbol::Dot)) {
+                        self.buffer.extend(ignores);
+                        return Ok((tokens, symbol, dot));
+                    }
+                    tokens.push(symbol.into());
+                    tokens.extend(ignores);
+                }
+            } else {
+                tokens.push(token);
+            }
+        }
+        track_panic!(ErrorKind::UnexpectedEos);
+    }
+    fn read_list_tail(&mut self) -> Result<directive::Tail<VariableToken>> {
+        track_try!(self.skip_whitespace_or_comment());
+        if let Some(comma) = track_try!(self.reader.read_symbol_if(Symbol::Comma)) {
+            track_try!(self.skip_whitespace_or_comment());
+            let var = track_try!(self.reader.read_variable_or_error());
+            Ok(directive::Tail::Cons {
+                   _comma: comma,
+                   head: var,
+                   tail: Box::new(track_try!(self.read_list_tail())),
+               })
+        } else {
+            Ok(directive::Tail::Null)
+        }
+    }
+    fn read_macro_variables(&mut self,
+                            _open_paren: SymbolToken)
+                            -> Result<directive::MacroVariables> {
+        let mut list = directive::List::Null;
+        track_try!(self.skip_whitespace_or_comment());
+        if let Some(var) = track_try!(self.reader.read_variable()) {
+            list = directive::List::Cons {
+                head: var,
+                tail: track_try!(self.read_list_tail()),
+            };
+        }
+
+        //
+        track_try!(self.skip_whitespace_or_comment());
+        let _close_paren = track_try!(self.reader
+                                          .read_expected_symbol_or_error(Symbol::CloseParen));
+        Ok(directive::MacroVariables {
+               _open_paren,
+               list,
+               _close_paren,
+           })
     }
 }
 impl<'a> Iterator for Preprocessor2<'a> {

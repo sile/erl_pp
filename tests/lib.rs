@@ -1,12 +1,17 @@
 extern crate erl_pp;
 extern crate erl_tokenize;
 
-use erl_pp::Preprocessor;
+use erl_pp::{Preprocessor, Preprocessor2};
 use erl_tokenize::{Tokenizer, TokenKind};
 
 fn pp(text: &str) -> Preprocessor {
     let tokenizer = Tokenizer::new(text);
     Preprocessor::new(tokenizer)
+}
+
+fn pp2(text: &str) -> Preprocessor2 {
+    let tokenizer = Tokenizer::new(text);
+    Preprocessor2::new(tokenizer)
 }
 
 #[test]
@@ -27,13 +32,13 @@ fn no_directive_works() {
 #[test]
 fn define_works() {
     let src = r#"aaa. -define(foo, [bar, baz]). bbb."#;
-    let tokens = pp(src).collect::<Result<Vec<_>, _>>().unwrap();
+    let tokens = pp2(src).collect::<Result<Vec<_>, _>>().unwrap();
 
     assert_eq!(tokens.iter().map(|t| t.text()).collect::<Vec<_>>(),
                ["aaa", ".", " ", " ", "bbb", "."]);
 
-    let src = r#"aaa. -define(Foo (A, B), [bar, A, baz, B]). bbb."#;
-    let tokens = pp(src).collect::<Result<Vec<_>, _>>().unwrap();
+    let src = r#"aaa. -define(Foo(A,B), [bar, A, baz, B]). bbb."#;
+    let tokens = pp2(src).collect::<Result<Vec<_>, _>>().unwrap();
 
     assert_eq!(tokens.iter().map(|t| t.text()).collect::<Vec<_>>(),
                ["aaa", ".", " ", " ", "bbb", "."]);
