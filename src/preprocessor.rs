@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use erl_tokenize::{Token, Tokenizer, Position, TokenValue};
+use erl_tokenize::{Token, Tokenizer, Position, TokenValue, PositionRange};
 use erl_tokenize::tokens::VariableToken;
 use erl_tokenize::values::Symbol;
 
@@ -211,7 +211,7 @@ impl<'a> Preprocessor<'a> {
         loop {
             let token = track_try!(self.reader.read_or_error());
             if token.value() == TokenValue::Symbol(Symbol::CloseParen) {
-                let end = token.position().clone();
+                let end = token.start_position().clone();
                 track_try!(self.reader.skip_whitespace_or_comment());
                 if track_try!(self.reader.read_symbol_if(Symbol::Dot)).is_some() {
                     return Ok(end);
