@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::path::PathBuf;
 use erl_tokenize::{Token, Tokenizer, Position, TokenValue, PositionRange};
 use erl_tokenize::tokens::VariableToken;
@@ -6,7 +6,116 @@ use erl_tokenize::values::Symbol;
 
 use {Result, Directive, ErrorKind};
 use directive::{self, MacroDef, MacroName, Undef};
+use directive::Directive2;
 use token_reader::TokenReader;
+
+#[derive(Debug)]
+pub struct Preprocessor2<'a> {
+    reader: TokenReader<'a>,
+    can_directive_start: bool,
+    macros: HashMap<MacroName, usize>,
+    directives: Vec<Directive2>,
+    code_paths: Vec<PathBuf>,
+    buffer: VecDeque<Token>,
+}
+impl<'a> Preprocessor2<'a> {
+    pub fn new(tokens: Tokenizer<'a>) -> Self {
+        Preprocessor2 {
+            reader: TokenReader::new(tokens),
+            can_directive_start: true,
+            macros: HashMap::new(),
+            directives: Vec::new(),
+            code_paths: Vec::new(),
+            buffer: VecDeque::new(),
+        }
+    }
+    fn read(&mut self) -> Result<Option<Token>> {
+        if let Some(token) = self.buffer.pop_front() {
+            Ok(Some(token))
+        } else {
+            track!(self.reader.read())
+        }
+    }
+    fn next_token(&mut self) -> Result<Option<Token>> {
+        if self.can_directive_start {
+            if let Some(d) = track_try!(self.try_read_directive()) {
+                self.directives.push(d);
+            }
+        }
+
+        if let Some(token) = track_try!(self.read()) {
+            match token {
+                Token::Whitespace(_) |
+                Token::Comment(_) => {}
+                Token::Symbol(ref s) => {
+                    self.can_directive_start = s.value() == Symbol::Dot;
+                }
+                _ => self.can_directive_start = false,
+            }
+            Ok(Some(token))
+        } else {
+            Ok(None)
+        }
+    }
+    fn try_read_directive(&mut self) -> Result<Option<Directive2>> {
+        assert!(self.buffer.is_empty());
+        if let Some(token) = track_try!(self.reader.read_symbol_if(Symbol::Hyphen)) {
+            self.buffer.push_back(token.into());
+        } else {
+            return Ok(None);
+        }
+
+        while let Some(token) = track_try!(self.reader.read_whitespace_or_comment()) {
+            self.buffer.push_back(token);
+        }
+
+        if let Some(atom) = track_try!(self.reader.read_atom()) {
+            match atom.value() {
+                "include" => unimplemented!(),
+                "include_lib" => unimplemented!(),
+                "define" => {
+                    // let d = track_try!(self.read_define_directive());
+                    // self.macros.insert(d.name.clone(), self.directives.len());
+                    // return Ok(Some(Directive::Define(d)));
+                    unimplemented!()
+                }
+                "undef" => {
+                    // let d = track_try!(self.read_undef_directive());
+                    // self.macros.remove(&d.name);
+                    // return Ok(Some(Directive::Undef(d)));
+                    unimplemented!()
+                }
+                "ifdef" => unimplemented!(),
+                "ifndef" => unimplemented!(),
+                "else" => unimplemented!(),
+                "endif" => unimplemented!(),
+                "error" => {
+                    // let d = track_try!(self.read_error_directive());
+                    // return Ok(Some(Directive::Error(d)));
+                    unimplemented!()
+                }
+                "warning" => {
+                    // let d = track_try!(self.read_warning_directive());
+                    // return Ok(Some(Directive::Warning(d)));
+                    unimplemented!()
+                }
+                _ => self.buffer.push_back(atom.into()),
+            }
+        }
+
+        Ok(None)
+    }
+}
+impl<'a> Iterator for Preprocessor2<'a> {
+    type Item = Result<Token>;
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.next_token() {
+            Err(e) => Some(Err(e)),
+            Ok(None) => None,
+            Ok(Some(token)) => Some(Ok(token)),
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct Preprocessor<'a> {

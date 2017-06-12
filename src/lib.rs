@@ -4,8 +4,8 @@ extern crate trackable;
 
 pub use erl_tokenize::{Result, Error, ErrorKind};
 
-pub use directive::Directive;
-pub use preprocessor::Preprocessor;
+pub use directive::{Directive, Directive2};
+pub use preprocessor::{Preprocessor, Preprocessor2};
 
 mod directive;
 mod preprocessor;

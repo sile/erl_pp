@@ -80,6 +80,16 @@ impl<'a> TokenReader<'a> {
         }
         Ok(())
     }
+    pub fn read_whitespace_or_comment(&mut self) -> Result<Option<Token>> {
+        if let Some(token) = track_try!(self.read()) {
+            match token {
+                Token::Whitespace(_) |
+                Token::Comment(_) => return Ok(Some(token)),
+                _ => self.unread(token),
+            }
+        }
+        Ok(None)
+    }
     pub fn read_atom(&mut self) -> Result<Option<AtomToken>> {
         if let Some(token) = track_try!(self.read()) {
             if let Token::Atom(t) = token {
