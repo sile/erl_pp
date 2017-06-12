@@ -82,10 +82,9 @@ impl<'a> Preprocessor2<'a> {
                     return Ok(Some(Directive2::Define(d)));
                 }
                 "undef" => {
-                    // let d = track_try!(self.read_undef_directive());
-                    // self.macros.remove(&d.name);
-                    // return Ok(Some(Directive::Undef(d)));
-                    unimplemented!()
+                    let d = track_try!(self.read_undef_directive(hyphen, atom));
+                    self.macros.remove(&d.name);
+                    return Ok(Some(Directive2::Undef(d)));
                 }
                 "ifdef" => unimplemented!(),
                 "ifndef" => unimplemented!(),
@@ -157,6 +156,36 @@ impl<'a> Preprocessor2<'a> {
                variables,
                _comma,
                replacement,
+               _close_paren,
+               _dot,
+           })
+    }
+    fn read_undef_directive(&mut self,
+                            _hyphen: SymbolToken,
+                            _undef: AtomToken)
+                            -> Result<directive::Undef2> {
+        // '('
+        track_try!(self.skip_whitespace_or_comment());
+        let _open_paren = track_try!(self.reader.read_expected_symbol_or_error(Symbol::OpenParen));
+
+        // macro name
+        track_try!(self.skip_whitespace_or_comment());
+        let name = track_try!(self.read_macro_name());
+
+        // ')'
+        track_try!(self.skip_whitespace_or_comment());
+        let _close_paren = track_try!(self.reader
+                                          .read_expected_symbol_or_error(Symbol::CloseParen));
+
+        // '.'
+        track_try!(self.skip_whitespace_or_comment());
+        let _dot = track_try!(self.reader.read_expected_symbol_or_error(Symbol::Dot));
+
+        Ok(directive::Undef2 {
+               _hyphen,
+               _undef,
+               _open_paren,
+               name,
                _close_paren,
                _dot,
            })

@@ -22,7 +22,7 @@ pub enum Directive2 {
     Include,
     IncludeLib,
     Define(Define),
-    Undef(Undef),
+    Undef(Undef2),
     Ifdef,
     Ifndef,
     Else,
@@ -44,6 +44,24 @@ pub struct Define {
     pub _dot: SymbolToken,
 }
 impl PositionRange for Define {
+    fn start_position(&self) -> Position {
+        self._hyphen.start_position()
+    }
+    fn end_position(&self) -> Position {
+        self._dot.end_position()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Undef2 {
+    pub _hyphen: SymbolToken,
+    pub _undef: AtomToken,
+    pub _open_paren: SymbolToken,
+    pub name: MacroName,
+    pub _close_paren: SymbolToken,
+    pub _dot: SymbolToken,
+}
+impl PositionRange for Undef2 {
     fn start_position(&self) -> Position {
         self._hyphen.start_position()
     }

@@ -47,7 +47,7 @@ fn define_works() {
 #[test]
 fn undef_works() {
     let src = r#"aaa. -undef(foo). bbb."#;
-    let tokens = pp(src).collect::<Result<Vec<_>, _>>().unwrap();
+    let tokens = pp2(src).collect::<Result<Vec<_>, _>>().unwrap();
 
     assert_eq!(tokens.iter().map(|t| t.text()).collect::<Vec<_>>(),
                ["aaa", ".", " ", " ", "bbb", "."]);
