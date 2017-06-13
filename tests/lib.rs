@@ -1,17 +1,14 @@
 extern crate erl_pp;
 extern crate erl_tokenize;
+#[macro_use]
+extern crate trackable;
 
-use erl_pp::{Preprocessor, Preprocessor2};
+use erl_pp::Preprocessor;
 use erl_tokenize::{Tokenizer, TokenKind};
 
-fn pp(text: &str) -> Preprocessor {
+fn pp(text: &str) -> Preprocessor<Tokenizer<&str>> {
     let tokenizer = Tokenizer::new(text);
     Preprocessor::new(tokenizer)
-}
-
-fn pp2(text: &str) -> Preprocessor2 {
-    let tokenizer = Tokenizer::new(text);
-    Preprocessor2::new(tokenizer)
 }
 
 #[test]
@@ -32,25 +29,68 @@ fn no_directive_works() {
 #[test]
 fn define_works() {
     let src = r#"aaa. -define(foo, [bar, baz]). bbb."#;
-    let tokens = pp2(src).collect::<Result<Vec<_>, _>>().unwrap();
+    let tokens = pp(src).collect::<Result<Vec<_>, _>>().unwrap();
 
     assert_eq!(tokens.iter().map(|t| t.text()).collect::<Vec<_>>(),
-               ["aaa", ".", " ", " ", "bbb", "."]);
+               ["aaa", ".", "bbb", "."]);
 
     let src = r#"aaa. -define(Foo(A,B), [bar, A, baz, B]). bbb."#;
-    let tokens = pp2(src).collect::<Result<Vec<_>, _>>().unwrap();
+    let tokens = pp(src).collect::<Result<Vec<_>, _>>().unwrap();
 
     assert_eq!(tokens.iter().map(|t| t.text()).collect::<Vec<_>>(),
-               ["aaa", ".", " ", " ", "bbb", "."]);
+               ["aaa", ".", "bbb", "."]);
 }
 
 #[test]
 fn undef_works() {
     let src = r#"aaa. -undef(foo). bbb."#;
-    let tokens = pp2(src).collect::<Result<Vec<_>, _>>().unwrap();
+    let tokens = pp(src).collect::<Result<Vec<_>, _>>().unwrap();
 
     assert_eq!(tokens.iter().map(|t| t.text()).collect::<Vec<_>>(),
-               ["aaa", ".", " ", " ", "bbb", "."]);
+               ["aaa", ".", "bbb", "."]);
+}
+
+#[test]
+fn ifdef_works() {
+    let src = r#"aaa.-ifdef(foo).bbb.-endif.baz."#;
+    let tokens = pp(src).collect::<Result<Vec<_>, _>>().unwrap();
+
+    assert_eq!(tokens.iter().map(|t| t.text()).collect::<Vec<_>>(),
+               ["aaa", ".", "baz", "."]);
+
+    let src = r#"-define(foo,bar).aaa.-ifdef(foo).bbb.-endif.baz."#;
+    let tokens = pp(src).collect::<Result<Vec<_>, _>>().unwrap();
+
+    assert_eq!(tokens.iter().map(|t| t.text()).collect::<Vec<_>>(),
+               ["aaa", ".", "bbb", ".", "baz", "."]);
+}
+
+#[test]
+fn else_works() {
+    let src = r#"aaa.-ifdef(foo).bbb.-else.ccc.-endif.baz."#;
+    let tokens = pp(src).collect::<Result<Vec<_>, _>>().unwrap();
+
+    assert_eq!(tokens.iter().map(|t| t.text()).collect::<Vec<_>>(),
+               ["aaa", ".", "ccc", ".", "baz", "."]);
+
+    let src = r#"-define(foo,bar).aaa.-ifdef(foo).bbb.-else.ccc.-endif.baz."#;
+    let tokens = pp(src).collect::<Result<Vec<_>, _>>().unwrap();
+
+    assert_eq!(tokens.iter().map(|t| t.text()).collect::<Vec<_>>(),
+               ["aaa", ".", "bbb", ".", "baz", "."]);
+}
+
+#[test]
+fn ifndef_works() {
+    let src = r#"aaa.-ifndef(foo).bbb.-endif.baz."#;
+    let tokens = pp(src).collect::<Result<Vec<_>, _>>().unwrap();
+    assert_eq!(tokens.iter().map(|t| t.text()).collect::<Vec<_>>(),
+               ["aaa", ".", "bbb", ".", "baz", "."]);
+
+    let src = r#"-define(foo,bar).aaa.-ifndef(foo).bbb.-endif.baz."#;
+    let tokens = pp(src).collect::<Result<Vec<_>, _>>().unwrap();
+    assert_eq!(tokens.iter().map(|t| t.text()).collect::<Vec<_>>(),
+               ["aaa", ".", "baz", "."]);
 }
 
 #[test]
@@ -59,11 +99,64 @@ fn error_and_warning_works() {
     let tokens = pp(src).collect::<Result<Vec<_>, _>>().unwrap();
 
     assert_eq!(tokens.iter().map(|t| t.text()).collect::<Vec<_>>(),
-               ["aaa", ".", " ", " ", "bbb", "."]);
+               ["aaa", ".", "bbb", "."]);
 
     let src = r#"aaa. -warning("foo"). bbb."#;
     let tokens = pp(src).collect::<Result<Vec<_>, _>>().unwrap();
 
     assert_eq!(tokens.iter().map(|t| t.text()).collect::<Vec<_>>(),
-               ["aaa", ".", " ", " ", "bbb", "."]);
+               ["aaa", ".", "bbb", "."]);
+}
+
+#[test]
+fn include_works() {
+    let src = r#"foo.-include("tests/bar.hrl").baz."#;
+    let tokens = track_try_unwrap!(pp(src).collect::<Result<Vec<_>, _>>());
+
+    assert_eq!(tokens.iter().map(|t| t.text()).collect::<Vec<_>>(),
+               ["foo", ".", "bar", ".", "baz", "."]);
+}
+
+#[test]
+fn include_lib_works() {
+    let src = r#"foo.-include_lib("tests/bar.hrl").baz."#;
+    let tokens = track_try_unwrap!(pp(src).collect::<Result<Vec<_>, _>>());
+
+    assert_eq!(tokens.iter().map(|t| t.text()).collect::<Vec<_>>(),
+               ["foo", ".", "bar", ".", "baz", "."]);
+}
+
+#[test]
+fn macro_expansion_works() {
+    let src = r#"-define(foo,bar).aaa.?foo.bbb."#;
+    let tokens = pp(src).collect::<Result<Vec<_>, _>>().unwrap();
+    assert_eq!(tokens.iter().map(|t| t.text()).collect::<Vec<_>>(),
+               ["aaa", ".", "bar", ".", "bbb", "."]);
+
+    let src = r#"-define(foo(A), {bar, A}).aaa.?foo([1,2]).bbb."#;
+    let tokens = pp(src).collect::<Result<Vec<_>, _>>().unwrap();
+    assert_eq!(tokens.iter().map(|t| t.text()).collect::<Vec<_>>(),
+               ["aaa", ".", "{", "bar", ",", "[", "1", ",", "2", "]", "}", ".", "bbb", "."]);
+
+    let src = r#"-define(foo(A), {bar, ??A}).aaa.?foo([1,2]).bbb."#;
+    let tokens = pp(src).collect::<Result<Vec<_>, _>>().unwrap();
+    assert_eq!(tokens.iter().map(|t| t.text()).collect::<Vec<_>>(),
+               ["aaa",
+                ".",
+                "{",
+                "bar",
+                ",",
+                r#""[1,2]""#,
+                "}",
+                ".",
+                "bbb",
+                "."]);
+}
+
+#[test]
+fn predefined_macro_works() {
+    let src = r#"aaa.?LINE.bbb."#;
+    let tokens = pp(src).collect::<Result<Vec<_>, _>>().unwrap();
+    assert_eq!(tokens.iter().map(|t| t.text()).collect::<Vec<_>>(),
+               ["aaa", ".", "1", ".", "bbb", "."]);
 }

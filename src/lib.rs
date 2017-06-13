@@ -1,11 +1,12 @@
 extern crate erl_tokenize;
+extern crate glob;
 #[macro_use]
 extern crate trackable;
 
 pub use erl_tokenize::{Result, Error, ErrorKind};
 
-pub use directive::{Directive, Directive2};
-pub use preprocessor::{Preprocessor, Preprocessor2};
+pub use directive::Directive;
+pub use preprocessor::Preprocessor;
 
 mod directive;
 mod preprocessor;
