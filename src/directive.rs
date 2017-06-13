@@ -5,7 +5,7 @@ use std::hash::{Hash, Hasher};
 use std::io::Read;
 use std::mem;
 use std::path::{Path, PathBuf};
-use erl_tokenize::{Token, Position, PositionRange};
+use erl_tokenize::{LexicalToken, Position, PositionRange};
 use erl_tokenize::tokens::{AtomToken, VariableToken, SymbolToken, StringToken};
 use glob::glob;
 use trackable::error::ErrorKindExt;
@@ -128,12 +128,12 @@ pub struct Define {
     pub name: MacroName,
     pub variables: Option<MacroVariables>,
     pub _comma: SymbolToken,
-    pub replacement: Vec<Token>,
+    pub replacement: Vec<LexicalToken>,
     pub _close_paren: SymbolToken,
     pub _dot: SymbolToken,
 }
 impl Define {
-    pub fn expand(&self, args: Vec<&[Token]>) -> Result<Vec<Token>> {
+    pub fn expand(&self, args: Vec<&[LexicalToken]>) -> Result<Vec<LexicalToken>> {
         assert!(self.variables.is_some());
         let vars = self.variables.as_ref().unwrap();
         let binds: HashMap<_, _> = vars.iter().map(|v| v.value()).zip(args.iter()).collect();
@@ -141,12 +141,11 @@ impl Define {
         let mut tokens = Vec::new();
         let mut template = self.replacement.iter();
         while let Some(t) = template.next() {
-            use erl_tokenize::TokenValue;
             use erl_tokenize::values::Symbol;
 
             if let Some(val) = binds.get(t.text()) {
                 tokens.extend(val.iter().cloned());
-            } else if t.value() == TokenValue::Symbol(Symbol::DoubleQuestion) {
+            } else if t.as_symbol_token().map(|t| t.value()) == Some(Symbol::DoubleQuestion) {
                 let var = track_try!(template.next().ok_or(ErrorKind::InvalidInput));
                 let val = track_try!(binds.get(var.text()).ok_or(ErrorKind::InvalidInput));
                 let text = val.iter().map(|t| t.text()).collect::<String>();

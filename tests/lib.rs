@@ -4,11 +4,11 @@ extern crate erl_tokenize;
 extern crate trackable;
 
 use erl_pp::Preprocessor;
-use erl_tokenize::{Tokenizer, TokenKind};
+use erl_tokenize::Lexer;
 
-fn pp(text: &str) -> Preprocessor<Tokenizer<&str>> {
-    let tokenizer = Tokenizer::new(text);
-    Preprocessor::new(tokenizer)
+fn pp(text: &str) -> Preprocessor<Lexer<&str>> {
+    let lexer = Lexer::new(text);
+    Preprocessor::new(lexer)
 }
 
 #[test]
@@ -16,14 +16,8 @@ fn no_directive_works() {
     let src = r#"io:format("Hello")."#;
     let tokens = pp(src).collect::<Result<Vec<_>, _>>().unwrap();
 
-    assert_eq!(tokens.iter().map(|t| t.kind()).collect::<Vec<_>>(),
-               [TokenKind::Atom,
-                TokenKind::Symbol,
-                TokenKind::Atom,
-                TokenKind::Symbol,
-                TokenKind::String,
-                TokenKind::Symbol,
-                TokenKind::Symbol]);
+    assert_eq!(tokens.iter().map(|t| t.text()).collect::<Vec<_>>(),
+               ["io", ":", "format", "(", r#""Hello""#, ")", "."]);
 }
 
 #[test]

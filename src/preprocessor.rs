@@ -1,5 +1,5 @@
 use std::path::PathBuf;
-use erl_tokenize::Token;
+use erl_tokenize::LexicalToken;
 use erl_tokenize::tokens::{VariableToken, AtomToken, SymbolToken};
 use erl_tokenize::values::Symbol;
 
@@ -16,7 +16,7 @@ pub struct Preprocessor<T> {
     branches: Vec<bool>,
 }
 impl<T> Preprocessor<T>
-    where T: Iterator<Item = Result<Token>>
+    where T: Iterator<Item = Result<LexicalToken>>
 {
     pub fn new(tokens: T) -> Self {
         Preprocessor {
@@ -27,13 +27,13 @@ impl<T> Preprocessor<T>
             branches: Vec::new(),
         }
     }
-    fn read(&mut self) -> Result<Option<Token>> {
+    fn read(&mut self) -> Result<Option<LexicalToken>> {
         track!(self.reader.read())
     }
     fn ignore(&self) -> bool {
         self.branches.iter().find(|b| **b == false).is_some()
     }
-    fn next_token(&mut self) -> Result<Option<Token>> {
+    fn next_token(&mut self) -> Result<Option<LexicalToken>> {
         if self.can_directive_start {
             if let Some(d) = track_try!(self.try_read_directive()) {
                 self.directives.push(d);
@@ -45,9 +45,7 @@ impl<T> Preprocessor<T>
                 return self.next_token(); // TODO: loop
             }
             match token {
-                Token::Whitespace(_) |
-                Token::Comment(_) => {}
-                Token::Symbol(ref s) => {
+                LexicalToken::Symbol(ref s) => {
                     self.can_directive_start = s.value() == Symbol::Dot;
                 }
                 _ => self.can_directive_start = false,
@@ -373,10 +371,10 @@ impl<T> Preprocessor<T>
                _dot,
            })
     }
-    fn read_macro_replacement(&mut self) -> Result<(Vec<Token>, SymbolToken, SymbolToken)> {
+    fn read_macro_replacement(&mut self) -> Result<(Vec<LexicalToken>, SymbolToken, SymbolToken)> {
         let mut tokens = Vec::new();
         while let Some(token) = track_try!(self.reader.read()) {
-            if let Token::Symbol(ref symbol) = token {
+            if let LexicalToken::Symbol(ref symbol) = token {
                 if symbol.value() == Symbol::CloseParen {
                     if let Some(dot) = track_try!(self.reader.read_symbol_if(Symbol::Dot)) {
                         return Ok((tokens, symbol.clone(), dot));
@@ -421,9 +419,9 @@ impl<T> Preprocessor<T>
     }
 }
 impl<T> Iterator for Preprocessor<T>
-    where T: Iterator<Item = Result<Token>>
+    where T: Iterator<Item = Result<LexicalToken>>
 {
-    type Item = Result<Token>;
+    type Item = Result<LexicalToken>;
     fn next(&mut self) -> Option<Self::Item> {
         match self.next_token() {
             Err(e) => Some(Err(e)),

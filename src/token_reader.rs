@@ -1,6 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 use std::path::Path;
-use erl_tokenize::{Token, Tokenizer, Position, PositionRange};
+use erl_tokenize::{LexicalToken, Lexer, Position, PositionRange};
 use erl_tokenize::tokens::{AtomToken, SymbolToken, VariableToken, StringToken, IntegerToken};
 use erl_tokenize::values::Symbol;
 
@@ -47,7 +47,7 @@ impl PositionRange for MacroArgs {
 
 #[derive(Debug, Clone)]
 pub struct MacroArg {
-    tokens: Vec<Token>,
+    tokens: Vec<LexicalToken>,
 }
 impl PositionRange for MacroArg {
     fn start_position(&self) -> Position {
@@ -61,8 +61,8 @@ impl PositionRange for MacroArg {
 #[derive(Debug)]
 pub struct TokenReader<T> {
     tokens: T,
-    included_tokens: Vec<Tokenizer<String>>,
-    unread: VecDeque<Token>,
+    included_tokens: Vec<Lexer<String>>,
+    unread: VecDeque<LexicalToken>,
     pub macros: HashMap<MacroName, Define>,
     pub macro_calls: Vec<MacroCall>,
 
@@ -71,7 +71,7 @@ pub struct TokenReader<T> {
     pub function_arity: Option<usize>,
 }
 impl<T> TokenReader<T>
-    where T: Iterator<Item = Result<Token>>
+    where T: Iterator<Item = Result<LexicalToken>>
 {
     pub fn new(tokens: T) -> Self {
         TokenReader {
@@ -100,7 +100,7 @@ impl<T> TokenReader<T>
         let mut stack = Vec::new();
         let mut arg = Vec::new();
         while let Some(token) = track_try!(self.read()) {
-            if let Token::Symbol(ref s) = token {
+            if let LexicalToken::Symbol(ref s) = token {
                 match s.value() {
                     Symbol::CloseParen if stack.is_empty() => {
                         self.unread(s.clone().into());
@@ -167,7 +167,7 @@ impl<T> TokenReader<T>
 
         // TODO: refactor
         let pos = _question.start_position();
-        let replacement: Option<Token> = match name.value() {
+        let replacement: Option<LexicalToken> = match name.value() {
             "MODULE" => {
                 let module = track_try!(self.module_name.as_ref().ok_or(ErrorKind::InvalidInput));
                 let t = track_try!(AtomToken::from_text(&format!("'{}'", module), pos.clone()))
@@ -243,25 +243,23 @@ impl<T> TokenReader<T>
         Ok(call)
     }
     pub fn push_text<P: AsRef<Path>>(&mut self, path: P, text: String) {
-        let mut tokenizer = Tokenizer::new(text);
+        let mut tokenizer = Lexer::new(text);
         tokenizer.set_filepath(path);
         self.included_tokens.push(tokenizer);
     }
-    pub fn read(&mut self) -> Result<Option<Token>> {
+    pub fn read(&mut self) -> Result<Option<LexicalToken>> {
         while let Some(token) = track_try!(self.read_impl()) {
             match token {
-                Token::Symbol(ref t) if t.value() == Symbol::Question => {
+                LexicalToken::Symbol(ref t) if t.value() == Symbol::Question => {
                     let call = track_try!(self.read_macro_call(t.clone()));
                     self.macro_calls.push(call);
                 }
-                Token::Whitespace(_) |
-                Token::Comment(_) => {}
                 _ => return Ok(Some(token)),
             }
         }
         Ok(None)
     }
-    fn read_impl(&mut self) -> Result<Option<Token>> {
+    fn read_impl(&mut self) -> Result<Option<LexicalToken>> {
         if let Some(token) = self.unread.pop_front() {
             Ok(Some(token))
         } else if !self.included_tokens.is_empty() {
@@ -281,74 +279,38 @@ impl<T> TokenReader<T>
             }
         }
     }
-    // pub fn read_or_error(&mut self) -> Result<Token> {
-    //     if let Some(token) = track_try!(self.read()) {
-    //         Ok(token)
-    //     } else {
-    //         track_panic!(ErrorKind::UnexpectedEos)
-    //     }
-    // }
-
-    pub fn unread(&mut self, token: Token) {
+    pub fn unread(&mut self, token: LexicalToken) {
         self.unread.push_front(token);
     }
-    // pub fn skip_whitespace_or_comment(&mut self) -> Result<()> {
-    //     while let Some(token) = track_try!(self.read()) {
-    //         match token {
-    //             Token::Whitespace(_) |
-    //             Token::Comment(_) => {}
-    //             _ => {
-    //                 self.unread(token);
-    //                 break;
-    //             }
-    //         }
-    //     }
-    //     Ok(())
-    // }
     pub fn read_atom(&mut self) -> Result<Option<AtomToken>> {
         if let Some(token) = track_try!(self.read()) {
-            if let Token::Atom(t) = token {
-                Ok(Some(t))
-            } else {
-                self.unread(token);
-                Ok(None)
-            }
+            token
+                .into_atom_token()
+                .map(Some)
+                .map_err(|t| self.unread(t))
+                .or(Ok(None))
         } else {
             Ok(None)
         }
     }
-    // pub fn read_symbol(&mut self) -> Result<Option<SymbolToken>> {
-    //     if let Some(token) = track_try!(self.read()) {
-    //         if let Token::Symbol(t) = token {
-    //             Ok(Some(t))
-    //         } else {
-    //             self.unread(token);
-    //             Ok(None)
-    //         }
-    //     } else {
-    //         Ok(None)
-    //     }
-    // }
     pub fn read_variable(&mut self) -> Result<Option<VariableToken>> {
         if let Some(token) = track_try!(self.read()) {
-            if let Token::Variable(t) = token {
-                Ok(Some(t))
-            } else {
-                self.unread(token);
-                Ok(None)
-            }
+            token
+                .into_variable_token()
+                .map(Some)
+                .map_err(|t| self.unread(t))
+                .or(Ok(None))
         } else {
             Ok(None)
         }
     }
     pub fn read_string(&mut self) -> Result<Option<StringToken>> {
         if let Some(token) = track_try!(self.read()) {
-            if let Token::String(t) = token {
-                Ok(Some(t))
-            } else {
-                self.unread(token);
-                Ok(None)
-            }
+            token
+                .into_string_token()
+                .map(Some)
+                .map_err(|t| self.unread(t))
+                .or(Ok(None))
         } else {
             Ok(None)
         }
@@ -362,15 +324,6 @@ impl<T> TokenReader<T>
                          self.read());
         }
     }
-    // pub fn read_symbol_or_error(&mut self) -> Result<SymbolToken> {
-    //     if let Some(t) = track_try!(self.read_symbol()) {
-    //         Ok(t)
-    //     } else {
-    //         track_panic!(ErrorKind::InvalidInput,
-    //                      "Unexpected token: actual={:?}, expected=SymbolToken",
-    //                      self.read());
-    //     }
-    // }
     pub fn read_string_or_error(&mut self) -> Result<StringToken> {
         if let Some(t) = track_try!(self.read_string()) {
             Ok(t)
@@ -382,7 +335,7 @@ impl<T> TokenReader<T>
     }
     pub fn read_symbol_if(&mut self, expected: Symbol) -> Result<Option<SymbolToken>> {
         if let Some(token) = track_try!(self.read()) {
-            if let Token::Symbol(t) = token {
+            if let LexicalToken::Symbol(t) = token {
                 if t.value() == expected {
                     Ok(Some(t))
                 } else {

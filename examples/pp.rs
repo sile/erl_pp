@@ -9,7 +9,7 @@ use std::io::Read;
 use std::time::{Duration, Instant};
 use clap::{App, Arg};
 use erl_pp::Preprocessor;
-use erl_tokenize::{Tokenizer, PositionRange};
+use erl_tokenize::{Lexer, PositionRange};
 
 fn main() {
     let matches = App::new("pp")
@@ -25,12 +25,12 @@ fn main() {
 
     let start_time = Instant::now();
     let mut count = 0;
-    let tokenizer = Tokenizer::new(&src);
-    let preprocessor = Preprocessor::new(tokenizer);
+    let lexer = Lexer::new(&src);
+    let preprocessor = Preprocessor::new(lexer);
     for result in preprocessor {
         let token = track_try_unwrap!(result);
         if !silent {
-            println!("[{:?}] {:?}", token.start_position(), token.value());
+            println!("[{:?}] {:?}", token.start_position(), token.text());
         }
         count += 1;
     }
