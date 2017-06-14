@@ -1,10 +1,12 @@
 use std::collections::{HashMap, BTreeMap, VecDeque};
 use std::path::PathBuf;
 use erl_tokenize::{self, LexicalToken, Position, PositionRange};
+use erl_tokenize::tokens::StringToken;
 use erl_tokenize::values::Symbol;
 
 use {Result, Error, Directive, ErrorKind, MacroCall, PredefinedMacros};
 use directives::Define;
+use macros::Stringify;
 use token_reader::TokenReader;
 use types::MacroName;
 
@@ -88,15 +90,64 @@ impl<T, E> Preprocessor<T, E>
         }
         Ok(None)
     }
-    fn expand_macro(&mut self, call: MacroCall) -> Result<VecDeque<LexicalToken>> {
+    fn expand_macro(&self, call: MacroCall) -> Result<VecDeque<LexicalToken>> {
         if let Some(expanded) = track!(self.predefined_macros.try_expand(&call))? {
             Ok(vec![expanded].into())
         } else {
             track!(self.expand_userdefined_macro(call))
         }
     }
-    fn expand_userdefined_macro(&mut self, call: MacroCall) -> Result<VecDeque<LexicalToken>> {
-        panic!()
+    fn expand_userdefined_macro(&self, call: MacroCall) -> Result<VecDeque<LexicalToken>> {
+        let definition = track!(self.macros.get(&call.name).ok_or(Error::invalid_input()))?;
+        track_assert_eq!(call.args.as_ref().map(|a| a.len()),
+                         definition.variables.as_ref().map(|v| v.len()),
+                         ErrorKind::InvalidInput);
+        let bindings = definition
+            .variables
+            .as_ref()
+            .iter()
+            .flat_map(|i| i.iter().map(|v| v.value()))
+            .zip(call.args
+                     .iter()
+                     .flat_map(|i| i.iter().map(|a| &a.tokens[..])))
+            .collect::<HashMap<_, _>>();
+        let expanded = track!(self.expand_replacement(bindings, &definition.replacement))?;
+        Ok(expanded)
+    }
+    fn expand_replacement(&self,
+                          bindings: HashMap<&str, &[LexicalToken]>,
+                          replacement: &[LexicalToken])
+                          -> Result<VecDeque<LexicalToken>> {
+        let mut expanded = VecDeque::new();
+        let mut reader: TokenReader<_, Error> =
+            TokenReader::new(replacement.iter().map(|t| Ok(t.clone())));
+        loop {
+            if let Some(call) = track!(reader.try_read())? {
+                let nested = track!(self.expand_macro(call))?;
+                for token in nested.into_iter().rev() {
+                    reader.unread_token(token);
+                }
+            } else if let Some(stringify) = track!(reader.try_read::<Stringify>())? {
+                let tokens = track!(bindings
+                                        .get(stringify.name.value())
+                                        .ok_or(Error::invalid_input()))?;
+                let string = tokens.iter().map(|t| t.text()).collect::<String>();
+                let token = StringToken::from_value(&string, tokens[0].start_position());
+                expanded.push_back(token.into());
+            } else if let Some(token) = track!(reader.try_read_token())? {
+                if let Some(value) = token
+                       .as_variable_token()
+                       .and_then(|v| bindings.get(v.value())) {
+                    let nested = track!(self.expand_replacement(HashMap::new(), value))?;
+                    expanded.extend(nested);
+                } else {
+                    expanded.push_back(token);
+                }
+            } else {
+                break;
+            }
+        }
+        Ok(expanded)
     }
     fn try_read_macro_call(&mut self) -> Result<Option<MacroCall>> {
         track!(self.reader.try_read())

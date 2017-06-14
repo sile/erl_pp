@@ -118,6 +118,9 @@ pub struct MacroArgs {
     pub _close_paren: SymbolToken,
 }
 impl MacroArgs {
+    pub fn iter(&self) -> ListIter<MacroArg> {
+        self.list.iter()
+    }
     pub fn len(&self) -> usize {
         self.list.iter().count()
     }

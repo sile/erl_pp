@@ -145,6 +145,21 @@ fn macro_expansion_works() {
                 ".",
                 "bbb",
                 "."]);
+
+    let src = r#"-define(foo, {bar, ?LINE}). ?foo."#;
+    let tokens = pp(src).collect::<Result<Vec<_>, _>>().unwrap();
+    assert_eq!(tokens.iter().map(|t| t.text()).collect::<Vec<_>>(),
+               ["{", "bar", ",", "1", "}", "."]);
+
+    let src = r#"-define(foo(A), {A, ??A}). -define(bar, baz). ?foo(?bar)."#;
+    let tokens = pp(src).collect::<Result<Vec<_>, _>>().unwrap();
+    assert_eq!(tokens.iter().map(|t| t.text()).collect::<Vec<_>>(),
+               ["{", "baz", ",", r#""?bar""#, "}", "."]);
+
+    let src = r#"-define(foo(A), ?bar(A)). -define(bar(A), A). ?foo(baz)."#;
+    let tokens = pp(src).collect::<Result<Vec<_>, _>>().unwrap();
+    assert_eq!(tokens.iter().map(|t| t.text()).collect::<Vec<_>>(),
+               ["baz", "."]);
 }
 
 #[test]
