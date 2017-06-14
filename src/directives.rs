@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::VecDeque;
 use std::fmt;
 use std::path::{PathBuf, Component};
 use glob::glob;
@@ -66,7 +66,7 @@ pub struct IncludeLib {
     pub _dot: SymbolToken,
 }
 impl IncludeLib {
-    pub fn include_lib(&self, code_paths: &[PathBuf]) -> Result<(PathBuf, String)> {
+    pub fn include_lib(&self, code_paths: &VecDeque<PathBuf>) -> Result<(PathBuf, String)> {
         let mut path = track!(util::substitute_path_variables(self.path.value()))?;
 
         let temp_path = path.clone();
@@ -385,33 +385,6 @@ pub struct Define {
     pub replacement: Vec<LexicalToken>,
     pub _close_paren: SymbolToken,
     pub _dot: SymbolToken,
-}
-impl Define {
-    // TODO:
-    pub fn expand(&self, args: Vec<&[LexicalToken]>) -> Result<Vec<LexicalToken>> {
-        assert!(self.variables.is_some());
-        let vars = self.variables.as_ref().unwrap();
-        let binds: HashMap<_, _> = vars.iter().map(|v| v.value()).zip(args.iter()).collect();
-
-        let mut tokens = Vec::new();
-        let mut template = self.replacement.iter();
-        while let Some(t) = template.next() {
-            use erl_tokenize::values::Symbol;
-
-            if let Some(val) = binds.get(t.text()) {
-                tokens.extend(val.iter().cloned());
-            } else if t.as_symbol_token().map(|t| t.value()) == Some(Symbol::DoubleQuestion) {
-                let var = track!(template.next().ok_or(::Error::invalid_input()))?;
-                let val = track!(binds.get(var.text()).ok_or(::Error::invalid_input()))?;
-                let text = val.iter().map(|t| t.text()).collect::<String>();
-                tokens.push(StringToken::from_value(&text, val.first().unwrap().start_position())
-                                .into());
-            } else {
-                tokens.push(t.clone());
-            }
-        }
-        Ok(tokens)
-    }
 }
 impl PositionRange for Define {
     fn start_position(&self) -> Position {

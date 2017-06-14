@@ -56,10 +56,10 @@ impl From<glob::GlobError> for Error {
 /// The list of the possible error kinds
 #[derive(Debug, Clone)]
 pub enum ErrorKind {
-    /// Input text is invalid.
-    // TODO: Add Position
+    /// Input is invalid.
     InvalidInput,
 
+    /// Unexpected token.
     UnexpectedToken(LexicalToken),
 
     /// Unexpected End-Of-String.

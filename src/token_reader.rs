@@ -28,8 +28,7 @@ impl<T, E> TokenReader<T, E>
         }
     }
 
-    // TODO: name
-    pub fn push_text<P: AsRef<Path>>(&mut self, path: P, text: String) {
+    pub fn add_included_text<P: AsRef<Path>>(&mut self, path: P, text: String) {
         let mut lexer = Lexer::new(text);
         lexer.set_filepath(path);
         self.included_tokens.push(lexer);

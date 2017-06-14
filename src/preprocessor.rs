@@ -15,8 +15,8 @@ pub struct Preprocessor<T, E = erl_tokenize::Error> {
     reader: TokenReader<T, E>,
     can_directive_start: bool,
     directives: BTreeMap<Position, Directive>,
-    code_paths: Vec<PathBuf>,
-    branches: Vec<bool>,
+    code_paths: VecDeque<PathBuf>,
+    branches: Vec<Branch>,
     predefined_macros: PredefinedMacros,
     macros: HashMap<MacroName, Define>,
     macro_calls: BTreeMap<Position, MacroCall>,
@@ -31,7 +31,7 @@ impl<T, E> Preprocessor<T, E>
             reader: TokenReader::new(tokens),
             can_directive_start: true,
             directives: BTreeMap::new(),
-            code_paths: Vec::new(),
+            code_paths: VecDeque::new(),
             branches: Vec::new(),
             predefined_macros: PredefinedMacros::new(),
             macros: HashMap::new(),
@@ -45,6 +45,12 @@ impl<T, E> Preprocessor<T, E>
     pub fn predefined_macros_mut(&mut self) -> &mut PredefinedMacros {
         &mut self.predefined_macros
     }
+    pub fn code_paths(&self) -> &VecDeque<PathBuf> {
+        &self.code_paths
+    }
+    pub fn code_paths_mut(&mut self) -> &mut VecDeque<PathBuf> {
+        &mut self.code_paths
+    }
     pub fn directives(&self) -> &BTreeMap<Position, Directive> {
         &self.directives
     }
@@ -52,11 +58,8 @@ impl<T, E> Preprocessor<T, E>
         &self.macro_calls
     }
 
-    fn read(&mut self) -> Result<Option<LexicalToken>> {
-        track!(self.reader.try_read_token())
-    }
     fn ignore(&self) -> bool {
-        self.branches.iter().find(|b| **b == false).is_some()
+        self.branches.iter().find(|b| b.entered == false).is_some()
     }
     fn next_token(&mut self) -> Result<Option<LexicalToken>> {
         loop {
@@ -76,7 +79,7 @@ impl<T, E> Preprocessor<T, E>
                     continue;
                 }
             }
-            if let Some(token) = track!(self.read())? {
+            if let Some(token) = track!(self.reader.try_read_token())? {
                 if self.ignore() {
                     continue;
                 }
@@ -163,11 +166,11 @@ impl<T, E> Preprocessor<T, E>
         match directive {
             Directive::Include(ref d) if !ignore => {
                 let (path, text) = track!(d.include())?;
-                self.reader.push_text(path, text);
+                self.reader.add_included_text(path, text);
             }
             Directive::IncludeLib(ref d) if !ignore => {
                 let (path, text) = track!(d.include_lib(&self.code_paths))?;
-                self.reader.push_text(path, text);
+                self.reader.add_included_text(path, text);
             }
             Directive::Define(ref d) if !ignore => {
                 self.macros.insert(d.name.clone(), d.clone());
@@ -177,16 +180,15 @@ impl<T, E> Preprocessor<T, E>
             }
             Directive::Ifdef(ref d) => {
                 let entered = self.macros.contains_key(&d.name);
-                self.branches.push(entered);
+                self.branches.push(Branch::new(entered));
             }
             Directive::Ifndef(ref d) => {
                 let entered = !self.macros.contains_key(&d.name);
-                self.branches.push(entered);
+                self.branches.push(Branch::new(entered));
             }
             Directive::Else(_) => {
-                // TODO: 連続elseチェック
-                let b = track!(self.branches.last_mut().ok_or(::Error::invalid_input()))?;
-                *b = !*b;
+                let mut b = track!(self.branches.last_mut().ok_or(Error::invalid_input()))?;
+                track!(b.switch_to_else_branch())?;
             }
             Directive::Endif(_) => {
                 track_assert!(self.branches.pop().is_some(), ErrorKind::InvalidInput);
@@ -207,5 +209,25 @@ impl<T, E> Iterator for Preprocessor<T, E>
             Ok(None) => None,
             Ok(Some(token)) => Some(Ok(token)),
         }
+    }
+}
+
+#[derive(Debug)]
+struct Branch {
+    pub then_branch: bool,
+    pub entered: bool,
+}
+impl Branch {
+    pub fn new(entered: bool) -> Self {
+        Branch {
+            then_branch: true,
+            entered,
+        }
+    }
+    pub fn switch_to_else_branch(&mut self) -> Result<()> {
+        track_assert!(self.then_branch, ErrorKind::InvalidInput);
+        self.then_branch = false;
+        self.entered = !self.entered;
+        Ok(())
     }
 }

@@ -1,5 +1,3 @@
-// TODO: rename to macros
-
 use std::fmt;
 use erl_tokenize::{Position, PositionRange, LexicalToken};
 use erl_tokenize::tokens::{SymbolToken, AtomToken, StringToken, IntegerToken, VariableToken};
