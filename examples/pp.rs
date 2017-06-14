@@ -6,6 +6,7 @@ extern crate trackable;
 
 use std::fs::File;
 use std::io::Read;
+use std::path::Path;
 use std::time::{Duration, Instant};
 use clap::{App, Arg};
 use erl_pp::Preprocessor;
@@ -16,17 +17,24 @@ fn main() {
         .arg(Arg::with_name("SOURCE_FILE").index(1).required(true))
         .arg(Arg::with_name("SILENT").long("silent"))
         .get_matches();
-    let src_file = matches.value_of("SOURCE_FILE").unwrap();
+    let src_file = Path::new(matches.value_of("SOURCE_FILE").unwrap());
     let silent = matches.is_present("SILENT");
 
     let mut src = String::new();
-    let mut file = File::open(src_file).expect("Cannot open file");
+    let mut file = File::open(&src_file).expect("Cannot open file");
     file.read_to_string(&mut src).expect("Cannot read file");
 
     let start_time = Instant::now();
     let mut count = 0;
-    let lexer = Lexer::new(&src);
-    let preprocessor = Preprocessor::new(lexer);
+
+    let mut lexer = Lexer::new(&src);
+    lexer.set_filepath(src_file.file_name().unwrap());
+
+    let mut preprocessor = Preprocessor::new(lexer);
+    preprocessor
+        .predefined_macros_mut()
+        .set_module_name(src_file.file_stem().unwrap().to_str().unwrap());
+
     for result in preprocessor {
         let token = track_try_unwrap!(result);
         if !silent {
