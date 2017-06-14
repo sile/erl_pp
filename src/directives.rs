@@ -6,7 +6,7 @@ use erl_tokenize::{Position, PositionRange, LexicalToken};
 use erl_tokenize::tokens::{SymbolToken, AtomToken, StringToken};
 use erl_tokenize::values::Symbol;
 
-use Result;
+use {Result, ErrorKind};
 use token_reader::{TokenReader, ReadFrom};
 use types::{MacroName, MacroVariables};
 use util;
@@ -472,6 +472,10 @@ impl ReadFrom for Define {
                 replacement.push(_close_paren.into());
             } else {
                 let token = track!(reader.read_token())?;
+                track_assert!(token
+                                  .as_symbol_token()
+                                  .map_or(true, |s| s.value() != Symbol::Dot),
+                              ErrorKind::InvalidInput);
                 replacement.push(token);
             }
         }

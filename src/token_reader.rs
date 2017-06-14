@@ -1,363 +1,196 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
+use std::fmt::Debug;
+use std::marker::PhantomData;
 use std::path::Path;
-use erl_tokenize::{LexicalToken, Lexer, Position, PositionRange};
-use erl_tokenize::tokens::{AtomToken, SymbolToken, VariableToken, StringToken, IntegerToken};
+use erl_tokenize::{LexicalToken, Lexer};
+use erl_tokenize::tokens::{AtomToken, StringToken, SymbolToken, VariableToken};
 use erl_tokenize::values::Symbol;
 
-use {Result, ErrorKind};
-use directive::{MacroName, Define, List, Tail};
-
-#[derive(Debug, Clone)]
-pub struct MacroCall {
-    pub _question: SymbolToken,
-    pub name: MacroName,
-    pub args: Option<MacroArgs>,
-}
-impl PositionRange for MacroCall {
-    fn start_position(&self) -> Position {
-        self._question.start_position()
-    }
-    fn end_position(&self) -> Position {
-        self.args
-            .as_ref()
-            .map(|a| a.end_position())
-            .unwrap_or_else(|| self.name.end_position())
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct MacroArgs {
-    pub _open_paren: SymbolToken,
-    pub list: List<MacroArg>,
-    pub _close_paren: SymbolToken,
-}
-impl MacroArgs {
-    pub fn len(&self) -> usize {
-        self.list.iter().count()
-    }
-}
-impl PositionRange for MacroArgs {
-    fn start_position(&self) -> Position {
-        self._open_paren.start_position()
-    }
-    fn end_position(&self) -> Position {
-        self._close_paren.end_position()
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct MacroArg {
-    tokens: Vec<LexicalToken>,
-}
-impl PositionRange for MacroArg {
-    fn start_position(&self) -> Position {
-        self.tokens.first().as_ref().unwrap().start_position()
-    }
-    fn end_position(&self) -> Position {
-        self.tokens.last().as_ref().unwrap().end_position()
-    }
-}
+use {Result, Error, ErrorKind};
 
 #[derive(Debug)]
-pub struct TokenReader<T> {
+pub struct TokenReader<T, E> {
     tokens: T,
     included_tokens: Vec<Lexer<String>>,
     unread: VecDeque<LexicalToken>,
-    pub macros: HashMap<MacroName, Define>,
-    pub macro_calls: Vec<MacroCall>,
-
-    pub module_name: Option<String>,
-    pub function_name: Option<String>,
-    pub function_arity: Option<usize>,
+    _phantom: PhantomData<E>,
 }
-impl<T> TokenReader<T>
-    where T: Iterator<Item = Result<LexicalToken>>
+impl<T, E> TokenReader<T, E>
+    where T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
+          E: Into<Error>
 {
     pub fn new(tokens: T) -> Self {
         TokenReader {
             tokens,
             included_tokens: Vec::new(),
             unread: VecDeque::new(),
-            macros: HashMap::new(),
-            macro_calls: Vec::new(),
-            module_name: None,
-            function_name: None,
-            function_arity: None,
+            _phantom: PhantomData,
         }
     }
-    pub fn read_macro_name(&mut self) -> Result<MacroName> {
-        if let Some(atom) = track_try!(self.read_atom()) {
-            Ok(MacroName::Atom(atom))
-        } else if let Some(var) = track_try!(self.read_variable()) {
-            Ok(MacroName::Variable(var))
-        } else {
-            track_panic!(ErrorKind::InvalidInput,
-                         "Invalid macro name: {:?}",
-                         self.read());
-        }
-    }
-    fn read_macro_arg(&mut self) -> Result<Option<MacroArg>> {
-        let mut stack = Vec::new();
-        let mut arg = Vec::new();
-        while let Some(token) = track_try!(self.read()) {
-            if let LexicalToken::Symbol(ref s) = token {
-                match s.value() {
-                    Symbol::CloseParen if stack.is_empty() => {
-                        self.unread(s.clone().into());
-                        return if arg.is_empty() {
-                            Ok(None)
-                        } else {
-                            Ok(Some(MacroArg { tokens: arg }))
-                        };
-                    }
-                    Symbol::Comma if stack.is_empty() => {
-                        track_assert_ne!(arg.len(), 0, ErrorKind::InvalidInput);
-                        self.unread(s.clone().into());
-                        return Ok(Some(MacroArg { tokens: arg }));
-                    }
-                    Symbol::OpenParen | Symbol::OpenBrace | Symbol::OpenSquare |
-                    Symbol::DoubleLeftAngle => {
-                        stack.push(s.clone());
-                    }
-                    Symbol::CloseParen | Symbol::CloseBrace | Symbol::CloseSquare |
-                    Symbol::DoubleRightAngle => {
-                        let last = track_try!(stack.pop().ok_or(ErrorKind::InvalidInput));
-                        let expected = match last.value() {
-                            Symbol::OpenParen => Symbol::CloseParen,
-                            Symbol::OpenBrace => Symbol::CloseBrace,
-                            Symbol::OpenSquare => Symbol::CloseSquare,
-                            Symbol::DoubleLeftAngle => Symbol::DoubleRightAngle,
-                            _ => unreachable!(),
-                        };
-                        track_assert_eq!(s.value(), expected, ErrorKind::InvalidInput);
-                    }
-                    _ => {}
-                }
-            }
-            arg.push(token);
-        }
-        track_panic!(ErrorKind::UnexpectedEos);
-    }
-    fn read_macro_args_tail(&mut self) -> Result<Tail<MacroArg>> {
-        if let Some(comma) = track_try!(self.read_symbol_if(Symbol::Comma)) {
-            let arg = track_try!(track_try!(self.read_macro_arg()).ok_or(ErrorKind::InvalidInput));
-            Ok(Tail::Cons {
-                   _comma: comma,
-                   head: arg,
-                   tail: Box::new(track_try!(self.read_macro_args_tail())),
-               })
-        } else {
-            Ok(Tail::Null)
-        }
-    }
-    fn read_macro_args(&mut self) -> Result<(List<MacroArg>, SymbolToken)> {
-        let mut list = List::Null;
-        if let Some(arg) = track_try!(self.read_macro_arg()) {
-            list = List::Cons {
-                head: arg,
-                tail: track_try!(self.read_macro_args_tail()),
-            };
-        }
 
-        let _close_paren = track_try!(self.read_expected_symbol_or_error(Symbol::CloseParen));
-        Ok((list, _close_paren))
-    }
-    fn read_macro_call(&mut self, _question: SymbolToken) -> Result<MacroCall> {
-        let name = track_try!(self.read_macro_name());
-
-        // TODO: refactor
-        let pos = _question.start_position();
-        let replacement: Option<LexicalToken> = match name.value() {
-            "MODULE" => {
-                let module = track_try!(self.module_name.as_ref().ok_or(ErrorKind::InvalidInput));
-                let t = track_try!(AtomToken::from_text(&format!("'{}'", module), pos.clone()))
-                    .into();
-                Some(t)
-            }
-            "MODULE_STRING" => {
-                let module = track_try!(self.module_name.as_ref().ok_or(ErrorKind::InvalidInput));
-                let t = track_try!(StringToken::from_text(&format!("{:?}", module), pos.clone()))
-                    .into();
-                Some(t)
-            }
-            "FILE" => {
-                let file = track_try!(pos.filepath().ok_or(ErrorKind::InvalidInput));
-                let t = track_try!(StringToken::from_text(&format!("{:?}", file), pos.clone()))
-                    .into();
-                Some(t)
-            }
-            "LINE" => Some(IntegerToken::from_value(pos.line().into(), pos).into()),
-            "MACHINE" => Some(track_try!(AtomToken::from_text("'BEAM'", pos)).into()),
-            "FUNCTION_NAME" => {
-                let name = track_try!(self.function_name.as_ref().ok_or(ErrorKind::InvalidInput));
-                let t = track_try!(AtomToken::from_text(&format!("'{}'", name), pos.clone()))
-                    .into();
-                Some(t)
-            }
-            "FUNCTION_ARITY" => {
-                let arity = track_try!(self.function_arity.ok_or(ErrorKind::InvalidInput));
-                let t = IntegerToken::from_value(arity.into(), pos.clone()).into();
-                Some(t)
-            }
-            _ => None,
-        };
-        if let Some(replacement) = replacement {
-            use std::iter;
-            self.unread.extend(iter::once(replacement));
-            return Ok(MacroCall {
-                          _question,
-                          name,
-                          args: None,
-                      });
-        }
-
-        let definition = track_try!(self.macros.get(&name).ok_or(ErrorKind::InvalidInput),
-                                    "Undefined macro: {:?}",
-                                    name)
-            .clone();
-        let call = if let Some(ref vars) = definition.variables {
-            let _open_paren = track_try!(self.read_expected_symbol_or_error(Symbol::OpenParen));
-            let (args, _close_paren) = track_try!(self.read_macro_args());
-            let args = MacroArgs {
-                _open_paren,
-                list: args,
-                _close_paren,
-            };
-            track_assert_eq!(args.len(), vars.len(), ErrorKind::InvalidInput);
-            let replacement =
-                track_try!(definition.expand(args.list.iter().map(|a| &a.tokens[..]).collect()));
-            self.unread.extend(replacement);
-            MacroCall {
-                _question,
-                name,
-                args: Some(args),
-            }
-        } else {
-            self.unread.extend(definition.replacement.clone());
-            MacroCall {
-                _question,
-                name,
-                args: None,
-            }
-        };
-        Ok(call)
-    }
+    // TODO: name
     pub fn push_text<P: AsRef<Path>>(&mut self, path: P, text: String) {
-        let mut tokenizer = Lexer::new(text);
-        tokenizer.set_filepath(path);
-        self.included_tokens.push(tokenizer);
+        let mut lexer = Lexer::new(text);
+        lexer.set_filepath(path);
+        self.included_tokens.push(lexer);
     }
-    pub fn read(&mut self) -> Result<Option<LexicalToken>> {
-        while let Some(token) = track_try!(self.read_impl()) {
-            match token {
-                LexicalToken::Symbol(ref t) if t.value() == Symbol::Question => {
-                    let call = track_try!(self.read_macro_call(t.clone()));
-                    self.macro_calls.push(call);
-                }
-                _ => return Ok(Some(token)),
-            }
-        }
-        Ok(None)
+
+    pub fn read<V>(&mut self) -> Result<V>
+        where V: ReadFrom
+    {
+        track!(V::read_from(self))
     }
-    fn read_impl(&mut self) -> Result<Option<LexicalToken>> {
+    pub fn try_read<V>(&mut self) -> Result<Option<V>>
+        where V: ReadFrom
+    {
+        track!(V::try_read_from(self))
+    }
+    pub fn read_expected<V>(&mut self, expected: &V::Value) -> Result<V>
+        where V: ReadFrom + Expect + Into<LexicalToken>
+    {
+        track!(V::read_expected(self, expected))
+    }
+    pub fn try_read_expected<V>(&mut self, expected: &V::Value) -> Result<Option<V>>
+        where V: ReadFrom + Expect + Into<LexicalToken>
+    {
+        track!(V::try_read_expected(self, expected))
+    }
+    pub fn try_read_token(&mut self) -> Result<Option<LexicalToken>> {
         if let Some(token) = self.unread.pop_front() {
             Ok(Some(token))
         } else if !self.included_tokens.is_empty() {
             match self.included_tokens.last_mut().expect("Never fails").next() {
                 None => {
                     self.included_tokens.pop();
-                    self.read()
+                    self.try_read_token()
                 }
-                Some(Err(e)) => Err(e),
+                Some(Err(e)) => Err(e.into()),
                 Some(Ok(t)) => Ok(Some(t)),
             }
         } else {
             match self.tokens.next() {
                 None => Ok(None),
-                Some(Err(e)) => Err(e),
+                Some(Err(e)) => Err(e.into()),
                 Some(Ok(t)) => Ok(Some(t)),
             }
         }
     }
-    pub fn unread(&mut self, token: LexicalToken) {
+    pub fn read_token(&mut self) -> Result<LexicalToken> {
+        if let Some(token) = track!(self.try_read_token())? {
+            Ok(token)
+        } else {
+            track_panic!(ErrorKind::UnexpectedEos);
+        }
+    }
+    pub fn unread_token(&mut self, token: LexicalToken) {
         self.unread.push_front(token);
     }
-    pub fn read_atom(&mut self) -> Result<Option<AtomToken>> {
-        if let Some(token) = track_try!(self.read()) {
-            token
-                .into_atom_token()
-                .map(Some)
-                .map_err(|t| self.unread(t))
-                .or(Ok(None))
+}
+
+pub trait ReadFrom: Sized {
+    fn read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Self>
+        where T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
+              E: Into<Error>
+    {
+        if let Some(directive) = track!(Self::try_read_from(reader))? {
+            Ok(directive)
         } else {
-            Ok(None)
+            track_panic!(ErrorKind::InvalidInput);
         }
     }
-    pub fn read_variable(&mut self) -> Result<Option<VariableToken>> {
-        if let Some(token) = track_try!(self.read()) {
-            token
-                .into_variable_token()
-                .map(Some)
-                .map_err(|t| self.unread(t))
-                .or(Ok(None))
-        } else {
-            Ok(None)
-        }
-    }
-    pub fn read_string(&mut self) -> Result<Option<StringToken>> {
-        if let Some(token) = track_try!(self.read()) {
-            token
-                .into_string_token()
-                .map(Some)
-                .map_err(|t| self.unread(t))
-                .or(Ok(None))
-        } else {
-            Ok(None)
-        }
-    }
-    pub fn read_variable_or_error(&mut self) -> Result<VariableToken> {
-        if let Some(t) = track_try!(self.read_variable()) {
-            Ok(t)
-        } else {
-            track_panic!(ErrorKind::InvalidInput,
-                         "Unexpected token: actual={:?}, expected=VariableToken",
-                         self.read());
-        }
-    }
-    pub fn read_string_or_error(&mut self) -> Result<StringToken> {
-        if let Some(t) = track_try!(self.read_string()) {
-            Ok(t)
-        } else {
-            track_panic!(ErrorKind::InvalidInput,
-                         "Unexpected token: actual={:?}, expected=StringToken",
-                         self.read());
-        }
-    }
-    pub fn read_symbol_if(&mut self, expected: Symbol) -> Result<Option<SymbolToken>> {
-        if let Some(token) = track_try!(self.read()) {
-            if let LexicalToken::Symbol(t) = token {
-                if t.value() == expected {
-                    Ok(Some(t))
-                } else {
-                    self.unread(t.into());
-                    Ok(None)
-                }
-            } else {
-                self.unread(token);
-                Ok(None)
+    fn try_read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Option<Self>>
+        where T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
+              E: Into<Error>
+    {
+        track!(Self::read_from(reader)).map(Some).or_else(|e| {
+            if let ErrorKind::UnexpectedToken(ref token) = *e.kind() {
+                reader.unread_token(token.clone());
+                return Ok(None);
             }
-        } else {
-            Ok(None)
-        }
+            if let ErrorKind::UnexpectedEos = *e.kind() {
+                return Ok(None);
+            }
+            Err(e)
+        })
     }
-    pub fn read_expected_symbol_or_error(&mut self, expected: Symbol) -> Result<SymbolToken> {
-        if let Some(s) = track_try!(self.read_symbol_if(expected)) {
-            Ok(s)
-        } else {
-            track_panic!(ErrorKind::InvalidInput,
-                         "Unexpected token: actual={:?}, expected={:?}",
-                         self.read(),
-                         expected);
-        }
+    fn read_expected<T, E>(reader: &mut TokenReader<T, E>, expected: &Self::Value) -> Result<Self>
+        where T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
+              E: Into<Error>,
+              Self: Expect + Into<LexicalToken>
+    {
+        track!(Self::read_from(reader)).and_then(|token| {
+            track_assert!(token.expect(expected),
+                          ErrorKind::UnexpectedToken(token.into()));
+            Ok(token)
+        })
+    }
+    fn try_read_expected<'a, T, E>(reader: &mut TokenReader<T, E>,
+                                   expected: &Self::Value)
+                                   -> Result<Option<Self>>
+        where T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
+              E: Into<Error>,
+              Self: Expect + Into<LexicalToken>
+    {
+        track!(Self::try_read_from(reader)).map(|token| {
+            token.and_then(|token| if token.expect(expected) {
+                               Some(token)
+                           } else {
+                               reader.unread_token(token.into());
+                               None
+                           })
+        })
+    }
+}
+impl ReadFrom for AtomToken {
+    fn read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Self>
+        where T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
+              E: Into<Error>
+    {
+        let token = track!(reader.read_token())?;
+        token.into_atom_token().map_err(Error::unexpected_token)
+    }
+}
+impl ReadFrom for VariableToken {
+    fn read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Self>
+        where T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
+              E: Into<Error>
+    {
+        let token = track!(reader.read_token())?;
+        token.into_variable_token().map_err(Error::unexpected_token)
+    }
+}
+impl ReadFrom for SymbolToken {
+    fn read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Self>
+        where T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
+              E: Into<Error>
+    {
+        let token = track!(reader.read_token())?;
+        token.into_symbol_token().map_err(Error::unexpected_token)
+    }
+}
+impl ReadFrom for StringToken {
+    fn read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Self>
+        where T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
+              E: Into<Error>
+    {
+        let token = track!(reader.read_token())?;
+        token.into_string_token().map_err(Error::unexpected_token)
+    }
+}
+
+pub trait Expect {
+    type Value: PartialEq + Debug + ?Sized;
+    fn expect(&self, expected: &Self::Value) -> bool;
+}
+impl Expect for AtomToken {
+    type Value = str;
+    fn expect(&self, expected: &Self::Value) -> bool {
+        self.value() == expected
+    }
+}
+impl Expect for SymbolToken {
+    type Value = Symbol;
+    fn expect(&self, expected: &Self::Value) -> bool {
+        self.value() == *expected
     }
 }
