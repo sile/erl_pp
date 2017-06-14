@@ -44,4 +44,5 @@ mod preprocessor;
 mod token_reader;
 mod util;
 
+/// This crate specific `Result` type.
 pub type Result<T> = ::std::result::Result<T, Error>;

@@ -10,6 +10,32 @@ use macros::Stringify;
 use token_reader::TokenReader;
 use types::MacroName;
 
+/// Erlang source code [preprocessor][Preprocessor].
+///
+/// This is an iterator which preprocesses given tokens and iterates on the resulting tokens.
+///
+/// The resulting tokens contains no macro directives and
+/// all macro calls in the input tokens are expanded.
+///
+/// [Preprocessor]: http://erlang.org/doc/reference_manual/macros.html
+///
+/// # Examples
+///
+/// ```
+/// # extern crate erl_pp;
+/// # extern crate erl_tokenize;
+/// use erl_pp::Preprocessor;
+/// use erl_tokenize::Lexer;
+///
+/// # fn main() {
+/// let src = r#"-define(FOO(A), [A, A]). -define(BAR, ?LINE). ?FOO(?BAR)."#;
+/// let pp = Preprocessor::new(Lexer::new(src));
+/// let tokens = pp.collect::<Result<Vec<_>, _>>().unwrap();
+///
+/// assert_eq!(tokens.iter().map(|t| t.text()).collect::<Vec<_>>(),
+///            ["[", "1", ",", "1", "]", "."]);
+/// # }
+/// ```
 #[derive(Debug)]
 pub struct Preprocessor<T, E = erl_tokenize::Error> {
     reader: TokenReader<T, E>,
@@ -26,6 +52,7 @@ impl<T, E> Preprocessor<T, E>
     where T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
           E: Into<Error>
 {
+    /// Makes a new `Preprocessor` instance.
     pub fn new(tokens: T) -> Self {
         Preprocessor {
             reader: TokenReader::new(tokens),
@@ -39,21 +66,45 @@ impl<T, E> Preprocessor<T, E>
             expanded_tokens: VecDeque::new(),
         }
     }
+
+    /// Returns a reference to the predefined macros which are recognized by this preprocessor.
     pub fn predefined_macros(&self) -> &PredefinedMacros {
         &self.predefined_macros
     }
+
+    /// Returns a mutable reference to the predefined macros
+    /// which are recognized by this preprocessor.
     pub fn predefined_macros_mut(&mut self) -> &mut PredefinedMacros {
         &mut self.predefined_macros
     }
+
+    /// Returns a reference to the code path list which
+    /// will be used by this preprocessor for handling `include_lib` directive.
     pub fn code_paths(&self) -> &VecDeque<PathBuf> {
         &self.code_paths
     }
+
+    /// Returns a mutable reference to the code path list which
+    /// will be used by this preprocessor for handling `include_lib` directive.
     pub fn code_paths_mut(&mut self) -> &mut VecDeque<PathBuf> {
         &mut self.code_paths
     }
+
+    /// Returns a reference to the map containing the macro directives
+    /// encountered by this preprocessor so far.
+    ///
+    /// The keys of this map are starting positions of the corresponding directives.
     pub fn directives(&self) -> &BTreeMap<Position, Directive> {
         &self.directives
     }
+
+    /// Returns a reference to the map containing the macro calls
+    /// encountered by this preprocessor so far.
+    ///
+    /// The keys of this map are starting positions of the corresponding macro calls.
+    ///
+    /// Note this map only contains top level macro calls.
+    /// Macro calls that occurred during expansion of other macros are excluded.
     pub fn macro_calls(&self) -> &BTreeMap<Position, MacroCall> {
         &self.macro_calls
     }

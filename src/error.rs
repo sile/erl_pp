@@ -8,17 +8,10 @@ use trackable::error::{ErrorKind as TrackableErrorKind, ErrorKindExt};
 #[derive(Debug, Clone)]
 pub struct Error(TrackableError<ErrorKind>);
 impl Error {
-    /// Makes a new `Error` instance of kind `ErrorKind::InvalidInput`.
-    pub fn invalid_input() -> Self {
+    pub(crate) fn invalid_input() -> Self {
         ErrorKind::InvalidInput.into()
     }
-
-    /// Makes a new `Error` instance of kind `ErrorKind::UnexpectedEos`.
-    pub fn unexpected_eos() -> Self {
-        ErrorKind::UnexpectedEos.into()
-    }
-
-    pub fn unexpected_token(token: LexicalToken) -> Self {
+    pub(crate) fn unexpected_token(token: LexicalToken) -> Self {
         ErrorKind::UnexpectedToken(token).into()
     }
 }

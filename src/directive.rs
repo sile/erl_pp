@@ -7,7 +7,9 @@ use Result;
 use directives;
 use token_reader::{TokenReader, ReadFrom};
 
+/// Macro directive.
 #[derive(Debug, Clone)]
+#[allow(missing_docs)]
 pub enum Directive {
     Include(directives::Include),
     IncludeLib(directives::IncludeLib),

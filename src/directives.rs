@@ -1,3 +1,4 @@
+//! Macro directives.
 use std::collections::VecDeque;
 use std::fmt;
 use std::path::{PathBuf, Component};
@@ -11,7 +12,12 @@ use token_reader::{TokenReader, ReadFrom};
 use types::{MacroName, MacroVariables};
 use util;
 
+/// `include` directive.
+///
+/// See [9.1 File Inclusion](http://erlang.org/doc/reference_manual/macros.html#id85412)
+/// for detailed information.
 #[derive(Debug, Clone)]
+#[allow(missing_docs)]
 pub struct Include {
     pub _hyphen: SymbolToken,
     pub _include: AtomToken,
@@ -21,6 +27,7 @@ pub struct Include {
     pub _dot: SymbolToken,
 }
 impl Include {
+    /// Executes file inclusion.
     pub fn include(&self) -> Result<(PathBuf, String)> {
         let path = track!(util::substitute_path_variables(self.path.value()))?;
         let text = track!(util::read_file(&path))?;
@@ -56,7 +63,12 @@ impl ReadFrom for Include {
     }
 }
 
+/// `include_lib` directive.
+///
+/// See [9.1 File Inclusion](http://erlang.org/doc/reference_manual/macros.html#id85412)
+/// for detailed information.
 #[derive(Debug, Clone)]
+#[allow(missing_docs)]
 pub struct IncludeLib {
     pub _hyphen: SymbolToken,
     pub _include_lib: AtomToken,
@@ -66,6 +78,7 @@ pub struct IncludeLib {
     pub _dot: SymbolToken,
 }
 impl IncludeLib {
+    /// Executes file inclusion.
     pub fn include_lib(&self, code_paths: &VecDeque<PathBuf>) -> Result<(PathBuf, String)> {
         let mut path = track!(util::substitute_path_variables(self.path.value()))?;
 
@@ -120,7 +133,13 @@ impl ReadFrom for IncludeLib {
     }
 }
 
+/// `error` directive.
+///
+/// See [9.6 -error() and -warning() directives]
+/// (http://erlang.org/doc/reference_manual/macros.html#id85997)
+/// for detailed information.
 #[derive(Debug, Clone)]
+#[allow(missing_docs)]
 pub struct Error {
     pub _hyphen: SymbolToken,
     pub _error: AtomToken,
@@ -158,7 +177,13 @@ impl ReadFrom for Error {
     }
 }
 
+/// `warning` directive.
+///
+/// See [9.6 -error() and -warning() directives]
+/// (http://erlang.org/doc/reference_manual/macros.html#id85997)
+/// for detailed information.
 #[derive(Debug, Clone)]
+#[allow(missing_docs)]
 pub struct Warning {
     pub _hyphen: SymbolToken,
     pub _warning: AtomToken,
@@ -196,7 +221,13 @@ impl ReadFrom for Warning {
     }
 }
 
+/// `endif` directive.
+///
+/// See [9.5 Flow Control in Macros]
+/// (http://erlang.org/doc/reference_manual/macros.html#id85859)
+/// for detailed information.
 #[derive(Debug, Clone)]
+#[allow(missing_docs)]
 pub struct Endif {
     pub _hyphen: SymbolToken,
     pub _endif: AtomToken,
@@ -228,7 +259,13 @@ impl ReadFrom for Endif {
     }
 }
 
+/// `else` directive.
+///
+/// See [9.5 Flow Control in Macros]
+/// (http://erlang.org/doc/reference_manual/macros.html#id85859)
+/// for detailed information.
 #[derive(Debug, Clone)]
+#[allow(missing_docs)]
 pub struct Else {
     pub _hyphen: SymbolToken,
     pub _else: AtomToken,
@@ -260,7 +297,13 @@ impl ReadFrom for Else {
     }
 }
 
+/// `undef` directive.
+///
+/// See [9.5 Flow Control in Macros]
+/// (http://erlang.org/doc/reference_manual/macros.html#id85859)
+/// for detailed information.
 #[derive(Debug, Clone)]
+#[allow(missing_docs)]
 pub struct Undef {
     pub _hyphen: SymbolToken,
     pub _undef: AtomToken,
@@ -298,7 +341,13 @@ impl ReadFrom for Undef {
     }
 }
 
+/// `ifdef` directive.
+///
+/// See [9.5 Flow Control in Macros]
+/// (http://erlang.org/doc/reference_manual/macros.html#id85859)
+/// for detailed information.
 #[derive(Debug, Clone)]
+#[allow(missing_docs)]
 pub struct Ifdef {
     pub _hyphen: SymbolToken,
     pub _ifdef: AtomToken,
@@ -336,7 +385,13 @@ impl ReadFrom for Ifdef {
     }
 }
 
+/// `ifndef` directive.
+///
+/// See [9.5 Flow Control in Macros]
+/// (http://erlang.org/doc/reference_manual/macros.html#id85859)
+/// for detailed information.
 #[derive(Debug, Clone)]
+#[allow(missing_docs)]
 pub struct Ifndef {
     pub _hyphen: SymbolToken,
     pub _ifndef: AtomToken,
@@ -374,7 +429,13 @@ impl ReadFrom for Ifndef {
     }
 }
 
+/// `define` directive.
+///
+/// See [9.2 Defining and Using Macros]
+/// (http://erlang.org/doc/reference_manual/macros.html#id85572)
+/// for detailed information.
 #[derive(Debug, Clone)]
+#[allow(missing_docs)]
 pub struct Define {
     pub _hyphen: SymbolToken,
     pub _define: AtomToken,

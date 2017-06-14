@@ -7,7 +7,9 @@ use {Result, Error, ErrorKind};
 use token_reader::{TokenReader, ReadFrom};
 use types::{MacroName, MacroArgs};
 
+/// Macro call.
 #[derive(Debug, Clone)]
+#[allow(missing_docs)]
 pub struct MacroCall {
     pub _question: SymbolToken,
     pub name: MacroName,
@@ -75,6 +77,11 @@ impl ReadFrom for Stringify {
     }
 }
 
+/// Predefined macros.
+///
+/// See [9.3 Predefined Macros]
+/// (http://erlang.org/doc/reference_manual/macros.html#id85705)
+/// for detailed information.
 #[derive(Debug, Default)]
 pub struct PredefinedMacros {
     module_name: Option<String>,
@@ -82,18 +89,44 @@ pub struct PredefinedMacros {
     function_arity: Option<usize>,
 }
 impl PredefinedMacros {
+    /// Makes a new `PredefinedMacros` instance.
     pub fn new() -> Self {
         PredefinedMacros::default()
     }
+
+    /// Sets the value of `MODULE` and `MODULE_NAME` macros.
     pub fn set_module_name(&mut self, name: &str) {
         self.module_name = Some(name.to_string());
     }
+
+    /// Sets the value of `FUNCTION_NAME` macro.
     pub fn set_function_name(&mut self, name: &str) {
         self.function_name = Some(name.to_string());
     }
+
+    /// Sets the value of `FUNCTION_ARITY` macro.
     pub fn set_function_arity(&mut self, arity: usize) {
         self.function_arity = Some(arity);
     }
+
+    /// Clears the value of `MODULE` and `MODULE_NAME` macros.
+    pub fn clear_module_name(&mut self) {
+        self.module_name = None;
+    }
+
+    /// Clears the value of `FUNCTION_NAME` macro.
+    pub fn clear_function_name(&mut self) {
+        self.function_name = None;
+    }
+
+    /// Clears the value of `FUNCTION_ARITY` macro.
+    pub fn clear_function_arity(&mut self) {
+        self.function_arity = None;
+    }
+
+    /// Tries to expand the specified macro call.
+    ///
+    /// If the `call` is not a predefined macro, this will return `Ok(None)`.
     pub fn try_expand(&self, call: &MacroCall) -> Result<Option<LexicalToken>> {
         let expanded = match call.name.value() {
             "MODULE" => {
