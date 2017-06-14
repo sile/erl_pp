@@ -35,7 +35,7 @@ assert_eq!(tokens.iter().map(|t| t.text()).collect::<Vec<_>>(),
 
 Executes the example `pp` command:
 
-```console
+```bash
 $ cargo run --example pp -- /dev/stdin <<EOS
 -define(FOO, foo).
 -define(BAR(A), {bar, A}).
