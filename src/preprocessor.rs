@@ -205,7 +205,10 @@ impl<T, E> Iterator for Preprocessor<T, E>
     type Item = Result<LexicalToken>;
     fn next(&mut self) -> Option<Self::Item> {
         match self.next_token() {
-            Err(e) => Some(Err(e)),
+            Err(e) => {
+                let e = track!(e, "next={:?}", self.reader.try_read_token());
+                Some(Err(e))
+            }
             Ok(None) => None,
             Ok(Some(token)) => Some(Ok(token)),
         }
