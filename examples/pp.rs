@@ -31,9 +31,13 @@ fn main() {
     lexer.set_filepath(src_file.file_name().unwrap());
 
     let mut preprocessor = Preprocessor::new(lexer);
-    preprocessor
-        .predefined_macros_mut()
-        .set_module_name(src_file.file_stem().unwrap().to_str().unwrap());
+    preprocessor.predefined_macros_mut().set_module_name(
+        src_file
+            .file_stem()
+            .unwrap()
+            .to_str()
+            .unwrap(),
+    );
 
     for result in preprocessor {
         let token = track_try_unwrap!(result);
@@ -43,8 +47,10 @@ fn main() {
         count += 1;
     }
     println!("TOKEN COUNT: {}", count);
-    println!("ELAPSED: {:?} seconds",
-             to_seconds(Instant::now() - start_time));
+    println!(
+        "ELAPSED: {:?} seconds",
+        to_seconds(Instant::now() - start_time)
+    );
 }
 
 fn to_seconds(duration: Duration) -> f64 {

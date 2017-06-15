@@ -49,17 +49,18 @@ impl fmt::Display for Include {
 }
 impl ReadFrom for Include {
     fn read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Self>
-        where T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
-              E: Into<::Error>
+    where
+        T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
+        E: Into<::Error>,
     {
         Ok(Include {
-               _hyphen: track!(reader.read_expected(&Symbol::Hyphen))?,
-               _include: track!(reader.read_expected("include"))?,
-               _open_paren: track!(reader.read_expected(&Symbol::OpenParen))?,
-               path: track!(reader.read())?,
-               _close_paren: track!(reader.read_expected(&Symbol::CloseParen))?,
-               _dot: track!(reader.read_expected(&Symbol::Dot))?,
-           })
+            _hyphen: track!(reader.read_expected(&Symbol::Hyphen))?,
+            _include: track!(reader.read_expected("include"))?,
+            _open_paren: track!(reader.read_expected(&Symbol::OpenParen))?,
+            path: track!(reader.read())?,
+            _close_paren: track!(reader.read_expected(&Symbol::CloseParen))?,
+            _dot: track!(reader.read_expected(&Symbol::Dot))?,
+        })
     }
 }
 
@@ -119,17 +120,18 @@ impl fmt::Display for IncludeLib {
 }
 impl ReadFrom for IncludeLib {
     fn read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Self>
-        where T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
-              E: Into<::Error>
+    where
+        T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
+        E: Into<::Error>,
     {
         Ok(IncludeLib {
-               _hyphen: track!(reader.read_expected(&Symbol::Hyphen))?,
-               _include_lib: track!(reader.read_expected("include_lib"))?,
-               _open_paren: track!(reader.read_expected(&Symbol::OpenParen))?,
-               path: track!(reader.read())?,
-               _close_paren: track!(reader.read_expected(&Symbol::CloseParen))?,
-               _dot: track!(reader.read_expected(&Symbol::Dot))?,
-           })
+            _hyphen: track!(reader.read_expected(&Symbol::Hyphen))?,
+            _include_lib: track!(reader.read_expected("include_lib"))?,
+            _open_paren: track!(reader.read_expected(&Symbol::OpenParen))?,
+            path: track!(reader.read())?,
+            _close_paren: track!(reader.read_expected(&Symbol::CloseParen))?,
+            _dot: track!(reader.read_expected(&Symbol::Dot))?,
+        })
     }
 }
 
@@ -163,17 +165,18 @@ impl fmt::Display for Error {
 }
 impl ReadFrom for Error {
     fn read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Self>
-        where T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
-              E: Into<::Error>
+    where
+        T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
+        E: Into<::Error>,
     {
         Ok(Error {
-               _hyphen: track!(reader.read_expected(&Symbol::Hyphen))?,
-               _error: track!(reader.read_expected("error"))?,
-               _open_paren: track!(reader.read_expected(&Symbol::OpenParen))?,
-               message: track!(reader.read())?,
-               _close_paren: track!(reader.read_expected(&Symbol::CloseParen))?,
-               _dot: track!(reader.read_expected(&Symbol::Dot))?,
-           })
+            _hyphen: track!(reader.read_expected(&Symbol::Hyphen))?,
+            _error: track!(reader.read_expected("error"))?,
+            _open_paren: track!(reader.read_expected(&Symbol::OpenParen))?,
+            message: track!(reader.read())?,
+            _close_paren: track!(reader.read_expected(&Symbol::CloseParen))?,
+            _dot: track!(reader.read_expected(&Symbol::Dot))?,
+        })
     }
 }
 
@@ -207,17 +210,18 @@ impl fmt::Display for Warning {
 }
 impl ReadFrom for Warning {
     fn read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Self>
-        where T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
-              E: Into<::Error>
+    where
+        T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
+        E: Into<::Error>,
     {
         Ok(Warning {
-               _hyphen: track!(reader.read_expected(&Symbol::Hyphen))?,
-               _warning: track!(reader.read_expected("warning"))?,
-               _open_paren: track!(reader.read_expected(&Symbol::OpenParen))?,
-               message: track!(reader.read())?,
-               _close_paren: track!(reader.read_expected(&Symbol::CloseParen))?,
-               _dot: track!(reader.read_expected(&Symbol::Dot))?,
-           })
+            _hyphen: track!(reader.read_expected(&Symbol::Hyphen))?,
+            _warning: track!(reader.read_expected("warning"))?,
+            _open_paren: track!(reader.read_expected(&Symbol::OpenParen))?,
+            message: track!(reader.read())?,
+            _close_paren: track!(reader.read_expected(&Symbol::CloseParen))?,
+            _dot: track!(reader.read_expected(&Symbol::Dot))?,
+        })
     }
 }
 
@@ -248,14 +252,15 @@ impl fmt::Display for Endif {
 }
 impl ReadFrom for Endif {
     fn read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Self>
-        where T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
-              E: Into<::Error>
+    where
+        T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
+        E: Into<::Error>,
     {
         Ok(Endif {
-               _hyphen: track!(reader.read_expected(&Symbol::Hyphen))?,
-               _endif: track!(reader.read_expected("endif"))?,
-               _dot: track!(reader.read_expected(&Symbol::Dot))?,
-           })
+            _hyphen: track!(reader.read_expected(&Symbol::Hyphen))?,
+            _endif: track!(reader.read_expected("endif"))?,
+            _dot: track!(reader.read_expected(&Symbol::Dot))?,
+        })
     }
 }
 
@@ -286,14 +291,15 @@ impl fmt::Display for Else {
 }
 impl ReadFrom for Else {
     fn read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Self>
-        where T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
-              E: Into<::Error>
+    where
+        T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
+        E: Into<::Error>,
     {
         Ok(Else {
-               _hyphen: track!(reader.read_expected(&Symbol::Hyphen))?,
-               _else: track!(reader.read_expected("else"))?,
-               _dot: track!(reader.read_expected(&Symbol::Dot))?,
-           })
+            _hyphen: track!(reader.read_expected(&Symbol::Hyphen))?,
+            _else: track!(reader.read_expected("else"))?,
+            _dot: track!(reader.read_expected(&Symbol::Dot))?,
+        })
     }
 }
 
@@ -327,17 +333,18 @@ impl fmt::Display for Undef {
 }
 impl ReadFrom for Undef {
     fn read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Self>
-        where T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
-              E: Into<::Error>
+    where
+        T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
+        E: Into<::Error>,
     {
         Ok(Undef {
-               _hyphen: track!(reader.read_expected(&Symbol::Hyphen))?,
-               _undef: track!(reader.read_expected("undef"))?,
-               _open_paren: track!(reader.read_expected(&Symbol::OpenParen))?,
-               name: track!(reader.read())?,
-               _close_paren: track!(reader.read_expected(&Symbol::CloseParen))?,
-               _dot: track!(reader.read_expected(&Symbol::Dot))?,
-           })
+            _hyphen: track!(reader.read_expected(&Symbol::Hyphen))?,
+            _undef: track!(reader.read_expected("undef"))?,
+            _open_paren: track!(reader.read_expected(&Symbol::OpenParen))?,
+            name: track!(reader.read())?,
+            _close_paren: track!(reader.read_expected(&Symbol::CloseParen))?,
+            _dot: track!(reader.read_expected(&Symbol::Dot))?,
+        })
     }
 }
 
@@ -371,17 +378,18 @@ impl fmt::Display for Ifdef {
 }
 impl ReadFrom for Ifdef {
     fn read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Self>
-        where T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
-              E: Into<::Error>
+    where
+        T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
+        E: Into<::Error>,
     {
         Ok(Ifdef {
-               _hyphen: track!(reader.read_expected(&Symbol::Hyphen))?,
-               _ifdef: track!(reader.read_expected("ifdef"))?,
-               _open_paren: track!(reader.read_expected(&Symbol::OpenParen))?,
-               name: track!(reader.read())?,
-               _close_paren: track!(reader.read_expected(&Symbol::CloseParen))?,
-               _dot: track!(reader.read_expected(&Symbol::Dot))?,
-           })
+            _hyphen: track!(reader.read_expected(&Symbol::Hyphen))?,
+            _ifdef: track!(reader.read_expected("ifdef"))?,
+            _open_paren: track!(reader.read_expected(&Symbol::OpenParen))?,
+            name: track!(reader.read())?,
+            _close_paren: track!(reader.read_expected(&Symbol::CloseParen))?,
+            _dot: track!(reader.read_expected(&Symbol::Dot))?,
+        })
     }
 }
 
@@ -415,17 +423,18 @@ impl fmt::Display for Ifndef {
 }
 impl ReadFrom for Ifndef {
     fn read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Self>
-        where T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
-              E: Into<::Error>
+    where
+        T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
+        E: Into<::Error>,
     {
         Ok(Ifndef {
-               _hyphen: track!(reader.read_expected(&Symbol::Hyphen))?,
-               _ifndef: track!(reader.read_expected("ifndef"))?,
-               _open_paren: track!(reader.read_expected(&Symbol::OpenParen))?,
-               name: track!(reader.read())?,
-               _close_paren: track!(reader.read_expected(&Symbol::CloseParen))?,
-               _dot: track!(reader.read_expected(&Symbol::Dot))?,
-           })
+            _hyphen: track!(reader.read_expected(&Symbol::Hyphen))?,
+            _ifndef: track!(reader.read_expected("ifndef"))?,
+            _open_paren: track!(reader.read_expected(&Symbol::OpenParen))?,
+            name: track!(reader.read())?,
+            _close_paren: track!(reader.read_expected(&Symbol::CloseParen))?,
+            _dot: track!(reader.read_expected(&Symbol::Dot))?,
+        })
     }
 }
 
@@ -457,29 +466,35 @@ impl PositionRange for Define {
 }
 impl fmt::Display for Define {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f,
-               "-define({}{}, {}).",
-               self.name,
-               self.variables
-                   .as_ref()
-                   .map_or("".to_string(), |v| v.to_string()),
-               self.replacement
-                   .iter()
-                   .map(|t| t.text())
-                   .collect::<String>())
+        write!(
+            f,
+            "-define({}{}, {}).",
+            self.name,
+            self.variables.as_ref().map_or(
+                "".to_string(),
+                |v| v.to_string(),
+            ),
+            self.replacement
+                .iter()
+                .map(|t| t.text())
+                .collect::<String>()
+        )
     }
 }
 impl ReadFrom for Define {
     fn read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Self>
-        where T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
-              E: Into<::Error>
+    where
+        T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
+        E: Into<::Error>,
     {
         let _hyphen = track!(reader.read_expected(&Symbol::Hyphen))?;
         let _define = track!(reader.read_expected("define"))?;
         let _open_paren = track!(reader.read_expected(&Symbol::OpenParen))?;
         let name = track!(reader.read())?;
-        let variables = if let Some(token) =
-            track!(reader.try_read_expected::<SymbolToken>(&Symbol::OpenParen))? {
+        let variables = if let Some(token) = track!(reader.try_read_expected::<SymbolToken>(
+            &Symbol::OpenParen,
+        ))?
+        {
             reader.unread_token(token.into());
             Some(track!(reader.read())?)
         } else {
@@ -492,24 +507,27 @@ impl ReadFrom for Define {
             if let Some(_close_paren) = track!(reader.try_read_expected(&Symbol::CloseParen))? {
                 if let Some(_dot) = track!(reader.try_read_expected(&Symbol::Dot))? {
                     return Ok(Define {
-                                  _hyphen,
-                                  _define,
-                                  _open_paren,
-                                  name,
-                                  variables,
-                                  _comma,
-                                  replacement,
-                                  _close_paren,
-                                  _dot,
-                              });
+                        _hyphen,
+                        _define,
+                        _open_paren,
+                        name,
+                        variables,
+                        _comma,
+                        replacement,
+                        _close_paren,
+                        _dot,
+                    });
                 }
                 replacement.push(_close_paren.into());
             } else {
                 let token = track!(reader.read_token())?;
-                track_assert!(token
-                                  .as_symbol_token()
-                                  .map_or(true, |s| s.value() != Symbol::Dot),
-                              ErrorKind::InvalidInput);
+                track_assert!(
+                    token.as_symbol_token().map_or(
+                        true,
+                        |s| s.value() != Symbol::Dot,
+                    ),
+                    ErrorKind::InvalidInput
+                );
                 replacement.push(token);
             }
         }

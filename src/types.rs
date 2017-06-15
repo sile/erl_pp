@@ -65,8 +65,9 @@ impl fmt::Display for MacroName {
 }
 impl ReadFrom for MacroName {
     fn read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Self>
-        where T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
-              E: Into<::Error>
+    where
+        T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
+        E: Into<::Error>,
     {
         if let Some(token) = track!(reader.try_read())? {
             Ok(MacroName::Atom(token))
@@ -111,14 +112,15 @@ impl fmt::Display for MacroVariables {
 }
 impl ReadFrom for MacroVariables {
     fn read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Self>
-        where T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
-              E: Into<::Error>
+    where
+        T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
+        E: Into<::Error>,
     {
         Ok(MacroVariables {
-               _open_paren: track!(reader.read_expected(&Symbol::OpenParen))?,
-               list: track!(reader.read())?,
-               _close_paren: track!(reader.read_expected(&Symbol::CloseParen))?,
-           })
+            _open_paren: track!(reader.read_expected(&Symbol::OpenParen))?,
+            list: track!(reader.read())?,
+            _close_paren: track!(reader.read_expected(&Symbol::CloseParen))?,
+        })
     }
 }
 
@@ -156,14 +158,15 @@ impl fmt::Display for MacroArgs {
 }
 impl ReadFrom for MacroArgs {
     fn read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Self>
-        where T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
-              E: Into<::Error>
+    where
+        T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
+        E: Into<::Error>,
     {
         Ok(MacroArgs {
-               _open_paren: track!(reader.read_expected(&Symbol::OpenParen))?,
-               list: track!(reader.read())?,
-               _close_paren: track!(reader.read_expected(&Symbol::CloseParen))?,
-           })
+            _open_paren: track!(reader.read_expected(&Symbol::OpenParen))?,
+            list: track!(reader.read())?,
+            _close_paren: track!(reader.read_expected(&Symbol::CloseParen))?,
+        })
     }
 }
 
@@ -193,8 +196,9 @@ impl fmt::Display for MacroArg {
 }
 impl ReadFrom for MacroArg {
     fn try_read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Option<Self>>
-        where T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
-              E: Into<::Error>
+    where
+        T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
+        E: Into<::Error>,
     {
         let mut stack = Vec::new();
         let mut arg = Vec::new();
@@ -260,8 +264,9 @@ impl<T: fmt::Display> fmt::Display for Tail<T> {
 }
 impl<U: ReadFrom> ReadFrom for Tail<U> {
     fn read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Self>
-        where T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
-              E: Into<::Error>
+    where
+        T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
+        E: Into<::Error>,
     {
         if let Some(_comma) = track!(reader.try_read_expected(&Symbol::Comma))? {
             let head = track!(reader.read())?;
@@ -296,8 +301,9 @@ impl<T: fmt::Display> fmt::Display for List<T> {
 }
 impl<U: ReadFrom> ReadFrom for List<U> {
     fn read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Self>
-        where T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
-              E: Into<::Error>
+    where
+        T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
+        E: Into<::Error>,
     {
         if let Some(head) = track!(reader.try_read())? {
             let tail = track!(reader.read())?;

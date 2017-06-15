@@ -28,22 +28,25 @@ impl PositionRange for MacroCall {
 }
 impl fmt::Display for MacroCall {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f,
-               "?{}{}",
-               self.name.text(),
-               self.args.as_ref().map_or("".to_string(), |a| a.to_string()))
+        write!(
+            f,
+            "?{}{}",
+            self.name.text(),
+            self.args.as_ref().map_or("".to_string(), |a| a.to_string())
+        )
     }
 }
 impl ReadFrom for MacroCall {
     fn read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Self>
-        where T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
-              E: Into<::Error>
+    where
+        T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
+        E: Into<::Error>,
     {
         Ok(MacroCall {
-               _question: track!(reader.read_expected(&Symbol::Question))?,
-               name: track!(reader.read())?,
-               args: track!(reader.try_read())?,
-           })
+            _question: track!(reader.read_expected(&Symbol::Question))?,
+            name: track!(reader.read())?,
+            args: track!(reader.try_read())?,
+        })
     }
 }
 
@@ -67,13 +70,14 @@ impl fmt::Display for Stringify {
 }
 impl ReadFrom for Stringify {
     fn read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Self>
-        where T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
-              E: Into<::Error>
+    where
+        T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
+        E: Into<::Error>,
     {
         Ok(Stringify {
-               _double_question: track!(reader.read_expected(&Symbol::DoubleQuestion))?,
-               name: track!(reader.read())?,
-           })
+            _double_question: track!(reader.read_expected(&Symbol::DoubleQuestion))?,
+            name: track!(reader.read())?,
+        })
     }
 }
 

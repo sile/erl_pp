@@ -70,15 +70,16 @@ impl fmt::Display for Directive {
 }
 impl ReadFrom for Directive {
     fn try_read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Option<Self>>
-        where T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
-              E: Into<::Error>
+    where
+        T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
+        E: Into<::Error>,
     {
-        let _hyphen: SymbolToken = if let Some(_hyphen) =
-            track!(reader.try_read_expected(&Symbol::Hyphen))? {
-            _hyphen
-        } else {
-            return Ok(None);
-        };
+        let _hyphen: SymbolToken =
+            if let Some(_hyphen) = track!(reader.try_read_expected(&Symbol::Hyphen))? {
+                _hyphen
+            } else {
+                return Ok(None);
+            };
 
         let name: AtomToken = if let Some(name) = track!(reader.try_read())? {
             name
