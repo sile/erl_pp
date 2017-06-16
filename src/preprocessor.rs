@@ -1,11 +1,10 @@
 use std::collections::{HashMap, BTreeMap, VecDeque};
 use std::path::PathBuf;
 use erl_tokenize::{self, LexicalToken, Position, PositionRange};
-use erl_tokenize::tokens::StringToken;
+use erl_tokenize::tokens::{IntegerToken, AtomToken, StringToken};
 use erl_tokenize::values::Symbol;
 
-use {Result, Error, Directive, ErrorKind, MacroCall, PredefinedMacros};
-use directives::Define;
+use {Result, Error, Directive, ErrorKind, MacroCall, MacroDef};
 use macros::Stringify;
 use token_reader::TokenReader;
 use types::MacroName;
@@ -43,8 +42,7 @@ pub struct Preprocessor<T, E = erl_tokenize::Error> {
     directives: BTreeMap<Position, Directive>,
     code_paths: VecDeque<PathBuf>,
     branches: Vec<Branch>,
-    predefined_macros: PredefinedMacros,
-    macros: HashMap<MacroName, Define>,
+    macros: HashMap<MacroName, MacroDef>,
     macro_calls: BTreeMap<Position, MacroCall>,
     expanded_tokens: VecDeque<LexicalToken>,
 }
@@ -61,7 +59,6 @@ where
             directives: BTreeMap::new(),
             code_paths: VecDeque::new(),
             branches: Vec::new(),
-            predefined_macros: PredefinedMacros::new(),
             macros: HashMap::new(),
             macro_calls: BTreeMap::new(),
             expanded_tokens: VecDeque::new(),
@@ -105,30 +102,52 @@ where
         Ok(None)
     }
     fn expand_macro(&self, call: MacroCall) -> Result<VecDeque<LexicalToken>> {
-        if let Some(expanded) = track!(self.predefined_macros.try_expand(&call))? {
+        if let Some(expanded) = track!(self.try_expand_predefined_macro(&call))? {
             Ok(vec![expanded].into())
         } else {
             track!(self.expand_userdefined_macro(call))
         }
     }
+    fn try_expand_predefined_macro(&self, call: &MacroCall) -> Result<Option<LexicalToken>> {
+        let expanded = match call.name.value() {
+            "FILE" => {
+                let current = call.start_position();
+                let file = track!(current.filepath().ok_or(Error::invalid_input()))?;
+                let file = track!(file.to_str().ok_or(Error::invalid_input()))?;
+                StringToken::from_value(file, call.start_position()).into()
+            }
+            "LINE" => {
+                let line = call.start_position().line();
+                IntegerToken::from_value(line.into(), call.start_position()).into()
+            }
+            "MACHINE" => AtomToken::from_value("BEAM", call.start_position()).into(),
+            _ => return Ok(None),
+        };
+        Ok(Some(expanded))
+    }
     fn expand_userdefined_macro(&self, call: MacroCall) -> Result<VecDeque<LexicalToken>> {
         let definition = track!(self.macros.get(&call.name).ok_or(Error::invalid_input()))?;
-        track_assert_eq!(
-            call.args.as_ref().map(|a| a.len()),
-            definition.variables.as_ref().map(|v| v.len()),
-            ErrorKind::InvalidInput
-        );
-        let bindings = definition
-            .variables
-            .as_ref()
-            .iter()
-            .flat_map(|i| i.iter().map(|v| v.value()))
-            .zip(call.args.iter().flat_map(
-                |i| i.iter().map(|a| &a.tokens[..]),
-            ))
-            .collect::<HashMap<_, _>>();
-        let expanded = track!(self.expand_replacement(bindings, &definition.replacement))?;
-        Ok(expanded)
+        match *definition {
+            MacroDef::Dynamic(ref replacement) => Ok(replacement.clone().into()),
+            MacroDef::Static(ref definition) => {
+                track_assert_eq!(
+                    call.args.as_ref().map(|a| a.len()),
+                    definition.variables.as_ref().map(|v| v.len()),
+                    ErrorKind::InvalidInput
+                );
+                let bindings = definition
+                    .variables
+                    .as_ref()
+                    .iter()
+                    .flat_map(|i| i.iter().map(|v| v.value()))
+                    .zip(call.args.iter().flat_map(
+                        |i| i.iter().map(|a| &a.tokens[..]),
+                    ))
+                    .collect::<HashMap<_, _>>();
+                let expanded = track!(self.expand_replacement(bindings, &definition.replacement))?;
+                Ok(expanded)
+            }
+        }
     }
     fn expand_replacement(
         &self,
@@ -188,7 +207,10 @@ where
                 self.reader.add_included_text(path, text);
             }
             Directive::Define(ref d) if !ignore => {
-                self.macros.insert(d.name.clone(), d.clone());
+                self.macros.insert(
+                    d.name.clone(),
+                    MacroDef::Static(d.clone()),
+                );
             }
             Directive::Undef(ref d) if !ignore => {
                 self.macros.remove(&d.name);
@@ -214,17 +236,6 @@ where
     }
 }
 impl<T, E> Preprocessor<T, E> {
-    /// Returns a reference to the predefined macros which are recognized by this preprocessor.
-    pub fn predefined_macros(&self) -> &PredefinedMacros {
-        &self.predefined_macros
-    }
-
-    /// Returns a mutable reference to the predefined macros
-    /// which are recognized by this preprocessor.
-    pub fn predefined_macros_mut(&mut self) -> &mut PredefinedMacros {
-        &mut self.predefined_macros
-    }
-
     /// Returns a reference to the code path list which
     /// will be used by this preprocessor for handling `include_lib` directive.
     pub fn code_paths(&self) -> &VecDeque<PathBuf> {
@@ -254,6 +265,16 @@ impl<T, E> Preprocessor<T, E> {
     /// Macro calls that occurred during expansion of other macros are excluded.
     pub fn macro_calls(&self) -> &BTreeMap<Position, MacroCall> {
         &self.macro_calls
+    }
+
+    /// Returns a reference to the map containing the current macro definitions.
+    pub fn macros(&self) -> &HashMap<MacroName, MacroDef> {
+        &self.macros
+    }
+
+    /// Returns a mutable reference to the map containing the current macro definitions.
+    pub fn macros_mut(&mut self) -> &mut HashMap<MacroName, MacroDef> {
+        &mut self.macros
     }
 }
 impl<T, E> Iterator for Preprocessor<T, E>

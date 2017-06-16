@@ -30,15 +30,7 @@ fn main() {
     let mut lexer = Lexer::new(&src);
     lexer.set_filepath(src_file.file_name().unwrap());
 
-    let mut preprocessor = Preprocessor::new(lexer);
-    preprocessor.predefined_macros_mut().set_module_name(
-        src_file
-            .file_stem()
-            .unwrap()
-            .to_str()
-            .unwrap(),
-    );
-
+    let preprocessor = Preprocessor::new(lexer);
     for result in preprocessor {
         let token = track_try_unwrap!(result);
         if !silent {

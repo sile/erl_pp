@@ -30,7 +30,7 @@ extern crate glob;
 extern crate trackable;
 
 pub use directive::Directive;
-pub use macros::{MacroCall, PredefinedMacros};
+pub use macros::{MacroCall, MacroDef};
 pub use error::{Error, ErrorKind};
 pub use preprocessor::Preprocessor;
 
