@@ -68,48 +68,6 @@ where
         }
     }
 
-    /// Returns a reference to the predefined macros which are recognized by this preprocessor.
-    pub fn predefined_macros(&self) -> &PredefinedMacros {
-        &self.predefined_macros
-    }
-
-    /// Returns a mutable reference to the predefined macros
-    /// which are recognized by this preprocessor.
-    pub fn predefined_macros_mut(&mut self) -> &mut PredefinedMacros {
-        &mut self.predefined_macros
-    }
-
-    /// Returns a reference to the code path list which
-    /// will be used by this preprocessor for handling `include_lib` directive.
-    pub fn code_paths(&self) -> &VecDeque<PathBuf> {
-        &self.code_paths
-    }
-
-    /// Returns a mutable reference to the code path list which
-    /// will be used by this preprocessor for handling `include_lib` directive.
-    pub fn code_paths_mut(&mut self) -> &mut VecDeque<PathBuf> {
-        &mut self.code_paths
-    }
-
-    /// Returns a reference to the map containing the macro directives
-    /// encountered by this preprocessor so far.
-    ///
-    /// The keys of this map are starting positions of the corresponding directives.
-    pub fn directives(&self) -> &BTreeMap<Position, Directive> {
-        &self.directives
-    }
-
-    /// Returns a reference to the map containing the macro calls
-    /// encountered by this preprocessor so far.
-    ///
-    /// The keys of this map are starting positions of the corresponding macro calls.
-    ///
-    /// Note this map only contains top level macro calls.
-    /// Macro calls that occurred during expansion of other macros are excluded.
-    pub fn macro_calls(&self) -> &BTreeMap<Position, MacroCall> {
-        &self.macro_calls
-    }
-
     fn ignore(&self) -> bool {
         self.branches.iter().find(|b| b.entered == false).is_some()
     }
@@ -253,6 +211,49 @@ where
             _ => {}
         }
         Ok(Some(directive))
+    }
+}
+impl<T, E> Preprocessor<T, E> {
+    /// Returns a reference to the predefined macros which are recognized by this preprocessor.
+    pub fn predefined_macros(&self) -> &PredefinedMacros {
+        &self.predefined_macros
+    }
+
+    /// Returns a mutable reference to the predefined macros
+    /// which are recognized by this preprocessor.
+    pub fn predefined_macros_mut(&mut self) -> &mut PredefinedMacros {
+        &mut self.predefined_macros
+    }
+
+    /// Returns a reference to the code path list which
+    /// will be used by this preprocessor for handling `include_lib` directive.
+    pub fn code_paths(&self) -> &VecDeque<PathBuf> {
+        &self.code_paths
+    }
+
+    /// Returns a mutable reference to the code path list which
+    /// will be used by this preprocessor for handling `include_lib` directive.
+    pub fn code_paths_mut(&mut self) -> &mut VecDeque<PathBuf> {
+        &mut self.code_paths
+    }
+
+    /// Returns a reference to the map containing the macro directives
+    /// encountered by this preprocessor so far.
+    ///
+    /// The keys of this map are starting positions of the corresponding directives.
+    pub fn directives(&self) -> &BTreeMap<Position, Directive> {
+        &self.directives
+    }
+
+    /// Returns a reference to the map containing the macro calls
+    /// encountered by this preprocessor so far.
+    ///
+    /// The keys of this map are starting positions of the corresponding macro calls.
+    ///
+    /// Note this map only contains top level macro calls.
+    /// Macro calls that occurred during expansion of other macros are excluded.
+    pub fn macro_calls(&self) -> &BTreeMap<Position, MacroCall> {
+        &self.macro_calls
     }
 }
 impl<T, E> Iterator for Preprocessor<T, E>
