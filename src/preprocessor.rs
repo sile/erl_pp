@@ -7,7 +7,6 @@ use erl_tokenize::values::Symbol;
 use {Result, Error, Directive, ErrorKind, MacroCall, MacroDef};
 use macros::Stringify;
 use token_reader::TokenReader;
-use types::MacroName;
 
 /// Erlang source code [preprocessor][Preprocessor].
 ///
@@ -42,7 +41,7 @@ pub struct Preprocessor<T, E = erl_tokenize::Error> {
     directives: BTreeMap<Position, Directive>,
     code_paths: VecDeque<PathBuf>,
     branches: Vec<Branch>,
-    macros: HashMap<MacroName, MacroDef>,
+    macros: HashMap<String, MacroDef>,
     macro_calls: BTreeMap<Position, MacroCall>,
     expanded_tokens: VecDeque<LexicalToken>,
 }
@@ -126,7 +125,9 @@ where
         Ok(Some(expanded))
     }
     fn expand_userdefined_macro(&self, call: MacroCall) -> Result<VecDeque<LexicalToken>> {
-        let definition = track!(self.macros.get(&call.name).ok_or(Error::invalid_input()))?;
+        let definition = track!(self.macros.get(call.name.value()).ok_or(
+            Error::invalid_input(),
+        ))?;
         match *definition {
             MacroDef::Dynamic(ref replacement) => Ok(replacement.clone().into()),
             MacroDef::Static(ref definition) => {
@@ -208,19 +209,19 @@ where
             }
             Directive::Define(ref d) if !ignore => {
                 self.macros.insert(
-                    d.name.clone(),
+                    d.name.value().to_string(),
                     MacroDef::Static(d.clone()),
                 );
             }
             Directive::Undef(ref d) if !ignore => {
-                self.macros.remove(&d.name);
+                self.macros.remove(d.name.value());
             }
             Directive::Ifdef(ref d) => {
-                let entered = self.macros.contains_key(&d.name);
+                let entered = self.macros.contains_key(d.name.value());
                 self.branches.push(Branch::new(entered));
             }
             Directive::Ifndef(ref d) => {
-                let entered = !self.macros.contains_key(&d.name);
+                let entered = !self.macros.contains_key(d.name.value());
                 self.branches.push(Branch::new(entered));
             }
             Directive::Else(_) => {
@@ -268,12 +269,12 @@ impl<T, E> Preprocessor<T, E> {
     }
 
     /// Returns a reference to the map containing the current macro definitions.
-    pub fn macros(&self) -> &HashMap<MacroName, MacroDef> {
+    pub fn macros(&self) -> &HashMap<String, MacroDef> {
         &self.macros
     }
 
     /// Returns a mutable reference to the map containing the current macro definitions.
-    pub fn macros_mut(&mut self) -> &mut HashMap<MacroName, MacroDef> {
+    pub fn macros_mut(&mut self) -> &mut HashMap<String, MacroDef> {
         &mut self.macros
     }
 }
