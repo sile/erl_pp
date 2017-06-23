@@ -79,7 +79,7 @@ where
                 }
             }
             if !self.ignore() {
-                if let Some(m) = track!(self.try_read_macro_call())? {
+                if let Some(m) = track!(self.reader.try_read_macro_call(&self.macros))? {
                     self.macro_calls.insert(m.start_position(), m.clone());
                     self.expanded_tokens = track!(self.expand_macro(m))?;
                     continue;
@@ -159,7 +159,7 @@ where
         let mut reader: TokenReader<_, Error> =
             TokenReader::new(replacement.iter().map(|t| Ok(t.clone())));
         loop {
-            if let Some(call) = track!(reader.try_read())? {
+            if let Some(call) = track!(reader.try_read_macro_call(&self.macros))? {
                 let nested = track!(self.expand_macro(call))?;
                 for token in nested.into_iter().rev() {
                     reader.unread_token(token);
@@ -186,9 +186,6 @@ where
             }
         }
         Ok(expanded)
-    }
-    fn try_read_macro_call(&mut self) -> Result<Option<MacroCall>> {
-        track!(self.reader.try_read())
     }
     fn try_read_directive(&mut self) -> Result<Option<Directive>> {
         let directive: Directive = if let Some(directive) = track!(self.reader.try_read())? {

@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{VecDeque, HashMap};
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::path::Path;
@@ -6,7 +6,8 @@ use erl_tokenize::{LexicalToken, Lexer};
 use erl_tokenize::tokens::{AtomToken, StringToken, SymbolToken, VariableToken};
 use erl_tokenize::values::Symbol;
 
-use {Result, Error, ErrorKind};
+use {Result, Error, ErrorKind, MacroDef, MacroCall};
+use macros::NoArgsMacroCall;
 
 #[derive(Debug)]
 pub struct TokenReader<T, E> {
@@ -46,6 +47,28 @@ where
         V: ReadFrom,
     {
         track!(V::try_read_from(self))
+    }
+    pub fn try_read_macro_call(
+        &mut self,
+        macros: &HashMap<String, MacroDef>,
+    ) -> Result<Option<MacroCall>> {
+        if let Some(call) = track!(self.try_read::<NoArgsMacroCall>())? {
+            let mut call = MacroCall {
+                _question: call._question,
+                name: call.name,
+                args: None,
+            };
+            if macros.get(call.name.value()).map_or(
+                false,
+                |m| m.has_variables(),
+            )
+            {
+                call.args = Some(track!(self.read())?);
+            }
+            Ok(Some(call))
+        } else {
+            Ok(None)
+        }
     }
     pub fn read_expected<V>(&mut self, expected: &V::Value) -> Result<V>
     where

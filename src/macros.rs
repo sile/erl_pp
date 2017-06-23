@@ -15,6 +15,15 @@ pub enum MacroDef {
     Static(Define),
     Dynamic(Vec<LexicalToken>),
 }
+impl MacroDef {
+    /// Returns `true` if this macro has variables, otherwise `false`.
+    pub fn has_variables(&self) -> bool {
+        match *self {
+            MacroDef::Static(ref d) => d.variables.is_some(),
+            MacroDef::Dynamic(_) => false,
+        }
+    }
+}
 
 /// Macro call.
 #[derive(Debug, Clone)]
@@ -55,6 +64,24 @@ impl ReadFrom for MacroCall {
             _question: track!(reader.read_expected(&Symbol::Question))?,
             name: track!(reader.read())?,
             args: track!(reader.try_read())?,
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct NoArgsMacroCall {
+    pub _question: SymbolToken,
+    pub name: MacroName,
+}
+impl ReadFrom for NoArgsMacroCall {
+    fn read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Self>
+    where
+        T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
+        E: Into<::Error>,
+    {
+        Ok(NoArgsMacroCall {
+            _question: track!(reader.read_expected(&Symbol::Question))?,
+            name: track!(reader.read())?,
         })
     }
 }

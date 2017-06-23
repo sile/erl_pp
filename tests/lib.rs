@@ -228,3 +228,16 @@ fn predefined_macro_works() {
         ["aaa", ".", "1", ".", "bbb", "."]
     );
 }
+
+#[test]
+fn args_for_expanded_tokens_test() {
+    let src = r#"
+-define(yo, -module).
+?yo(prog).
+"#;
+    let tokens = pp(src).collect::<Result<Vec<_>, _>>().unwrap();
+    assert_eq!(
+        tokens.iter().map(|t| t.text()).collect::<Vec<_>>(),
+        ["-", "module", "(", "prog", ")", "."]
+    );
+}
