@@ -11,6 +11,7 @@ license = "MIT"
 
 [badges]
 travis-ci = {repository = "sile/erl_pp"}
+codecov = {repository = "sile/erl_pp"}
 
 [dependencies]
 erl_tokenize = "0.3"
