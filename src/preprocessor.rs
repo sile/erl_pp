@@ -222,7 +222,7 @@ where
                 self.branches.push(Branch::new(entered));
             }
             Directive::Else(_) => {
-                let mut b = track_assert_some!(self.branches.last_mut(), ErrorKind::InvalidInput);
+                let b = track_assert_some!(self.branches.last_mut(), ErrorKind::InvalidInput);
                 track!(b.switch_to_else_branch())?;
             }
             Directive::Endif(_) => {
