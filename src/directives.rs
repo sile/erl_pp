@@ -86,12 +86,12 @@ impl IncludeLib {
         let temp_path = path.clone();
         let mut components = temp_path.components();
         if let Some(Component::Normal(app_name)) = components.next() {
-            let app_name = track!(app_name.to_str().ok_or(::Error::invalid_input()))?;
+            let app_name = track_assert_some!(app_name.to_str(), ErrorKind::InvalidInput);
             let pattern = format!("{}-*", app_name);
             'root: for root in code_paths.iter() {
                 let pattern = root.join(&pattern);
-                let pattern = track!(pattern.to_str().ok_or(::Error::invalid_input()))?;
-                for entry in track!(glob(pattern).map_err(::Error::from))? {
+                let pattern = track_assert_some!(pattern.to_str(), ErrorKind::InvalidInput);
+                if let Some(entry) = track!(glob(pattern).map_err(::Error::from))?.nth(0) {
                     path = track!(entry.map_err(::Error::from))?;
                     for c in components {
                         path.push(c.as_os_str());
@@ -137,9 +137,10 @@ impl ReadFrom for IncludeLib {
 
 /// `error` directive.
 ///
-/// See [9.6 -error() and -warning() directives]
-/// (http://erlang.org/doc/reference_manual/macros.html#id85997)
+/// See [9.6 -error() and -warning() directives][error_and_warning]
 /// for detailed information.
+///
+/// [error_and_warning]: http://erlang.org/doc/reference_manual/macros.html#id85997
 #[derive(Debug, Clone)]
 #[allow(missing_docs)]
 pub struct Error {
@@ -182,9 +183,10 @@ impl ReadFrom for Error {
 
 /// `warning` directive.
 ///
-/// See [9.6 -error() and -warning() directives]
-/// (http://erlang.org/doc/reference_manual/macros.html#id85997)
+/// See [9.6 -error() and -warning() directives][error_and_warning]
 /// for detailed information.
+///
+/// [error_and_warning]: http://erlang.org/doc/reference_manual/macros.html#id85997
 #[derive(Debug, Clone)]
 #[allow(missing_docs)]
 pub struct Warning {
@@ -227,9 +229,9 @@ impl ReadFrom for Warning {
 
 /// `endif` directive.
 ///
-/// See [9.5 Flow Control in Macros]
-/// (http://erlang.org/doc/reference_manual/macros.html#id85859)
-/// for detailed information.
+/// See [9.5 Flow Control in Macros][flow_control] for detailed information.
+///
+/// [flow_control]: http://erlang.org/doc/reference_manual/macros.html#id85859
 #[derive(Debug, Clone)]
 #[allow(missing_docs)]
 pub struct Endif {
@@ -266,9 +268,9 @@ impl ReadFrom for Endif {
 
 /// `else` directive.
 ///
-/// See [9.5 Flow Control in Macros]
-/// (http://erlang.org/doc/reference_manual/macros.html#id85859)
-/// for detailed information.
+/// See [9.5 Flow Control in Macros][flow_control] for detailed information.
+///
+/// [flow_control]: http://erlang.org/doc/reference_manual/macros.html#id85859
 #[derive(Debug, Clone)]
 #[allow(missing_docs)]
 pub struct Else {
@@ -305,9 +307,9 @@ impl ReadFrom for Else {
 
 /// `undef` directive.
 ///
-/// See [9.5 Flow Control in Macros]
-/// (http://erlang.org/doc/reference_manual/macros.html#id85859)
-/// for detailed information.
+/// See [9.5 Flow Control in Macros][flow_control] for detailed information.
+///
+/// [flow_control]: http://erlang.org/doc/reference_manual/macros.html#id85859
 #[derive(Debug, Clone)]
 #[allow(missing_docs)]
 pub struct Undef {
@@ -350,9 +352,9 @@ impl ReadFrom for Undef {
 
 /// `ifdef` directive.
 ///
-/// See [9.5 Flow Control in Macros]
-/// (http://erlang.org/doc/reference_manual/macros.html#id85859)
-/// for detailed information.
+/// See [9.5 Flow Control in Macros][flow_control] for detailed information.
+///
+/// [flow_control]: http://erlang.org/doc/reference_manual/macros.html#id85859
 #[derive(Debug, Clone)]
 #[allow(missing_docs)]
 pub struct Ifdef {
@@ -395,9 +397,9 @@ impl ReadFrom for Ifdef {
 
 /// `ifndef` directive.
 ///
-/// See [9.5 Flow Control in Macros]
-/// (http://erlang.org/doc/reference_manual/macros.html#id85859)
-/// for detailed information.
+/// See [9.5 Flow Control in Macros][flow_control] for detailed information.
+///
+/// [flow_control]: http://erlang.org/doc/reference_manual/macros.html#id85859
 #[derive(Debug, Clone)]
 #[allow(missing_docs)]
 pub struct Ifndef {
@@ -440,9 +442,9 @@ impl ReadFrom for Ifndef {
 
 /// `define` directive.
 ///
-/// See [9.2 Defining and Using Macros]
-/// (http://erlang.org/doc/reference_manual/macros.html#id85572)
-/// for detailed information.
+/// See [9.2 Defining and Using Macros][define_and_use] for detailed information.
+///
+/// [define_and_use]: http://erlang.org/doc/reference_manual/macros.html#id85572
 #[derive(Debug, Clone)]
 #[allow(missing_docs)]
 pub struct Define {

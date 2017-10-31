@@ -8,9 +8,6 @@ use trackable::error::{ErrorKind as TrackableErrorKind, ErrorKindExt};
 #[derive(Debug, Clone)]
 pub struct Error(TrackableError<ErrorKind>);
 impl Error {
-    pub(crate) fn invalid_input() -> Self {
-        ErrorKind::InvalidInput.into()
-    }
     pub(crate) fn unexpected_token(token: LexicalToken) -> Self {
         ErrorKind::UnexpectedToken(token).into()
     }

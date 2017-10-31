@@ -65,7 +65,7 @@ where
     }
 
     fn ignore(&self) -> bool {
-        self.branches.iter().find(|b| b.entered == false).is_some()
+        self.branches.iter().any(|b| !b.entered)
     }
     fn next_token(&mut self) -> Result<Option<LexicalToken>> {
         loop {
@@ -111,8 +111,8 @@ where
         let expanded = match call.name.value() {
             "FILE" => {
                 let current = call.start_position();
-                let file = track!(current.filepath().ok_or(Error::invalid_input()))?;
-                let file = track!(file.to_str().ok_or(Error::invalid_input()))?;
+                let file = track_assert_some!(current.filepath(), ErrorKind::InvalidInput);
+                let file = track_assert_some!(file.to_str(), ErrorKind::InvalidInput);
                 StringToken::from_value(file, call.start_position()).into()
             }
             "LINE" => {
@@ -125,9 +125,8 @@ where
         Ok(Some(expanded))
     }
     fn expand_userdefined_macro(&self, call: MacroCall) -> Result<VecDeque<LexicalToken>> {
-        let definition = track!(self.macros.get(call.name.value()).ok_or(
-            Error::invalid_input(),
-        ))?;
+        let definition =
+            track_assert_some!(self.macros.get(call.name.value()), ErrorKind::InvalidInput);
         match *definition {
             MacroDef::Dynamic(ref replacement) => Ok(replacement.clone().into()),
             MacroDef::Static(ref definition) => {
@@ -165,9 +164,10 @@ where
                     reader.unread_token(token);
                 }
             } else if let Some(stringify) = track!(reader.try_read::<Stringify>())? {
-                let tokens = track!(bindings.get(stringify.name.value()).ok_or(
-                    Error::invalid_input(),
-                ))?;
+                let tokens = track_assert_some!(
+                    bindings.get(stringify.name.value()),
+                    ErrorKind::InvalidInput
+                );
                 let string = tokens.iter().map(|t| t.text()).collect::<String>();
                 let token = StringToken::from_value(&string, tokens[0].start_position());
                 expanded.push_back(token.into());
@@ -222,7 +222,7 @@ where
                 self.branches.push(Branch::new(entered));
             }
             Directive::Else(_) => {
-                let mut b = track!(self.branches.last_mut().ok_or(Error::invalid_input()))?;
+                let mut b = track_assert_some!(self.branches.last_mut(), ErrorKind::InvalidInput);
                 track!(b.switch_to_else_branch())?;
             }
             Directive::Endif(_) => {

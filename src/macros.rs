@@ -11,6 +11,7 @@ use types::{MacroName, MacroArgs};
 /// Macro Definition.
 #[derive(Debug, Clone)]
 #[allow(missing_docs)]
+#[cfg_attr(feature = "cargo-clippy", allow(large_enum_variant))]
 pub enum MacroDef {
     Static(Define),
     Dynamic(Vec<LexicalToken>),

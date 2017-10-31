@@ -156,7 +156,7 @@ pub trait ReadFrom: Sized {
             Ok(token)
         })
     }
-    fn try_read_expected<'a, T, E>(
+    fn try_read_expected<T, E>(
         reader: &mut TokenReader<T, E>,
         expected: &Self::Value,
     ) -> Result<Option<Self>>

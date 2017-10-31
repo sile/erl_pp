@@ -96,6 +96,11 @@ impl MacroVariables {
     pub fn len(&self) -> usize {
         self.list.iter().count()
     }
+
+    /// Returns `true` if there are no variables.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 }
 impl PositionRange for MacroVariables {
     fn start_position(&self) -> Position {
@@ -141,6 +146,11 @@ impl MacroArgs {
     /// Returns the number of this arguments.
     pub fn len(&self) -> usize {
         self.list.iter().count()
+    }
+
+    /// Returns `true` if there are no arguments.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 }
 impl PositionRange for MacroArgs {
@@ -188,7 +198,7 @@ impl PositionRange for MacroArg {
 }
 impl fmt::Display for MacroArg {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        for t in self.tokens.iter() {
+        for t in &self.tokens {
             write!(f, "{}", t.text())?;
         }
         Ok(())
@@ -224,7 +234,7 @@ impl ReadFrom for MacroArg {
                     }
                     Symbol::CloseParen | Symbol::CloseBrace | Symbol::CloseSquare |
                     Symbol::DoubleRightAngle => {
-                        let last = track!(stack.pop().ok_or(::Error::invalid_input()))?;
+                        let last = track_assert_some!(stack.pop(), ErrorKind::InvalidInput);
                         let expected = match last.value() {
                             Symbol::OpenParen => Symbol::CloseParen,
                             Symbol::OpenBrace => Symbol::CloseBrace,
@@ -334,16 +344,16 @@ impl<'a, T: 'a> Iterator for ListIterInner<'a, T> {
     type Item = &'a T;
     fn next(&mut self) -> Option<Self::Item> {
         match mem::replace(self, ListIterInner::End) {
-            ListIterInner::List(&List::Null) => None,
             ListIterInner::List(&List::Cons { ref head, ref tail }) => {
                 *self = ListIterInner::Tail(tail);
                 Some(head)
             }
-            ListIterInner::Tail(&Tail::Null) => None,
             ListIterInner::Tail(&Tail::Cons { ref head, ref tail, .. }) => {
                 *self = ListIterInner::Tail(tail);
                 Some(head)
             }
+            ListIterInner::List(&List::Null) |
+            ListIterInner::Tail(&Tail::Null) |
             ListIterInner::End => None,
         }
     }
