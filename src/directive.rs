@@ -10,7 +10,7 @@ use crate::Result;
 /// Macro directive.
 #[derive(Debug, Clone)]
 #[allow(missing_docs)]
-#[cfg_attr(feature = "cargo-clippy", allow(large_enum_variant))]
+#[allow(clippy::large_enum_variant)]
 pub enum Directive {
     Include(directives::Include),
     IncludeLib(directives::IncludeLib),
