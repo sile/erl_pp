@@ -30,16 +30,16 @@ extern crate glob;
 extern crate trackable;
 
 pub use crate::directive::Directive;
-pub use crate::macros::{MacroCall, MacroDef};
 pub use crate::error::{Error, ErrorKind};
+pub use crate::macros::{MacroCall, MacroDef};
 pub use crate::preprocessor::Preprocessor;
 
 pub mod directives;
 pub mod types;
 
 mod directive;
-mod macros;
 mod error;
+mod macros;
 mod preprocessor;
 mod token_reader;
 mod util;

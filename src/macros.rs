@@ -1,12 +1,12 @@
-use std::fmt;
-use erl_tokenize::{Position, PositionRange, LexicalToken};
 use erl_tokenize::tokens::{SymbolToken, VariableToken};
 use erl_tokenize::values::Symbol;
+use erl_tokenize::{LexicalToken, Position, PositionRange};
+use std::fmt;
 
-use crate::Result;
 use crate::directives::Define;
-use crate::token_reader::{TokenReader, ReadFrom};
-use crate::types::{MacroName, MacroArgs};
+use crate::token_reader::{ReadFrom, TokenReader};
+use crate::types::{MacroArgs, MacroName};
+use crate::Result;
 
 /// Macro Definition.
 #[derive(Debug, Clone)]

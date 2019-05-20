@@ -1,12 +1,12 @@
-use std::collections::{HashMap, BTreeMap, VecDeque};
-use std::path::PathBuf;
-use erl_tokenize::{self, LexicalToken, Position, PositionRange};
-use erl_tokenize::tokens::{IntegerToken, AtomToken, StringToken};
+use erl_tokenize::tokens::{AtomToken, IntegerToken, StringToken};
 use erl_tokenize::values::Symbol;
+use erl_tokenize::{self, LexicalToken, Position, PositionRange};
+use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::path::PathBuf;
 
-use crate::{Result, Error, Directive, ErrorKind, MacroCall, MacroDef};
 use crate::macros::Stringify;
 use crate::token_reader::TokenReader;
+use crate::{Directive, Error, ErrorKind, MacroCall, MacroDef, Result};
 
 /// Erlang source code [preprocessor][Preprocessor].
 ///
@@ -89,10 +89,9 @@ where
                 if self.ignore() {
                     continue;
                 }
-                self.can_directive_start = token.as_symbol_token().map_or(
-                    false,
-                    |s| s.value() == Symbol::Dot,
-                );
+                self.can_directive_start = token
+                    .as_symbol_token()
+                    .map_or(false, |s| s.value() == Symbol::Dot);
                 return Ok(Some(token));
             } else {
                 break;
@@ -140,9 +139,11 @@ where
                     .as_ref()
                     .iter()
                     .flat_map(|i| i.iter().map(|v| v.value()))
-                    .zip(call.args.iter().flat_map(
-                        |i| i.iter().map(|a| &a.tokens[..]),
-                    ))
+                    .zip(
+                        call.args
+                            .iter()
+                            .flat_map(|i| i.iter().map(|a| &a.tokens[..])),
+                    )
                     .collect::<HashMap<_, _>>();
                 let expanded = track!(self.expand_replacement(bindings, &definition.replacement))?;
                 Ok(expanded)
@@ -172,9 +173,9 @@ where
                 let token = StringToken::from_value(&string, tokens[0].start_position());
                 expanded.push_back(token.into());
             } else if let Some(token) = track!(reader.try_read_token())? {
-                if let Some(value) = token.as_variable_token().and_then(
-                    |v| bindings.get(v.value()),
-                )
+                if let Some(value) = token
+                    .as_variable_token()
+                    .and_then(|v| bindings.get(v.value()))
                 {
                     let nested = track!(self.expand_replacement(HashMap::new(), value))?;
                     expanded.extend(nested);
@@ -205,10 +206,8 @@ where
                 self.reader.add_included_text(path, text);
             }
             Directive::Define(ref d) if !ignore => {
-                self.macros.insert(
-                    d.name.value().to_string(),
-                    MacroDef::Static(d.clone()),
-                );
+                self.macros
+                    .insert(d.name.value().to_string(), MacroDef::Static(d.clone()));
             }
             Directive::Undef(ref d) if !ignore => {
                 self.macros.remove(d.name.value());

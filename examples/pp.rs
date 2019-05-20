@@ -4,15 +4,15 @@ extern crate erl_tokenize;
 #[macro_use]
 extern crate trackable;
 
+use clap::{App, Arg};
+use erl_pp::{MacroDef, Preprocessor};
+use erl_tokenize::tokens::AtomToken;
+use erl_tokenize::{Lexer, Position, PositionRange};
 use std::env;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 use std::time::{Duration, Instant};
-use clap::{App, Arg};
-use erl_pp::{Preprocessor, MacroDef};
-use erl_tokenize::{Lexer, PositionRange, Position};
-use erl_tokenize::tokens::AtomToken;
 use trackable::error::{ErrorKindExt, Failed};
 
 fn main() {
@@ -55,12 +55,11 @@ fn main() {
     }
     preprocessor.macros_mut().insert(
         "MODULE".to_string(),
-        MacroDef::Dynamic(vec![
-            AtomToken::from_value(
-                src_file.file_stem().unwrap().to_str().unwrap(),
-                Position::new()
-            ).into(),
-        ]),
+        MacroDef::Dynamic(vec![AtomToken::from_value(
+            src_file.file_stem().unwrap().to_str().unwrap(),
+            Position::new(),
+        )
+        .into()]),
     );
 
     for result in preprocessor {

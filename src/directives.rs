@@ -1,16 +1,16 @@
 //! Macro directives.
+use erl_tokenize::tokens::{AtomToken, StringToken, SymbolToken};
+use erl_tokenize::values::Symbol;
+use erl_tokenize::{LexicalToken, Position, PositionRange};
+use glob::glob;
 use std::collections::VecDeque;
 use std::fmt;
-use std::path::{PathBuf, Component};
-use glob::glob;
-use erl_tokenize::{Position, PositionRange, LexicalToken};
-use erl_tokenize::tokens::{SymbolToken, AtomToken, StringToken};
-use erl_tokenize::values::Symbol;
+use std::path::{Component, PathBuf};
 
-use crate::{Result, ErrorKind};
-use crate::token_reader::{TokenReader, ReadFrom};
+use crate::token_reader::{ReadFrom, TokenReader};
 use crate::types::{MacroName, MacroVariables};
 use crate::util;
+use crate::{ErrorKind, Result};
 
 /// `include` directive.
 ///
@@ -472,10 +472,9 @@ impl fmt::Display for Define {
             f,
             "-define({}{}, {}).",
             self.name,
-            self.variables.as_ref().map_or(
-                "".to_string(),
-                |v| v.to_string(),
-            ),
+            self.variables
+                .as_ref()
+                .map_or("".to_string(), |v| v.to_string(),),
             self.replacement
                 .iter()
                 .map(|t| t.text())
@@ -493,9 +492,8 @@ impl ReadFrom for Define {
         let _define = track!(reader.read_expected("define"))?;
         let _open_paren = track!(reader.read_expected(&Symbol::OpenParen))?;
         let name = track!(reader.read())?;
-        let variables = if let Some(token) = track!(reader.try_read_expected::<SymbolToken>(
-            &Symbol::OpenParen,
-        ))?
+        let variables = if let Some(token) =
+            track!(reader.try_read_expected::<SymbolToken>(&Symbol::OpenParen,))?
         {
             reader.unread_token(token.into());
             Some(track!(reader.read())?)
@@ -524,10 +522,9 @@ impl ReadFrom for Define {
             } else {
                 let token = track!(reader.read_token())?;
                 track_assert!(
-                    token.as_symbol_token().map_or(
-                        true,
-                        |s| s.value() != Symbol::Dot,
-                    ),
+                    token
+                        .as_symbol_token()
+                        .map_or(true, |s| s.value() != Symbol::Dot,),
                     ErrorKind::InvalidInput
                 );
                 replacement.push(token);

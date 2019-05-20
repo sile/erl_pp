@@ -1,6 +1,6 @@
-use std;
 use erl_tokenize::{self, LexicalToken};
 use glob;
+use std;
 use trackable::error::TrackableError;
 use trackable::error::{ErrorKind as TrackableErrorKind, ErrorKindExt};
 

@@ -1,13 +1,13 @@
 //! Miscellaneous types.
+use erl_tokenize::tokens::{AtomToken, SymbolToken, VariableToken};
+use erl_tokenize::values::Symbol;
+use erl_tokenize::{LexicalToken, Position, PositionRange};
 use std::fmt;
 use std::hash::{Hash, Hasher};
 use std::mem;
-use erl_tokenize::{Position, PositionRange, LexicalToken};
-use erl_tokenize::tokens::{AtomToken, VariableToken, SymbolToken};
-use erl_tokenize::values::Symbol;
 
-use crate::{Result, ErrorKind};
-use crate::token_reader::{TokenReader, ReadFrom};
+use crate::token_reader::{ReadFrom, TokenReader};
+use crate::{ErrorKind, Result};
 
 /// The list of tokens that can be used as a macro name.
 #[derive(Debug, Clone)]
@@ -228,12 +228,16 @@ impl ReadFrom for MacroArg {
                         reader.unread_token(s.clone().into());
                         return Ok(Some(MacroArg { tokens: arg }));
                     }
-                    Symbol::OpenParen | Symbol::OpenBrace | Symbol::OpenSquare |
-                    Symbol::DoubleLeftAngle => {
+                    Symbol::OpenParen
+                    | Symbol::OpenBrace
+                    | Symbol::OpenSquare
+                    | Symbol::DoubleLeftAngle => {
                         stack.push(s.clone());
                     }
-                    Symbol::CloseParen | Symbol::CloseBrace | Symbol::CloseSquare |
-                    Symbol::DoubleRightAngle => {
+                    Symbol::CloseParen
+                    | Symbol::CloseBrace
+                    | Symbol::CloseSquare
+                    | Symbol::DoubleRightAngle => {
                         let last = track_assert_some!(stack.pop(), ErrorKind::InvalidInput);
                         let expected = match last.value() {
                             Symbol::OpenParen => Symbol::CloseParen,
@@ -268,7 +272,9 @@ impl<T: fmt::Display> fmt::Display for Tail<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
             Tail::Null => Ok(()),
-            Tail::Cons { ref head, ref tail, .. } => write!(f, ",{}{}", head, tail),
+            Tail::Cons {
+                ref head, ref tail, ..
+            } => write!(f, ",{}{}", head, tail),
         }
     }
 }
@@ -348,13 +354,15 @@ impl<'a, T: 'a> Iterator for ListIterInner<'a, T> {
                 *self = ListIterInner::Tail(tail);
                 Some(head)
             }
-            ListIterInner::Tail(&Tail::Cons { ref head, ref tail, .. }) => {
+            ListIterInner::Tail(&Tail::Cons {
+                ref head, ref tail, ..
+            }) => {
                 *self = ListIterInner::Tail(tail);
                 Some(head)
             }
-            ListIterInner::List(&List::Null) |
-            ListIterInner::Tail(&Tail::Null) |
-            ListIterInner::End => None,
+            ListIterInner::List(&List::Null)
+            | ListIterInner::Tail(&Tail::Null)
+            | ListIterInner::End => None,
         }
     }
 }
