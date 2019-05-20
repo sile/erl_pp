@@ -474,10 +474,10 @@ impl fmt::Display for Define {
             self.name,
             self.variables
                 .as_ref()
-                .map_or("".to_string(), |v| v.to_string(),),
+                .map_or("".to_string(), ToString::to_string),
             self.replacement
                 .iter()
-                .map(|t| t.text())
+                .map(LexicalToken::text)
                 .collect::<String>()
         )
     }

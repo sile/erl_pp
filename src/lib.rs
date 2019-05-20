@@ -24,8 +24,6 @@
 //! - [Erlang Reference Manual -- Preprocessor](http://erlang.org/doc/reference_manual/macros.html)
 //!
 #![warn(missing_docs)]
-extern crate erl_tokenize;
-extern crate glob;
 #[macro_use]
 extern crate trackable;
 

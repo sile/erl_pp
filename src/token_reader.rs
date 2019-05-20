@@ -60,7 +60,7 @@ where
             };
             if macros
                 .get(call.name.value())
-                .map_or(false, |m| m.has_variables())
+                .map_or(false, MacroDef::has_variables)
             {
                 call.args = Some(track!(self.read())?);
             }

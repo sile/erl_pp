@@ -1,4 +1,4 @@
-use erl_tokenize::tokens::{AtomToken, IntegerToken, StringToken};
+use erl_tokenize::tokens::{AtomToken, IntegerToken, StringToken, VariableToken};
 use erl_tokenize::values::Symbol;
 use erl_tokenize::{self, LexicalToken, Position, PositionRange};
 use std::collections::{BTreeMap, HashMap, VecDeque};
@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use crate::macros::Stringify;
 use crate::token_reader::TokenReader;
+use crate::types::{MacroArgs, MacroVariables};
 use crate::{Directive, Error, ErrorKind, MacroCall, MacroDef, Result};
 
 /// Erlang source code [preprocessor][Preprocessor].
@@ -130,15 +131,15 @@ where
             MacroDef::Dynamic(ref replacement) => Ok(replacement.clone().into()),
             MacroDef::Static(ref definition) => {
                 track_assert_eq!(
-                    call.args.as_ref().map(|a| a.len()),
-                    definition.variables.as_ref().map(|v| v.len()),
+                    call.args.as_ref().map(MacroArgs::len),
+                    definition.variables.as_ref().map(MacroVariables::len),
                     ErrorKind::InvalidInput
                 );
                 let bindings = definition
                     .variables
                     .as_ref()
                     .iter()
-                    .flat_map(|i| i.iter().map(|v| v.value()))
+                    .flat_map(|i| i.iter().map(VariableToken::value))
                     .zip(
                         call.args
                             .iter()
@@ -169,7 +170,7 @@ where
                     bindings.get(stringify.name.value()),
                     ErrorKind::InvalidInput
                 );
-                let string = tokens.iter().map(|t| t.text()).collect::<String>();
+                let string = tokens.iter().map(LexicalToken::text).collect::<String>();
                 let token = StringToken::from_value(&string, tokens[0].start_position());
                 expanded.push_back(token.into());
             } else if let Some(token) = track!(reader.try_read_token())? {

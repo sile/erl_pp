@@ -41,7 +41,7 @@ impl PositionRange for MacroCall {
     fn end_position(&self) -> Position {
         self.args
             .as_ref()
-            .map(|a| a.end_position())
+            .map(PositionRange::end_position)
             .unwrap_or_else(|| self.name.end_position())
     }
 }
@@ -51,7 +51,9 @@ impl fmt::Display for MacroCall {
             f,
             "?{}{}",
             self.name.text(),
-            self.args.as_ref().map_or("".to_string(), |a| a.to_string())
+            self.args
+                .as_ref()
+                .map_or("".to_string(), ToString::to_string)
         )
     }
 }
