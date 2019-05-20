@@ -6,8 +6,8 @@ use erl_tokenize::{LexicalToken, Lexer};
 use erl_tokenize::tokens::{AtomToken, StringToken, SymbolToken, VariableToken};
 use erl_tokenize::values::Symbol;
 
-use {Result, Error, ErrorKind, MacroDef, MacroCall};
-use macros::NoArgsMacroCall;
+use crate::{Result, Error, ErrorKind, MacroDef, MacroCall};
+use crate::macros::NoArgsMacroCall;
 
 #[derive(Debug)]
 pub struct TokenReader<T, E> {

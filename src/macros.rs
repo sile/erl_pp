@@ -3,10 +3,10 @@ use erl_tokenize::{Position, PositionRange, LexicalToken};
 use erl_tokenize::tokens::{SymbolToken, VariableToken};
 use erl_tokenize::values::Symbol;
 
-use Result;
-use directives::Define;
-use token_reader::{TokenReader, ReadFrom};
-use types::{MacroName, MacroArgs};
+use crate::Result;
+use crate::directives::Define;
+use crate::token_reader::{TokenReader, ReadFrom};
+use crate::types::{MacroName, MacroArgs};
 
 /// Macro Definition.
 #[derive(Debug, Clone)]
@@ -59,7 +59,7 @@ impl ReadFrom for MacroCall {
     fn read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Self>
     where
         T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
-        E: Into<::Error>,
+        E: Into<crate::Error>,
     {
         Ok(MacroCall {
             _question: track!(reader.read_expected(&Symbol::Question))?,
@@ -78,7 +78,7 @@ impl ReadFrom for NoArgsMacroCall {
     fn read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Self>
     where
         T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
-        E: Into<::Error>,
+        E: Into<crate::Error>,
     {
         Ok(NoArgsMacroCall {
             _question: track!(reader.read_expected(&Symbol::Question))?,
@@ -109,7 +109,7 @@ impl ReadFrom for Stringify {
     fn read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Self>
     where
         T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
-        E: Into<::Error>,
+        E: Into<crate::Error>,
     {
         Ok(Stringify {
             _double_question: track!(reader.read_expected(&Symbol::DoubleQuestion))?,

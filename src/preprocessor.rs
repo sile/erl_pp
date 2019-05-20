@@ -4,9 +4,9 @@ use erl_tokenize::{self, LexicalToken, Position, PositionRange};
 use erl_tokenize::tokens::{IntegerToken, AtomToken, StringToken};
 use erl_tokenize::values::Symbol;
 
-use {Result, Error, Directive, ErrorKind, MacroCall, MacroDef};
-use macros::Stringify;
-use token_reader::TokenReader;
+use crate::{Result, Error, Directive, ErrorKind, MacroCall, MacroDef};
+use crate::macros::Stringify;
+use crate::token_reader::TokenReader;
 
 /// Erlang source code [preprocessor][Preprocessor].
 ///

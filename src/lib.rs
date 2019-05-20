@@ -29,10 +29,10 @@ extern crate glob;
 #[macro_use]
 extern crate trackable;
 
-pub use directive::Directive;
-pub use macros::{MacroCall, MacroDef};
-pub use error::{Error, ErrorKind};
-pub use preprocessor::Preprocessor;
+pub use crate::directive::Directive;
+pub use crate::macros::{MacroCall, MacroDef};
+pub use crate::error::{Error, ErrorKind};
+pub use crate::preprocessor::Preprocessor;
 
 pub mod directives;
 pub mod types;

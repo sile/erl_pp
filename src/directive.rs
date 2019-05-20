@@ -3,9 +3,9 @@ use erl_tokenize::{Position, PositionRange, LexicalToken};
 use erl_tokenize::tokens::{AtomToken, SymbolToken};
 use erl_tokenize::values::Symbol;
 
-use Result;
-use directives;
-use token_reader::{TokenReader, ReadFrom};
+use crate::Result;
+use crate::directives;
+use crate::token_reader::{TokenReader, ReadFrom};
 
 /// Macro directive.
 #[derive(Debug, Clone)]
@@ -73,7 +73,7 @@ impl ReadFrom for Directive {
     fn try_read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Option<Self>>
     where
         T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
-        E: Into<::Error>,
+        E: Into<crate::Error>,
     {
         let _hyphen: SymbolToken =
             if let Some(_hyphen) = track!(reader.try_read_expected(&Symbol::Hyphen))? {

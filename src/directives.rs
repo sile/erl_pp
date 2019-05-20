@@ -7,10 +7,10 @@ use erl_tokenize::{Position, PositionRange, LexicalToken};
 use erl_tokenize::tokens::{SymbolToken, AtomToken, StringToken};
 use erl_tokenize::values::Symbol;
 
-use {Result, ErrorKind};
-use token_reader::{TokenReader, ReadFrom};
-use types::{MacroName, MacroVariables};
-use util;
+use crate::{Result, ErrorKind};
+use crate::token_reader::{TokenReader, ReadFrom};
+use crate::types::{MacroName, MacroVariables};
+use crate::util;
 
 /// `include` directive.
 ///
@@ -51,7 +51,7 @@ impl ReadFrom for Include {
     fn read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Self>
     where
         T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
-        E: Into<::Error>,
+        E: Into<crate::Error>,
     {
         Ok(Include {
             _hyphen: track!(reader.read_expected(&Symbol::Hyphen))?,
@@ -91,8 +91,8 @@ impl IncludeLib {
             'root: for root in code_paths.iter() {
                 let pattern = root.join(&pattern);
                 let pattern = track_assert_some!(pattern.to_str(), ErrorKind::InvalidInput);
-                if let Some(entry) = track!(glob(pattern).map_err(::Error::from))?.nth(0) {
-                    path = track!(entry.map_err(::Error::from))?;
+                if let Some(entry) = track!(glob(pattern).map_err(crate::Error::from))?.nth(0) {
+                    path = track!(entry.map_err(crate::Error::from))?;
                     for c in components {
                         path.push(c.as_os_str());
                     }
@@ -122,7 +122,7 @@ impl ReadFrom for IncludeLib {
     fn read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Self>
     where
         T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
-        E: Into<::Error>,
+        E: Into<crate::Error>,
     {
         Ok(IncludeLib {
             _hyphen: track!(reader.read_expected(&Symbol::Hyphen))?,
@@ -168,7 +168,7 @@ impl ReadFrom for Error {
     fn read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Self>
     where
         T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
-        E: Into<::Error>,
+        E: Into<crate::Error>,
     {
         Ok(Error {
             _hyphen: track!(reader.read_expected(&Symbol::Hyphen))?,
@@ -214,7 +214,7 @@ impl ReadFrom for Warning {
     fn read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Self>
     where
         T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
-        E: Into<::Error>,
+        E: Into<crate::Error>,
     {
         Ok(Warning {
             _hyphen: track!(reader.read_expected(&Symbol::Hyphen))?,
@@ -256,7 +256,7 @@ impl ReadFrom for Endif {
     fn read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Self>
     where
         T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
-        E: Into<::Error>,
+        E: Into<crate::Error>,
     {
         Ok(Endif {
             _hyphen: track!(reader.read_expected(&Symbol::Hyphen))?,
@@ -295,7 +295,7 @@ impl ReadFrom for Else {
     fn read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Self>
     where
         T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
-        E: Into<::Error>,
+        E: Into<crate::Error>,
     {
         Ok(Else {
             _hyphen: track!(reader.read_expected(&Symbol::Hyphen))?,
@@ -337,7 +337,7 @@ impl ReadFrom for Undef {
     fn read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Self>
     where
         T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
-        E: Into<::Error>,
+        E: Into<crate::Error>,
     {
         Ok(Undef {
             _hyphen: track!(reader.read_expected(&Symbol::Hyphen))?,
@@ -382,7 +382,7 @@ impl ReadFrom for Ifdef {
     fn read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Self>
     where
         T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
-        E: Into<::Error>,
+        E: Into<crate::Error>,
     {
         Ok(Ifdef {
             _hyphen: track!(reader.read_expected(&Symbol::Hyphen))?,
@@ -427,7 +427,7 @@ impl ReadFrom for Ifndef {
     fn read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Self>
     where
         T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
-        E: Into<::Error>,
+        E: Into<crate::Error>,
     {
         Ok(Ifndef {
             _hyphen: track!(reader.read_expected(&Symbol::Hyphen))?,
@@ -487,7 +487,7 @@ impl ReadFrom for Define {
     fn read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Self>
     where
         T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
-        E: Into<::Error>,
+        E: Into<crate::Error>,
     {
         let _hyphen = track!(reader.read_expected(&Symbol::Hyphen))?;
         let _define = track!(reader.read_expected("define"))?;
