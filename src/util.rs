@@ -3,7 +3,7 @@ use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use {Result, Error};
+use crate::{Error, Result};
 
 pub fn substitute_path_variables<P: AsRef<Path>>(path: P) -> Result<PathBuf> {
     let mut new = PathBuf::new();

@@ -1,13 +1,13 @@
-use std::collections::{VecDeque, HashMap};
+use erl_tokenize::tokens::{AtomToken, StringToken, SymbolToken, VariableToken};
+use erl_tokenize::values::Symbol;
+use erl_tokenize::{Lexer, LexicalToken};
+use std::collections::{HashMap, VecDeque};
 use std::fmt::Debug;
 use std::marker::PhantomData;
 use std::path::Path;
-use erl_tokenize::{LexicalToken, Lexer};
-use erl_tokenize::tokens::{AtomToken, StringToken, SymbolToken, VariableToken};
-use erl_tokenize::values::Symbol;
 
-use {Result, Error, ErrorKind, MacroDef, MacroCall};
-use macros::NoArgsMacroCall;
+use crate::macros::NoArgsMacroCall;
+use crate::{Error, ErrorKind, MacroCall, MacroDef, Result};
 
 #[derive(Debug)]
 pub struct TokenReader<T, E> {
@@ -58,10 +58,9 @@ where
                 name: call.name,
                 args: None,
             };
-            if macros.get(call.name.value()).map_or(
-                false,
-                |m| m.has_variables(),
-            )
+            if macros
+                .get(call.name.value())
+                .map_or(false, |m| m.has_variables())
             {
                 call.args = Some(track!(self.read())?);
             }
@@ -166,11 +165,13 @@ pub trait ReadFrom: Sized {
         Self: Expect + Into<LexicalToken>,
     {
         track!(Self::try_read_from(reader)).map(|token| {
-            token.and_then(|token| if token.expect(expected) {
-                Some(token)
-            } else {
-                reader.unread_token(token.into());
-                None
+            token.and_then(|token| {
+                if token.expect(expected) {
+                    Some(token)
+                } else {
+                    reader.unread_token(token.into());
+                    None
+                }
             })
         })
     }

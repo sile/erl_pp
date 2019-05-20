@@ -1,16 +1,16 @@
-use std::fmt;
-use erl_tokenize::{Position, PositionRange, LexicalToken};
 use erl_tokenize::tokens::{AtomToken, SymbolToken};
 use erl_tokenize::values::Symbol;
+use erl_tokenize::{LexicalToken, Position, PositionRange};
+use std::fmt;
 
-use Result;
-use directives;
-use token_reader::{TokenReader, ReadFrom};
+use crate::directives;
+use crate::token_reader::{ReadFrom, TokenReader};
+use crate::Result;
 
 /// Macro directive.
 #[derive(Debug, Clone)]
 #[allow(missing_docs)]
-#[cfg_attr(feature = "cargo-clippy", allow(large_enum_variant))]
+#[allow(clippy::large_enum_variant)]
 pub enum Directive {
     Include(directives::Include),
     IncludeLib(directives::IncludeLib),
@@ -73,7 +73,7 @@ impl ReadFrom for Directive {
     fn try_read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Option<Self>>
     where
         T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
-        E: Into<::Error>,
+        E: Into<crate::Error>,
     {
         let _hyphen: SymbolToken =
             if let Some(_hyphen) = track!(reader.try_read_expected(&Symbol::Hyphen))? {
