@@ -3,30 +3,26 @@ use erl_tokenize::values::Symbol;
 use erl_tokenize::{Lexer, LexicalToken};
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Debug;
-use std::marker::PhantomData;
 use std::path::Path;
 
 use crate::macros::NoArgsMacroCall;
-use crate::{Error, ErrorKind, MacroCall, MacroDef, Result};
+use crate::{Error, MacroCall, MacroDef, Result};
 
 #[derive(Debug)]
-pub struct TokenReader<T, E> {
+pub struct TokenReader<T> {
     tokens: T,
     included_tokens: Vec<Lexer<String>>,
     unread: VecDeque<LexicalToken>,
-    _phantom: PhantomData<E>,
 }
-impl<T, E> TokenReader<T, E>
+impl<T> TokenReader<T>
 where
-    T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
-    E: Into<Error>,
+    T: Iterator<Item = erl_tokenize::Result<LexicalToken>>,
 {
     pub fn new(tokens: T) -> Self {
         TokenReader {
             tokens,
             included_tokens: Vec::new(),
             unread: VecDeque::new(),
-            _phantom: PhantomData,
         }
     }
 
@@ -40,19 +36,19 @@ where
     where
         V: ReadFrom,
     {
-        track!(V::read_from(self))
+        V::read_from(self)
     }
     pub fn try_read<V>(&mut self) -> Result<Option<V>>
     where
         V: ReadFrom,
     {
-        track!(V::try_read_from(self))
+        V::try_read_from(self)
     }
     pub fn try_read_macro_call(
         &mut self,
         macros: &HashMap<String, MacroDef>,
     ) -> Result<Option<MacroCall>> {
-        if let Some(call) = track!(self.try_read::<NoArgsMacroCall>())? {
+        if let Some(call) = self.try_read::<NoArgsMacroCall>()? {
             let mut call = MacroCall {
                 _question: call._question,
                 name: call.name,
@@ -62,7 +58,7 @@ where
                 .get(call.name.value())
                 .map_or(false, MacroDef::has_variables)
             {
-                call.args = Some(track!(self.read())?);
+                call.args = Some(self.read()?);
             }
             Ok(Some(call))
         } else {
@@ -73,39 +69,43 @@ where
     where
         V: ReadFrom + Expect + Into<LexicalToken>,
     {
-        track!(V::read_expected(self, expected))
+        V::read_expected(self, expected)
     }
     pub fn try_read_expected<V>(&mut self, expected: &V::Value) -> Result<Option<V>>
     where
         V: ReadFrom + Expect + Into<LexicalToken>,
     {
-        track!(V::try_read_expected(self, expected))
+        V::try_read_expected(self, expected)
     }
     pub fn try_read_token(&mut self) -> Result<Option<LexicalToken>> {
         if let Some(token) = self.unread.pop_front() {
             Ok(Some(token))
         } else if !self.included_tokens.is_empty() {
-            match self.included_tokens.last_mut().expect("Never fails").next() {
+            match self
+                .included_tokens
+                .last_mut()
+                .expect("unreachable")
+                .next()
+                .transpose()?
+            {
                 None => {
                     self.included_tokens.pop();
                     self.try_read_token()
                 }
-                Some(Err(e)) => Err(e.into()),
-                Some(Ok(t)) => Ok(Some(t)),
+                Some(t) => Ok(Some(t)),
             }
         } else {
-            match self.tokens.next() {
+            match self.tokens.next().transpose()? {
                 None => Ok(None),
-                Some(Err(e)) => Err(e.into()),
-                Some(Ok(t)) => Ok(Some(t)),
+                Some(t) => Ok(Some(t)),
             }
         }
     }
     pub fn read_token(&mut self) -> Result<LexicalToken> {
-        if let Some(token) = track!(self.try_read_token())? {
+        if let Some(token) = self.try_read_token()? {
             Ok(token)
         } else {
-            track_panic!(ErrorKind::UnexpectedEos);
+            Err(Error::UnexpectedEof)
         }
     }
     pub fn unread_token(&mut self, token: LexicalToken) {
@@ -114,57 +114,48 @@ where
 }
 
 pub trait ReadFrom: Sized {
-    fn read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Self>
+    fn read_from<T>(reader: &mut TokenReader<T>) -> Result<Self>
     where
-        T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
-        E: Into<Error>,
-    {
-        if let Some(directive) = track!(Self::try_read_from(reader))? {
-            Ok(directive)
-        } else {
-            track_panic!(ErrorKind::InvalidInput);
-        }
-    }
-    fn try_read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Option<Self>>
+        T: Iterator<Item = erl_tokenize::Result<LexicalToken>>;
+    fn try_read_from<T>(reader: &mut TokenReader<T>) -> Result<Option<Self>>
     where
-        T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
-        E: Into<Error>,
+        T: Iterator<Item = erl_tokenize::Result<LexicalToken>>,
     {
-        track!(Self::read_from(reader)).map(Some).or_else(|e| {
-            if let ErrorKind::UnexpectedToken(ref token) = *e.kind() {
-                reader.unread_token(token.clone());
+        Self::read_from(reader).map(Some).or_else(|e| {
+            if let Error::UnexpectedToken { token, .. } = e {
+                reader.unread_token(token);
                 return Ok(None);
             }
-            if let ErrorKind::UnexpectedEos = *e.kind() {
+            if let Error::UnexpectedEof = e {
                 return Ok(None);
             }
             Err(e)
         })
     }
-    fn read_expected<T, E>(reader: &mut TokenReader<T, E>, expected: &Self::Value) -> Result<Self>
+    fn read_expected<T>(reader: &mut TokenReader<T>, expected: &Self::Value) -> Result<Self>
     where
-        T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
-        E: Into<Error>,
+        T: Iterator<Item = erl_tokenize::Result<LexicalToken>>,
         Self: Expect + Into<LexicalToken>,
     {
-        track!(Self::read_from(reader)).and_then(|token| {
-            track_assert!(
-                token.expect(expected),
-                ErrorKind::UnexpectedToken(token.into())
-            );
+        Self::read_from(reader).and_then(|token| {
+            if !token.expect(expected) {
+                return Err(Error::unexpected_token(
+                    token.into(),
+                    &format!("{:?}", expected),
+                ));
+            }
             Ok(token)
         })
     }
-    fn try_read_expected<T, E>(
-        reader: &mut TokenReader<T, E>,
+    fn try_read_expected<T>(
+        reader: &mut TokenReader<T>,
         expected: &Self::Value,
     ) -> Result<Option<Self>>
     where
-        T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
-        E: Into<Error>,
+        T: Iterator<Item = erl_tokenize::Result<LexicalToken>>,
         Self: Expect + Into<LexicalToken>,
     {
-        track!(Self::try_read_from(reader)).map(|token| {
+        Self::try_read_from(reader).map(|token| {
             token.and_then(|token| {
                 if token.expect(expected) {
                     Some(token)
@@ -177,43 +168,47 @@ pub trait ReadFrom: Sized {
     }
 }
 impl ReadFrom for AtomToken {
-    fn read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Self>
+    fn read_from<T>(reader: &mut TokenReader<T>) -> Result<Self>
     where
-        T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
-        E: Into<Error>,
+        T: Iterator<Item = erl_tokenize::Result<LexicalToken>>,
     {
-        let token = track!(reader.read_token())?;
-        token.into_atom_token().map_err(Error::unexpected_token)
+        let token = reader.read_token()?;
+        token
+            .into_atom_token()
+            .map_err(|token| Error::unexpected_token(token, "atom"))
     }
 }
 impl ReadFrom for VariableToken {
-    fn read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Self>
+    fn read_from<T>(reader: &mut TokenReader<T>) -> Result<Self>
     where
-        T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
-        E: Into<Error>,
+        T: Iterator<Item = erl_tokenize::Result<LexicalToken>>,
     {
-        let token = track!(reader.read_token())?;
-        token.into_variable_token().map_err(Error::unexpected_token)
+        let token = reader.read_token()?;
+        token
+            .into_variable_token()
+            .map_err(|token| Error::unexpected_token(token, "variable"))
     }
 }
 impl ReadFrom for SymbolToken {
-    fn read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Self>
+    fn read_from<T>(reader: &mut TokenReader<T>) -> Result<Self>
     where
-        T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
-        E: Into<Error>,
+        T: Iterator<Item = erl_tokenize::Result<LexicalToken>>,
     {
-        let token = track!(reader.read_token())?;
-        token.into_symbol_token().map_err(Error::unexpected_token)
+        let token = reader.read_token()?;
+        token
+            .into_symbol_token()
+            .map_err(|token| Error::unexpected_token(token, "symbol"))
     }
 }
 impl ReadFrom for StringToken {
-    fn read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Self>
+    fn read_from<T>(reader: &mut TokenReader<T>) -> Result<Self>
     where
-        T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
-        E: Into<Error>,
+        T: Iterator<Item = erl_tokenize::Result<LexicalToken>>,
     {
-        let token = track!(reader.read_token())?;
-        token.into_string_token().map_err(Error::unexpected_token)
+        let token = reader.read_token()?;
+        token
+            .into_string_token()
+            .map_err(|token| Error::unexpected_token(token, "string"))
     }
 }
 

@@ -17,7 +17,8 @@ codecov = {repository = "sile/erl_pp"}
 [dependencies]
 erl_tokenize = "0.4"
 glob = "0.3"
-trackable = "0.2"
+thiserror = "1"
 
 [dev-dependencies]
+anyhow = "1"
 clap = "2"

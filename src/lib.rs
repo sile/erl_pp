@@ -24,11 +24,8 @@
 //! - [Erlang Reference Manual -- Preprocessor](http://erlang.org/doc/reference_manual/macros.html)
 //!
 #![warn(missing_docs)]
-#[macro_use]
-extern crate trackable;
-
 pub use crate::directive::Directive;
-pub use crate::error::{Error, ErrorKind};
+pub use crate::error::Error;
 pub use crate::macros::{MacroCall, MacroDef};
 pub use crate::preprocessor::Preprocessor;
 
@@ -43,4 +40,4 @@ mod token_reader;
 mod util;
 
 /// This crate specific `Result` type.
-pub type Result<T> = ::std::result::Result<T, Error>;
+pub type Result<T> = std::result::Result<T, Error>;

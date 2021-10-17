@@ -8,7 +8,7 @@ use crate::token_reader::{ReadFrom, TokenReader};
 use crate::types::{MacroArgs, MacroName};
 use crate::Result;
 
-/// Macro Definition.
+/// Macro definition.
 #[derive(Debug, Clone)]
 #[allow(missing_docs)]
 #[allow(clippy::large_enum_variant)]
@@ -58,15 +58,14 @@ impl fmt::Display for MacroCall {
     }
 }
 impl ReadFrom for MacroCall {
-    fn read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Self>
+    fn read_from<T>(reader: &mut TokenReader<T>) -> Result<Self>
     where
-        T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
-        E: Into<crate::Error>,
+        T: Iterator<Item = erl_tokenize::Result<LexicalToken>>,
     {
         Ok(MacroCall {
-            _question: track!(reader.read_expected(&Symbol::Question))?,
-            name: track!(reader.read())?,
-            args: track!(reader.try_read())?,
+            _question: reader.read_expected(&Symbol::Question)?,
+            name: reader.read()?,
+            args: reader.try_read()?,
         })
     }
 }
@@ -77,14 +76,13 @@ pub struct NoArgsMacroCall {
     pub name: MacroName,
 }
 impl ReadFrom for NoArgsMacroCall {
-    fn read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Self>
+    fn read_from<T>(reader: &mut TokenReader<T>) -> Result<Self>
     where
-        T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
-        E: Into<crate::Error>,
+        T: Iterator<Item = erl_tokenize::Result<LexicalToken>>,
     {
         Ok(NoArgsMacroCall {
-            _question: track!(reader.read_expected(&Symbol::Question))?,
-            name: track!(reader.read())?,
+            _question: reader.read_expected(&Symbol::Question)?,
+            name: reader.read()?,
         })
     }
 }
@@ -108,14 +106,13 @@ impl fmt::Display for Stringify {
     }
 }
 impl ReadFrom for Stringify {
-    fn read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Self>
+    fn read_from<T>(reader: &mut TokenReader<T>) -> Result<Self>
     where
-        T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
-        E: Into<crate::Error>,
+        T: Iterator<Item = erl_tokenize::Result<LexicalToken>>,
     {
         Ok(Stringify {
-            _double_question: track!(reader.read_expected(&Symbol::DoubleQuestion))?,
-            name: track!(reader.read())?,
+            _double_question: reader.read_expected(&Symbol::DoubleQuestion)?,
+            name: reader.read()?,
         })
     }
 }

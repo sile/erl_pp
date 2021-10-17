@@ -5,7 +5,7 @@ use std::fmt;
 
 use crate::directives;
 use crate::token_reader::{ReadFrom, TokenReader};
-use crate::Result;
+use crate::{Error, Result};
 
 /// Macro directive.
 #[derive(Debug, Clone)]
@@ -70,39 +70,32 @@ impl fmt::Display for Directive {
     }
 }
 impl ReadFrom for Directive {
-    fn try_read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Option<Self>>
+    fn read_from<T>(reader: &mut TokenReader<T>) -> Result<Self>
     where
-        T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
-        E: Into<crate::Error>,
+        T: Iterator<Item = erl_tokenize::Result<LexicalToken>>,
     {
-        let _hyphen: SymbolToken =
-            if let Some(_hyphen) = track!(reader.try_read_expected(&Symbol::Hyphen))? {
-                _hyphen
-            } else {
-                return Ok(None);
-            };
-
-        let name: AtomToken = if let Some(name) = track!(reader.try_read())? {
-            name
-        } else {
-            reader.unread_token(_hyphen.into());
-            return Ok(None);
-        };
+        let _hyphen: SymbolToken = reader.read_expected(&Symbol::Hyphen)?;
+        let name: AtomToken = reader
+            .try_read()?
+            .ok_or_else(|| Error::unexpected_token(_hyphen.clone().into(), "-{DIRECTIVE_NAME}"))?;
 
         reader.unread_token(name.clone().into());
         reader.unread_token(_hyphen.into());
         match name.value() {
-            "include" => track!(reader.read()).map(Directive::Include).map(Some),
-            "include_lib" => track!(reader.read()).map(Directive::IncludeLib).map(Some),
-            "define" => track!(reader.read()).map(Directive::Define).map(Some),
-            "undef" => track!(reader.read()).map(Directive::Undef).map(Some),
-            "ifdef" => track!(reader.read()).map(Directive::Ifdef).map(Some),
-            "ifndef" => track!(reader.read()).map(Directive::Ifndef).map(Some),
-            "else" => track!(reader.read()).map(Directive::Else).map(Some),
-            "endif" => track!(reader.read()).map(Directive::Endif).map(Some),
-            "error" => track!(reader.read()).map(Directive::Error).map(Some),
-            "warning" => track!(reader.read()).map(Directive::Warning).map(Some),
-            _ => Ok(None),
+            "include" => reader.read().map(Directive::Include),
+            "include_lib" => reader.read().map(Directive::IncludeLib),
+            "define" => reader.read().map(Directive::Define),
+            "undef" => reader.read().map(Directive::Undef),
+            "ifdef" => reader.read().map(Directive::Ifdef),
+            "ifndef" => reader.read().map(Directive::Ifndef),
+            "else" => reader.read().map(Directive::Else),
+            "endif" => reader.read().map(Directive::Endif),
+            "error" => reader.read().map(Directive::Error),
+            "warning" => reader.read().map(Directive::Warning),
+            _ => {
+                let _hyphen: SymbolToken = reader.read_expected(&Symbol::Hyphen)?;
+                Err(Error::unexpected_token(_hyphen.into(), "-{DIRECTIVE_NAME}"))
+            }
         }
     }
 }

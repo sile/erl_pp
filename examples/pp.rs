@@ -1,9 +1,3 @@
-extern crate clap;
-extern crate erl_pp;
-extern crate erl_tokenize;
-#[macro_use]
-extern crate trackable;
-
 use clap::{App, Arg};
 use erl_pp::{MacroDef, Preprocessor};
 use erl_tokenize::tokens::AtomToken;
@@ -13,9 +7,8 @@ use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 use std::time::{Duration, Instant};
-use trackable::error::{ErrorKindExt, Failed};
 
-fn main() {
+fn main() -> anyhow::Result<()> {
     let matches = App::new("pp")
         .arg(Arg::with_name("SOURCE_FILE").index(1).required(true))
         .arg(Arg::with_name("SILENT").long("silent"))
@@ -34,7 +27,7 @@ fn main() {
     let src_file = Path::new(matches.value_of("SOURCE_FILE").unwrap());
     let silent = matches.is_present("SILENT");
     if let Some(dir) = matches.value_of("CURRENT_DIR") {
-        track_try_unwrap!(env::set_current_dir(dir).map_err(|e| Failed.cause(e)));
+        env::set_current_dir(dir)?;
     }
 
     let mut src = String::new();
@@ -63,7 +56,7 @@ fn main() {
     );
 
     for result in preprocessor {
-        let token = track_try_unwrap!(result);
+        let token = result?;
         if !silent {
             println!("[{:?}] {:?}", token.start_position(), token.text());
         }
@@ -74,6 +67,7 @@ fn main() {
         "ELAPSED: {:?} seconds",
         to_seconds(Instant::now() - start_time)
     );
+    Ok(())
 }
 
 fn to_seconds(duration: Duration) -> f64 {

@@ -7,7 +7,7 @@ use std::hash::{Hash, Hasher};
 use std::mem;
 
 use crate::token_reader::{ReadFrom, TokenReader};
-use crate::{ErrorKind, Result};
+use crate::{Error, Result};
 
 /// The list of tokens that can be used as a macro name.
 #[derive(Debug, Clone)]
@@ -64,15 +64,14 @@ impl fmt::Display for MacroName {
     }
 }
 impl ReadFrom for MacroName {
-    fn read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Self>
+    fn read_from<T>(reader: &mut TokenReader<T>) -> Result<Self>
     where
-        T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
-        E: Into<crate::Error>,
+        T: Iterator<Item = erl_tokenize::Result<LexicalToken>>,
     {
-        if let Some(token) = track!(reader.try_read())? {
+        if let Some(token) = reader.try_read()? {
             Ok(MacroName::Atom(token))
         } else {
-            let token = track!(reader.read())?;
+            let token = reader.read()?;
             Ok(MacroName::Variable(token))
         }
     }
@@ -116,15 +115,14 @@ impl fmt::Display for MacroVariables {
     }
 }
 impl ReadFrom for MacroVariables {
-    fn read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Self>
+    fn read_from<T>(reader: &mut TokenReader<T>) -> Result<Self>
     where
-        T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
-        E: Into<crate::Error>,
+        T: Iterator<Item = erl_tokenize::Result<LexicalToken>>,
     {
         Ok(MacroVariables {
-            _open_paren: track!(reader.read_expected(&Symbol::OpenParen))?,
-            list: track!(reader.read())?,
-            _close_paren: track!(reader.read_expected(&Symbol::CloseParen))?,
+            _open_paren: reader.read_expected(&Symbol::OpenParen)?,
+            list: reader.read()?,
+            _close_paren: reader.read_expected(&Symbol::CloseParen)?,
         })
     }
 }
@@ -167,15 +165,14 @@ impl fmt::Display for MacroArgs {
     }
 }
 impl ReadFrom for MacroArgs {
-    fn read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Self>
+    fn read_from<T>(reader: &mut TokenReader<T>) -> Result<Self>
     where
-        T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
-        E: Into<crate::Error>,
+        T: Iterator<Item = erl_tokenize::Result<LexicalToken>>,
     {
         Ok(MacroArgs {
-            _open_paren: track!(reader.read_expected(&Symbol::OpenParen))?,
-            list: track!(reader.read())?,
-            _close_paren: track!(reader.read_expected(&Symbol::CloseParen))?,
+            _open_paren: reader.read_expected(&Symbol::OpenParen)?,
+            list: reader.read()?,
+            _close_paren: reader.read_expected(&Symbol::CloseParen)?,
         })
     }
 }
@@ -205,28 +202,29 @@ impl fmt::Display for MacroArg {
     }
 }
 impl ReadFrom for MacroArg {
-    fn try_read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Option<Self>>
+    fn read_from<T>(reader: &mut TokenReader<T>) -> Result<Self>
     where
-        T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
-        E: Into<crate::Error>,
+        T: Iterator<Item = erl_tokenize::Result<LexicalToken>>,
     {
         let mut stack = Vec::new();
         let mut arg = Vec::new();
-        while let Some(token) = track!(reader.try_read_token())? {
+        while let Some(token) = reader.try_read_token()? {
             if let LexicalToken::Symbol(ref s) = token {
                 match s.value() {
                     Symbol::CloseParen if stack.is_empty() => {
                         reader.unread_token(s.clone().into());
                         return if arg.is_empty() {
-                            Ok(None)
+                            Err(Error::missing_macro_arg(s.start_position()))
                         } else {
-                            Ok(Some(MacroArg { tokens: arg }))
+                            Ok(MacroArg { tokens: arg })
                         };
                     }
                     Symbol::Comma if stack.is_empty() => {
-                        track_assert_ne!(arg.len(), 0, ErrorKind::InvalidInput);
+                        if arg.is_empty() {
+                            return Err(Error::missing_macro_arg(s.start_position()));
+                        }
                         reader.unread_token(s.clone().into());
-                        return Ok(Some(MacroArg { tokens: arg }));
+                        return Ok(MacroArg { tokens: arg });
                     }
                     Symbol::OpenParen
                     | Symbol::OpenBrace
@@ -238,7 +236,9 @@ impl ReadFrom for MacroArg {
                     | Symbol::CloseBrace
                     | Symbol::CloseSquare
                     | Symbol::DoubleRightAngle => {
-                        let last = track_assert_some!(stack.pop(), ErrorKind::InvalidInput);
+                        let last = stack
+                            .pop()
+                            .ok_or_else(|| Error::unbalanced_paren(None, s.clone()))?;
                         let expected = match last.value() {
                             Symbol::OpenParen => Symbol::CloseParen,
                             Symbol::OpenBrace => Symbol::CloseBrace,
@@ -246,14 +246,16 @@ impl ReadFrom for MacroArg {
                             Symbol::DoubleLeftAngle => Symbol::DoubleRightAngle,
                             _ => unreachable!(),
                         };
-                        track_assert_eq!(s.value(), expected, ErrorKind::InvalidInput);
+                        if s.value() != expected {
+                            return Err(Error::unbalanced_paren(Some(last.clone()), s.clone()));
+                        }
                     }
                     _ => {}
                 }
             }
             arg.push(token);
         }
-        track_panic!(ErrorKind::UnexpectedEos);
+        Err(Error::UnexpectedEof)
     }
 }
 
@@ -279,14 +281,13 @@ impl<T: fmt::Display> fmt::Display for Tail<T> {
     }
 }
 impl<U: ReadFrom> ReadFrom for Tail<U> {
-    fn read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Self>
+    fn read_from<T>(reader: &mut TokenReader<T>) -> Result<Self>
     where
-        T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
-        E: Into<crate::Error>,
+        T: Iterator<Item = erl_tokenize::Result<LexicalToken>>,
     {
-        if let Some(_comma) = track!(reader.try_read_expected(&Symbol::Comma))? {
-            let head = track!(reader.read())?;
-            let tail = Box::new(track!(reader.read())?);
+        if let Some(_comma) = reader.try_read_expected(&Symbol::Comma)? {
+            let head = reader.read()?;
+            let tail = Box::new(reader.read()?);
             Ok(Tail::Cons { _comma, head, tail })
         } else {
             Ok(Tail::Null)
@@ -316,13 +317,12 @@ impl<T: fmt::Display> fmt::Display for List<T> {
     }
 }
 impl<U: ReadFrom> ReadFrom for List<U> {
-    fn read_from<T, E>(reader: &mut TokenReader<T, E>) -> Result<Self>
+    fn read_from<T>(reader: &mut TokenReader<T>) -> Result<Self>
     where
-        T: Iterator<Item = ::std::result::Result<LexicalToken, E>>,
-        E: Into<crate::Error>,
+        T: Iterator<Item = erl_tokenize::Result<LexicalToken>>,
     {
-        if let Some(head) = track!(reader.try_read())? {
-            let tail = track!(reader.read())?;
+        if let Some(head) = reader.try_read()? {
+            let tail = reader.read()?;
             Ok(List::Cons { head, tail })
         } else {
             Ok(List::Null)

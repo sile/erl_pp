@@ -1,8 +1,3 @@
-extern crate erl_pp;
-extern crate erl_tokenize;
-#[macro_use]
-extern crate trackable;
-
 use erl_pp::Preprocessor;
 use erl_tokenize::Lexer;
 
@@ -129,7 +124,7 @@ fn error_and_warning_works() {
 #[test]
 fn include_works() {
     let src = r#"foo.-include("tests/bar.hrl").baz."#;
-    let tokens = track_try_unwrap!(pp(src).collect::<Result<Vec<_>, _>>());
+    let tokens = pp(src).collect::<Result<Vec<_>, _>>().unwrap();
 
     assert_eq!(
         tokens.iter().map(|t| t.text()).collect::<Vec<_>>(),
@@ -140,7 +135,7 @@ fn include_works() {
 #[test]
 fn include_lib_works() {
     let src = r#"foo.-include_lib("tests/bar.hrl").baz."#;
-    let tokens = track_try_unwrap!(pp(src).collect::<Result<Vec<_>, _>>());
+    let tokens = pp(src).collect::<Result<Vec<_>, _>>().unwrap();
 
     assert_eq!(
         tokens.iter().map(|t| t.text()).collect::<Vec<_>>(),
