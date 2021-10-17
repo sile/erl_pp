@@ -15,7 +15,7 @@ travis-ci = {repository = "sile/erl_pp"}
 codecov = {repository = "sile/erl_pp"}
 
 [dependencies]
-erl_tokenize = "0.3"
+erl_tokenize = "0.4"
 glob = "0.3"
 trackable = "0.2"
 

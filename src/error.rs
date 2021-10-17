@@ -14,12 +14,8 @@ impl Error {
 }
 derive_traits_for_trackable_error_newtype!(Error, ErrorKind);
 impl From<erl_tokenize::Error> for Error {
-    fn from(e: erl_tokenize::Error) -> Self {
-        let kind = match *e.kind() {
-            erl_tokenize::ErrorKind::InvalidInput => ErrorKind::InvalidInput,
-            erl_tokenize::ErrorKind::UnexpectedEos => ErrorKind::UnexpectedEos,
-        };
-        kind.takes_over(e).into()
+    fn from(_e: erl_tokenize::Error) -> Self {
+        todo!()
     }
 }
 impl From<std::env::VarError> for Error {
