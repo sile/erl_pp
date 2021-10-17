@@ -1,7 +1,7 @@
 erl_pp
 ======
 
-[![erl_pp](http://meritbadge.herokuapp.com/erl_pp)](https://crates.io/crates/erl_pp)
+[![erl_pp](https://img.shields.io/crates/v/erl_pp.svg)](https://crates.io/crates/erl_pp)
 [![Documentation](https://docs.rs/erl_pp/badge.svg)](https://docs.rs/erl_pp)
 [![Actions Status](https://github.com/sile/erl_pp/workflows/CI/badge.svg)](https://github.com/sile/erl_pp/actions)
 [![Coverage Status](https://coveralls.io/repos/github/sile/erl_pp/badge.svg?branch=master)](https://coveralls.io/github/sile/erl_pp?branch=master)
