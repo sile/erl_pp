@@ -95,7 +95,7 @@ impl IncludeLib {
                 let pattern = pattern
                     .to_str()
                     .ok_or_else(|| crate::Error::non_utf8_path(&pattern))?;
-                if let Some(entry) = glob(pattern)?.nth(0) {
+                if let Some(entry) = glob(pattern)?.next() {
                     path = entry?;
                     for c in components {
                         path.push(c.as_os_str());

@@ -247,7 +247,7 @@ impl ReadFrom for MacroArg {
                             _ => unreachable!(),
                         };
                         if s.value() != expected {
-                            return Err(Error::unbalanced_paren(Some(last.clone()), s.clone()));
+                            return Err(Error::unbalanced_paren(Some(last), s.clone()));
                         }
                     }
                     _ => {}
