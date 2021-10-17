@@ -3,8 +3,8 @@ erl_pp
 
 [![erl_pp](http://meritbadge.herokuapp.com/erl_pp)](https://crates.io/crates/erl_pp)
 [![Documentation](https://docs.rs/erl_pp/badge.svg)](https://docs.rs/erl_pp)
-[![Build Status](https://travis-ci.org/sile/erl_pp.svg?branch=master)](https://travis-ci.org/sile/erl_pp)
-[![Code Coverage](https://codecov.io/gh/sile/erl_pp/branch/master/graph/badge.svg)](https://codecov.io/gh/sile/erl_pp/branch/master)
+[![Actions Status](https://github.com/sile/erl_pp/workflows/CI/badge.svg)](https://github.com/sile/erl_pp/actions)
+[![Coverage Status](https://coveralls.io/repos/github/sile/erl_pp/badge.svg?branch=master)](https://coveralls.io/github/sile/erl_pp?branch=master)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 An Erlang source code preprocessor written in Rust.
