@@ -24,7 +24,7 @@
 //! - [Erlang Reference Manual -- Preprocessor](http://erlang.org/doc/reference_manual/macros.html)
 //!
 #![warn(missing_docs)]
-#![allow(clippy::result_large_err)]
+#![expect(clippy::result_large_err)]
 pub use crate::directive::Directive;
 pub use crate::error::Error;
 pub use crate::macros::{MacroCall, MacroDef};

@@ -46,6 +46,7 @@ pub struct Preprocessor<T> {
     macro_calls: BTreeMap<Position, MacroCall>,
     expanded_tokens: VecDeque<LexicalToken>,
 }
+
 impl<T> Preprocessor<T>
 where
     T: Iterator<Item = erl_tokenize::Result<LexicalToken>>,
@@ -243,6 +244,7 @@ where
         Ok(Some(directive))
     }
 }
+
 impl<T> Preprocessor<T> {
     /// Returns a reference to the code path list which
     /// will be used by this preprocessor for handling `include_lib` directive.
@@ -285,6 +287,7 @@ impl<T> Preprocessor<T> {
         &mut self.macros
     }
 }
+
 impl<T> Iterator for Preprocessor<T>
 where
     T: Iterator<Item = erl_tokenize::Result<LexicalToken>>,
@@ -304,6 +307,7 @@ struct Branch {
     pub then_branch: bool,
     pub entered: bool,
 }
+
 impl Branch {
     pub fn new(entered: bool) -> Self {
         Branch {

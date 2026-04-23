@@ -9,8 +9,8 @@ use crate::{Error, Result};
 
 /// Macro directive.
 #[derive(Debug, Clone)]
-#[allow(missing_docs)]
-#[allow(clippy::large_enum_variant)]
+#[expect(missing_docs)]
+#[expect(clippy::large_enum_variant)]
 pub enum Directive {
     Include(directives::Include),
     IncludeLib(directives::IncludeLib),
@@ -23,6 +23,7 @@ pub enum Directive {
     Error(directives::Error),
     Warning(directives::Warning),
 }
+
 impl PositionRange for Directive {
     fn start_position(&self) -> Position {
         match *self {
@@ -53,6 +54,7 @@ impl PositionRange for Directive {
         }
     }
 }
+
 impl fmt::Display for Directive {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
@@ -69,6 +71,7 @@ impl fmt::Display for Directive {
         }
     }
 }
+
 impl ReadFrom for Directive {
     fn read_from<T>(reader: &mut TokenReader<T>) -> Result<Self>
     where

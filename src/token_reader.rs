@@ -14,6 +14,7 @@ pub struct TokenReader<T> {
     included_tokens: Vec<Lexer<String>>,
     unread: VecDeque<LexicalToken>,
 }
+
 impl<T> TokenReader<T>
 where
     T: Iterator<Item = erl_tokenize::Result<LexicalToken>>,
@@ -167,6 +168,7 @@ pub trait ReadFrom: Sized {
         })
     }
 }
+
 impl ReadFrom for AtomToken {
     fn read_from<T>(reader: &mut TokenReader<T>) -> Result<Self>
     where
@@ -178,6 +180,7 @@ impl ReadFrom for AtomToken {
             .map_err(|token| Error::unexpected_token(token, "atom"))
     }
 }
+
 impl ReadFrom for VariableToken {
     fn read_from<T>(reader: &mut TokenReader<T>) -> Result<Self>
     where
@@ -189,6 +192,7 @@ impl ReadFrom for VariableToken {
             .map_err(|token| Error::unexpected_token(token, "variable"))
     }
 }
+
 impl ReadFrom for SymbolToken {
     fn read_from<T>(reader: &mut TokenReader<T>) -> Result<Self>
     where
@@ -200,6 +204,7 @@ impl ReadFrom for SymbolToken {
             .map_err(|token| Error::unexpected_token(token, "symbol"))
     }
 }
+
 impl ReadFrom for StringToken {
     fn read_from<T>(reader: &mut TokenReader<T>) -> Result<Self>
     where
@@ -211,6 +216,7 @@ impl ReadFrom for StringToken {
             .map_err(|token| Error::unexpected_token(token, "string"))
     }
 }
+
 impl ReadFrom for KeywordToken {
     fn read_from<T>(reader: &mut TokenReader<T>) -> Result<Self>
     where
@@ -227,18 +233,21 @@ pub trait Expect {
     type Value: PartialEq + Debug + ?Sized;
     fn expect(&self, expected: &Self::Value) -> bool;
 }
+
 impl Expect for AtomToken {
     type Value = str;
     fn expect(&self, expected: &Self::Value) -> bool {
         self.value() == expected
     }
 }
+
 impl Expect for SymbolToken {
     type Value = Symbol;
     fn expect(&self, expected: &Self::Value) -> bool {
         self.value() == *expected
     }
 }
+
 impl Expect for KeywordToken {
     type Value = Keyword;
     fn expect(&self, expected: &Self::Value) -> bool {

@@ -11,11 +11,12 @@ use crate::{Error, Result};
 
 /// The list of tokens that can be used as a macro name.
 #[derive(Debug, Clone)]
-#[allow(missing_docs)]
+#[expect(missing_docs)]
 pub enum MacroName {
     Atom(AtomToken),
     Variable(VariableToken),
 }
+
 impl MacroName {
     /// Returns the value of this token.
     pub fn value(&self) -> &str {
@@ -33,17 +34,21 @@ impl MacroName {
         }
     }
 }
+
 impl PartialEq for MacroName {
     fn eq(&self, other: &Self) -> bool {
         self.value() == other.value()
     }
 }
+
 impl Eq for MacroName {}
+
 impl Hash for MacroName {
     fn hash<H: Hasher>(&self, hasher: &mut H) {
         self.value().hash(hasher);
     }
 }
+
 impl PositionRange for MacroName {
     fn start_position(&self) -> Position {
         match *self {
@@ -58,11 +63,13 @@ impl PositionRange for MacroName {
         }
     }
 }
+
 impl fmt::Display for MacroName {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.text())
     }
 }
+
 impl ReadFrom for MacroName {
     fn read_from<T>(reader: &mut TokenReader<T>) -> Result<Self>
     where
@@ -79,12 +86,13 @@ impl ReadFrom for MacroName {
 
 /// Macro variables.
 #[derive(Debug, Clone)]
-#[allow(missing_docs)]
+#[expect(missing_docs)]
 pub struct MacroVariables {
     pub _open_paren: SymbolToken,
     pub list: List<VariableToken>,
     pub _close_paren: SymbolToken,
 }
+
 impl MacroVariables {
     /// Returns an iterator which iterates over this variables.
     pub fn iter(&self) -> ListIter<'_, VariableToken> {
@@ -101,6 +109,7 @@ impl MacroVariables {
         self.len() == 0
     }
 }
+
 impl PositionRange for MacroVariables {
     fn start_position(&self) -> Position {
         self._open_paren.start_position()
@@ -109,11 +118,13 @@ impl PositionRange for MacroVariables {
         self._close_paren.end_position()
     }
 }
+
 impl fmt::Display for MacroVariables {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "({})", self.list)
     }
 }
+
 impl ReadFrom for MacroVariables {
     fn read_from<T>(reader: &mut TokenReader<T>) -> Result<Self>
     where
@@ -129,12 +140,13 @@ impl ReadFrom for MacroVariables {
 
 /// Macro arguments.
 #[derive(Debug, Clone)]
-#[allow(missing_docs)]
+#[expect(missing_docs)]
 pub struct MacroArgs {
     pub _open_paren: SymbolToken,
     pub list: List<MacroArg>,
     pub _close_paren: SymbolToken,
 }
+
 impl MacroArgs {
     /// Returns an iterator which iterates over this arguments.
     pub fn iter(&self) -> ListIter<'_, MacroArg> {
@@ -151,6 +163,7 @@ impl MacroArgs {
         self.len() == 0
     }
 }
+
 impl PositionRange for MacroArgs {
     fn start_position(&self) -> Position {
         self._open_paren.start_position()
@@ -159,11 +172,13 @@ impl PositionRange for MacroArgs {
         self._close_paren.end_position()
     }
 }
+
 impl fmt::Display for MacroArgs {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "({})", self.list)
     }
 }
+
 impl ReadFrom for MacroArgs {
     fn read_from<T>(reader: &mut TokenReader<T>) -> Result<Self>
     where
@@ -185,6 +200,7 @@ pub struct MacroArg {
     /// Note that this must not be empty.
     pub tokens: Vec<LexicalToken>,
 }
+
 impl PositionRange for MacroArg {
     fn start_position(&self) -> Position {
         self.tokens.first().as_ref().unwrap().start_position()
@@ -193,6 +209,7 @@ impl PositionRange for MacroArg {
         self.tokens.last().as_ref().unwrap().end_position()
     }
 }
+
 impl fmt::Display for MacroArg {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         for t in &self.tokens {
@@ -201,6 +218,7 @@ impl fmt::Display for MacroArg {
         Ok(())
     }
 }
+
 impl ReadFrom for MacroArg {
     fn read_from<T>(reader: &mut TokenReader<T>) -> Result<Self>
     where
@@ -261,7 +279,7 @@ impl ReadFrom for MacroArg {
 
 /// Tail part of a linked list (cons cell).
 #[derive(Debug, Clone)]
-#[allow(missing_docs)]
+#[expect(missing_docs)]
 pub enum Tail<T> {
     Null,
     Cons {
@@ -270,6 +288,7 @@ pub enum Tail<T> {
         tail: Box<Tail<T>>,
     },
 }
+
 impl<T: fmt::Display> fmt::Display for Tail<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
@@ -280,6 +299,7 @@ impl<T: fmt::Display> fmt::Display for Tail<T> {
         }
     }
 }
+
 impl<U: ReadFrom> ReadFrom for Tail<U> {
     fn read_from<T>(reader: &mut TokenReader<T>) -> Result<Self>
     where
@@ -297,17 +317,19 @@ impl<U: ReadFrom> ReadFrom for Tail<U> {
 
 /// Linked list (cons cell).
 #[derive(Debug, Clone)]
-#[allow(missing_docs)]
+#[expect(missing_docs)]
 pub enum List<T> {
     Null,
     Cons { head: T, tail: Tail<T> },
 }
+
 impl<T> List<T> {
     /// Returns an iterator which iterates over the elements in this list.
     pub fn iter(&self) -> ListIter<'_, T> {
         ListIter(ListIterInner::List(self))
     }
 }
+
 impl<T: fmt::Display> fmt::Display for List<T> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
@@ -316,6 +338,7 @@ impl<T: fmt::Display> fmt::Display for List<T> {
         }
     }
 }
+
 impl<U: ReadFrom> ReadFrom for List<U> {
     fn read_from<T>(reader: &mut TokenReader<T>) -> Result<Self>
     where
@@ -346,6 +369,7 @@ enum ListIterInner<'a, T: 'a> {
     Tail(&'a Tail<T>),
     End,
 }
+
 impl<'a, T: 'a> Iterator for ListIterInner<'a, T> {
     type Item = &'a T;
     fn next(&mut self) -> Option<Self::Item> {

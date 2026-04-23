@@ -10,12 +10,13 @@ use crate::types::{MacroArgs, MacroName};
 
 /// Macro definition.
 #[derive(Debug, Clone)]
-#[allow(missing_docs)]
-#[allow(clippy::large_enum_variant)]
+#[expect(missing_docs)]
+#[expect(clippy::large_enum_variant)]
 pub enum MacroDef {
     Static(Define),
     Dynamic(Vec<LexicalToken>),
 }
+
 impl MacroDef {
     /// Returns `true` if this macro has variables, otherwise `false`.
     pub fn has_variables(&self) -> bool {
@@ -28,12 +29,13 @@ impl MacroDef {
 
 /// Macro call.
 #[derive(Debug, Clone)]
-#[allow(missing_docs)]
+#[expect(missing_docs)]
 pub struct MacroCall {
     pub _question: SymbolToken,
     pub name: MacroName,
     pub args: Option<MacroArgs>,
 }
+
 impl PositionRange for MacroCall {
     fn start_position(&self) -> Position {
         self._question.start_position()
@@ -45,6 +47,7 @@ impl PositionRange for MacroCall {
             .unwrap_or_else(|| self.name.end_position())
     }
 }
+
 impl fmt::Display for MacroCall {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
@@ -57,6 +60,7 @@ impl fmt::Display for MacroCall {
         )
     }
 }
+
 impl ReadFrom for MacroCall {
     fn read_from<T>(reader: &mut TokenReader<T>) -> Result<Self>
     where
@@ -75,6 +79,7 @@ pub struct NoArgsMacroCall {
     pub _question: SymbolToken,
     pub name: MacroName,
 }
+
 impl ReadFrom for NoArgsMacroCall {
     fn read_from<T>(reader: &mut TokenReader<T>) -> Result<Self>
     where
@@ -92,6 +97,7 @@ pub struct Stringify {
     pub _double_question: SymbolToken,
     pub name: VariableToken,
 }
+
 impl PositionRange for Stringify {
     fn start_position(&self) -> Position {
         self._double_question.start_position()
@@ -100,11 +106,13 @@ impl PositionRange for Stringify {
         self.name.end_position()
     }
 }
+
 impl fmt::Display for Stringify {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "??{}", self.name.text())
     }
 }
+
 impl ReadFrom for Stringify {
     fn read_from<T>(reader: &mut TokenReader<T>) -> Result<Self>
     where

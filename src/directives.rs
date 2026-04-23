@@ -16,7 +16,7 @@ use crate::util;
 /// See [9.1 File Inclusion](http://erlang.org/doc/reference_manual/macros.html#id85412)
 /// for detailed information.
 #[derive(Debug, Clone)]
-#[allow(missing_docs)]
+#[expect(missing_docs)]
 pub struct Include {
     pub _hyphen: SymbolToken,
     pub _include: AtomToken,
@@ -25,6 +25,7 @@ pub struct Include {
     pub _close_paren: SymbolToken,
     pub _dot: SymbolToken,
 }
+
 impl Include {
     /// Executes file inclusion.
     pub fn include(&self) -> Result<(PathBuf, String)> {
@@ -34,6 +35,7 @@ impl Include {
         Ok((path, text))
     }
 }
+
 impl PositionRange for Include {
     fn start_position(&self) -> Position {
         self._hyphen.start_position()
@@ -42,11 +44,13 @@ impl PositionRange for Include {
         self._dot.end_position()
     }
 }
+
 impl fmt::Display for Include {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "-include({}).", self.path.text())
     }
 }
+
 impl ReadFrom for Include {
     fn read_from<T>(reader: &mut TokenReader<T>) -> Result<Self>
     where
@@ -68,7 +72,7 @@ impl ReadFrom for Include {
 /// See [9.1 File Inclusion](http://erlang.org/doc/reference_manual/macros.html#id85412)
 /// for detailed information.
 #[derive(Debug, Clone)]
-#[allow(missing_docs)]
+#[expect(missing_docs)]
 pub struct IncludeLib {
     pub _hyphen: SymbolToken,
     pub _include_lib: AtomToken,
@@ -77,6 +81,7 @@ pub struct IncludeLib {
     pub _close_paren: SymbolToken,
     pub _dot: SymbolToken,
 }
+
 impl IncludeLib {
     /// Executes file inclusion.
     pub fn include_lib(&self, code_paths: &VecDeque<PathBuf>) -> Result<(PathBuf, String)> {
@@ -104,6 +109,7 @@ impl IncludeLib {
         Ok((path, text))
     }
 }
+
 fn find_app_dir(root: &Path, app_name: &str) -> Result<Option<PathBuf>> {
     let prefix = format!("{app_name}-");
     let Ok(entries) = std::fs::read_dir(root) else {
@@ -121,6 +127,7 @@ fn find_app_dir(root: &Path, app_name: &str) -> Result<Option<PathBuf>> {
     matches.sort();
     Ok(matches.into_iter().next())
 }
+
 impl PositionRange for IncludeLib {
     fn start_position(&self) -> Position {
         self._hyphen.start_position()
@@ -129,11 +136,13 @@ impl PositionRange for IncludeLib {
         self._dot.end_position()
     }
 }
+
 impl fmt::Display for IncludeLib {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "-include_lib({}).", self.path.text())
     }
 }
+
 impl ReadFrom for IncludeLib {
     fn read_from<T>(reader: &mut TokenReader<T>) -> Result<Self>
     where
@@ -157,7 +166,7 @@ impl ReadFrom for IncludeLib {
 ///
 /// [error_and_warning]: http://erlang.org/doc/reference_manual/macros.html#id85997
 #[derive(Debug, Clone)]
-#[allow(missing_docs)]
+#[expect(missing_docs)]
 pub struct Error {
     pub _hyphen: SymbolToken,
     pub _error: AtomToken,
@@ -166,6 +175,7 @@ pub struct Error {
     pub _close_paren: SymbolToken,
     pub _dot: SymbolToken,
 }
+
 impl PositionRange for Error {
     fn start_position(&self) -> Position {
         self._hyphen.start_position()
@@ -174,11 +184,13 @@ impl PositionRange for Error {
         self._dot.end_position()
     }
 }
+
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "-error({}).", self.message.text())
     }
 }
+
 impl ReadFrom for Error {
     fn read_from<T>(reader: &mut TokenReader<T>) -> Result<Self>
     where
@@ -202,7 +214,7 @@ impl ReadFrom for Error {
 ///
 /// [error_and_warning]: http://erlang.org/doc/reference_manual/macros.html#id85997
 #[derive(Debug, Clone)]
-#[allow(missing_docs)]
+#[expect(missing_docs)]
 pub struct Warning {
     pub _hyphen: SymbolToken,
     pub _warning: AtomToken,
@@ -211,6 +223,7 @@ pub struct Warning {
     pub _close_paren: SymbolToken,
     pub _dot: SymbolToken,
 }
+
 impl PositionRange for Warning {
     fn start_position(&self) -> Position {
         self._hyphen.start_position()
@@ -219,11 +232,13 @@ impl PositionRange for Warning {
         self._dot.end_position()
     }
 }
+
 impl fmt::Display for Warning {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "-warning({}).", self.message.text())
     }
 }
+
 impl ReadFrom for Warning {
     fn read_from<T>(reader: &mut TokenReader<T>) -> Result<Self>
     where
@@ -246,12 +261,13 @@ impl ReadFrom for Warning {
 ///
 /// [flow_control]: http://erlang.org/doc/reference_manual/macros.html#id85859
 #[derive(Debug, Clone)]
-#[allow(missing_docs)]
+#[expect(missing_docs)]
 pub struct Endif {
     pub _hyphen: SymbolToken,
     pub _endif: AtomToken,
     pub _dot: SymbolToken,
 }
+
 impl PositionRange for Endif {
     fn start_position(&self) -> Position {
         self._hyphen.start_position()
@@ -260,11 +276,13 @@ impl PositionRange for Endif {
         self._dot.end_position()
     }
 }
+
 impl fmt::Display for Endif {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "-endif.")
     }
 }
+
 impl ReadFrom for Endif {
     fn read_from<T>(reader: &mut TokenReader<T>) -> Result<Self>
     where
@@ -284,12 +302,13 @@ impl ReadFrom for Endif {
 ///
 /// [flow_control]: http://erlang.org/doc/reference_manual/macros.html#id85859
 #[derive(Debug, Clone)]
-#[allow(missing_docs)]
+#[expect(missing_docs)]
 pub struct Else {
     pub _hyphen: SymbolToken,
     pub _else: KeywordToken,
     pub _dot: SymbolToken,
 }
+
 impl PositionRange for Else {
     fn start_position(&self) -> Position {
         self._hyphen.start_position()
@@ -298,11 +317,13 @@ impl PositionRange for Else {
         self._dot.end_position()
     }
 }
+
 impl fmt::Display for Else {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "-else.")
     }
 }
+
 impl ReadFrom for Else {
     fn read_from<T>(reader: &mut TokenReader<T>) -> Result<Self>
     where
@@ -322,7 +343,7 @@ impl ReadFrom for Else {
 ///
 /// [flow_control]: http://erlang.org/doc/reference_manual/macros.html#id85859
 #[derive(Debug, Clone)]
-#[allow(missing_docs)]
+#[expect(missing_docs)]
 pub struct Undef {
     pub _hyphen: SymbolToken,
     pub _undef: AtomToken,
@@ -331,6 +352,7 @@ pub struct Undef {
     pub _close_paren: SymbolToken,
     pub _dot: SymbolToken,
 }
+
 impl PositionRange for Undef {
     fn start_position(&self) -> Position {
         self._hyphen.start_position()
@@ -339,11 +361,13 @@ impl PositionRange for Undef {
         self._dot.end_position()
     }
 }
+
 impl fmt::Display for Undef {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "-undef({}).", self.name.text())
     }
 }
+
 impl ReadFrom for Undef {
     fn read_from<T>(reader: &mut TokenReader<T>) -> Result<Self>
     where
@@ -366,7 +390,7 @@ impl ReadFrom for Undef {
 ///
 /// [flow_control]: http://erlang.org/doc/reference_manual/macros.html#id85859
 #[derive(Debug, Clone)]
-#[allow(missing_docs)]
+#[expect(missing_docs)]
 pub struct Ifdef {
     pub _hyphen: SymbolToken,
     pub _ifdef: AtomToken,
@@ -375,6 +399,7 @@ pub struct Ifdef {
     pub _close_paren: SymbolToken,
     pub _dot: SymbolToken,
 }
+
 impl PositionRange for Ifdef {
     fn start_position(&self) -> Position {
         self._hyphen.start_position()
@@ -383,11 +408,13 @@ impl PositionRange for Ifdef {
         self._dot.end_position()
     }
 }
+
 impl fmt::Display for Ifdef {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "-ifdef({}).", self.name.text())
     }
 }
+
 impl ReadFrom for Ifdef {
     fn read_from<T>(reader: &mut TokenReader<T>) -> Result<Self>
     where
@@ -410,7 +437,7 @@ impl ReadFrom for Ifdef {
 ///
 /// [flow_control]: http://erlang.org/doc/reference_manual/macros.html#id85859
 #[derive(Debug, Clone)]
-#[allow(missing_docs)]
+#[expect(missing_docs)]
 pub struct Ifndef {
     pub _hyphen: SymbolToken,
     pub _ifndef: AtomToken,
@@ -419,6 +446,7 @@ pub struct Ifndef {
     pub _close_paren: SymbolToken,
     pub _dot: SymbolToken,
 }
+
 impl PositionRange for Ifndef {
     fn start_position(&self) -> Position {
         self._hyphen.start_position()
@@ -427,11 +455,13 @@ impl PositionRange for Ifndef {
         self._dot.end_position()
     }
 }
+
 impl fmt::Display for Ifndef {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "-ifndef({}).", self.name.text())
     }
 }
+
 impl ReadFrom for Ifndef {
     fn read_from<T>(reader: &mut TokenReader<T>) -> Result<Self>
     where
@@ -454,7 +484,7 @@ impl ReadFrom for Ifndef {
 ///
 /// [define_and_use]: http://erlang.org/doc/reference_manual/macros.html#id85572
 #[derive(Debug, Clone)]
-#[allow(missing_docs)]
+#[expect(missing_docs)]
 pub struct Define {
     pub _hyphen: SymbolToken,
     pub _define: AtomToken,
@@ -466,6 +496,7 @@ pub struct Define {
     pub _close_paren: SymbolToken,
     pub _dot: SymbolToken,
 }
+
 impl PositionRange for Define {
     fn start_position(&self) -> Position {
         self._hyphen.start_position()
@@ -474,6 +505,7 @@ impl PositionRange for Define {
         self._dot.end_position()
     }
 }
+
 impl fmt::Display for Define {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
@@ -490,6 +522,7 @@ impl fmt::Display for Define {
         )
     }
 }
+
 impl ReadFrom for Define {
     fn read_from<T>(reader: &mut TokenReader<T>) -> Result<Self>
     where

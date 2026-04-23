@@ -7,8 +7,8 @@ use std::path::{Path, PathBuf};
 /// Possible errors.
 #[derive(Debug)]
 #[non_exhaustive]
-#[allow(missing_docs)]
-#[allow(clippy::large_enum_variant)]
+#[expect(missing_docs)]
+#[expect(clippy::large_enum_variant)]
 pub enum Error {
     /// Unexpected token.
     UnexpectedToken {
