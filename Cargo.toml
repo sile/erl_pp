@@ -11,7 +11,6 @@ license = "MIT"
 
 [dependencies]
 erl_tokenize = "0.10"
-glob = "0.3"
 
 [dev-dependencies]
 noargs = "0.4"

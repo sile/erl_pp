@@ -62,12 +62,6 @@ pub enum Error {
 
     /// Tokenize error.
     TokenizeError(erl_tokenize::Error),
-
-    /// Glob pattern error.
-    GlobPatternError(glob::PatternError),
-
-    /// Glob error.
-    GlobError(glob::GlobError),
 }
 
 impl Error {
@@ -185,8 +179,6 @@ impl std::fmt::Display for Error {
                 write!(f, "missing `-ifdef` or `ifndef` directives")
             }
             Self::TokenizeError(e) => e.fmt(f),
-            Self::GlobPatternError(e) => e.fmt(f),
-            Self::GlobError(e) => e.fmt(f),
         }
     }
 }
@@ -196,8 +188,6 @@ impl std::error::Error for Error {
         match self {
             Self::IncludeFileError { source, .. } => Some(source),
             Self::TokenizeError(e) => Some(e),
-            Self::GlobPatternError(e) => Some(e),
-            Self::GlobError(e) => Some(e),
             _ => None,
         }
     }
@@ -206,17 +196,5 @@ impl std::error::Error for Error {
 impl From<erl_tokenize::Error> for Error {
     fn from(e: erl_tokenize::Error) -> Self {
         Self::TokenizeError(e)
-    }
-}
-
-impl From<glob::PatternError> for Error {
-    fn from(e: glob::PatternError) -> Self {
-        Self::GlobPatternError(e)
-    }
-}
-
-impl From<glob::GlobError> for Error {
-    fn from(e: glob::GlobError) -> Self {
-        Self::GlobError(e)
     }
 }
