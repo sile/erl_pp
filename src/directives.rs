@@ -2,10 +2,9 @@
 use erl_tokenize::tokens::{AtomToken, KeywordToken, StringToken, SymbolToken};
 use erl_tokenize::values::{Keyword, Symbol};
 use erl_tokenize::{LexicalToken, Position, PositionRange};
-use glob::glob;
 use std::collections::VecDeque;
 use std::fmt;
-use std::path::{Component, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use crate::Result;
 use crate::token_reader::{ReadFrom, TokenReader};
@@ -89,18 +88,13 @@ impl IncludeLib {
             let app_name = app_name
                 .to_str()
                 .ok_or_else(|| crate::Error::non_utf8_path(app_name))?;
-            let pattern = format!("{}-*", app_name);
-            'root: for root in code_paths.iter() {
-                let pattern = root.join(&pattern);
-                let pattern = pattern
-                    .to_str()
-                    .ok_or_else(|| crate::Error::non_utf8_path(&pattern))?;
-                if let Some(entry) = glob(pattern)?.next() {
-                    path = entry?;
+            for root in code_paths.iter() {
+                if let Some(entry) = find_app_dir(root, app_name)? {
+                    path = entry;
                     for c in components {
                         path.push(c.as_os_str());
                     }
-                    break 'root;
+                    break;
                 }
             }
         }
@@ -109,6 +103,23 @@ impl IncludeLib {
             .map_err(|e| crate::Error::include_file_error(e, self, path.clone()))?;
         Ok((path, text))
     }
+}
+fn find_app_dir(root: &Path, app_name: &str) -> Result<Option<PathBuf>> {
+    let prefix = format!("{app_name}-");
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return Ok(None);
+    };
+    let mut matches: Vec<PathBuf> = entries
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            e.file_name()
+                .to_str()
+                .is_some_and(|n| n.starts_with(&prefix))
+        })
+        .map(|e| e.path())
+        .collect();
+    matches.sort();
+    Ok(matches.into_iter().next())
 }
 impl PositionRange for IncludeLib {
     fn start_position(&self) -> Position {
