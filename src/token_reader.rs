@@ -1,5 +1,5 @@
-use erl_tokenize::tokens::{AtomToken, StringToken, SymbolToken, VariableToken};
-use erl_tokenize::values::Symbol;
+use erl_tokenize::tokens::{AtomToken, KeywordToken, StringToken, SymbolToken, VariableToken};
+use erl_tokenize::values::{Keyword, Symbol};
 use erl_tokenize::{Lexer, LexicalToken};
 use std::collections::{HashMap, VecDeque};
 use std::fmt::Debug;
@@ -56,7 +56,7 @@ where
             };
             if macros
                 .get(call.name.value())
-                .map_or(false, MacroDef::has_variables)
+                .is_some_and(MacroDef::has_variables)
             {
                 call.args = Some(self.read()?);
             }
@@ -211,6 +211,17 @@ impl ReadFrom for StringToken {
             .map_err(|token| Error::unexpected_token(token, "string"))
     }
 }
+impl ReadFrom for KeywordToken {
+    fn read_from<T>(reader: &mut TokenReader<T>) -> Result<Self>
+    where
+        T: Iterator<Item = erl_tokenize::Result<LexicalToken>>,
+    {
+        let token = reader.read_token()?;
+        token
+            .into_keyword_token()
+            .map_err(|token| Error::unexpected_token(token, "keyword"))
+    }
+}
 
 pub trait Expect {
     type Value: PartialEq + Debug + ?Sized;
@@ -224,6 +235,12 @@ impl Expect for AtomToken {
 }
 impl Expect for SymbolToken {
     type Value = Symbol;
+    fn expect(&self, expected: &Self::Value) -> bool {
+        self.value() == *expected
+    }
+}
+impl Expect for KeywordToken {
+    type Value = Keyword;
     fn expect(&self, expected: &Self::Value) -> bool {
         self.value() == *expected
     }

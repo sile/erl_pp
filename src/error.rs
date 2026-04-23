@@ -5,20 +5,18 @@ use erl_tokenize::{LexicalToken, Position, PositionRange};
 use std::path::{Path, PathBuf};
 
 /// Possible errors.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 #[non_exhaustive]
 #[allow(missing_docs)]
 #[allow(clippy::large_enum_variant)]
 pub enum Error {
     /// Unexpected token.
-    #[error("expected a {expected:?} token, but found {token:?}")]
     UnexpectedToken {
         token: LexicalToken,
         expected: String,
     },
 
     /// Include file error.
-    #[error("cannot include file: path={target_file_path:?}, reason={source}")]
     IncludeFileError {
         source: std::io::Error,
         directive_start: Position,
@@ -27,62 +25,49 @@ pub enum Error {
     },
 
     /// Missing a macro argument.
-    #[error("expected an macro argument before ',' ({position})")]
     MissingMacroArg { position: Position },
 
     /// Unbalanced parentheses.
-    #[error("unbalanced parentheses: open={open:?}, close={close:?}")]
     UnbalancedParen {
         open: Option<SymbolToken>,
         close: SymbolToken,
     },
 
     /// Unexpected EOF.
-    #[error("unexpected EOF")]
     UnexpectedEof,
 
     /// Cannot expand ?FILE macro.
-    #[error("cannot expand ?FILE macro ({macro_call:?})")]
     FileNotSet { macro_call: MacroCall },
 
     /// Undefined macro.
-    #[error("undefined macro: {macro_call:?}")]
     UndefinedMacro { macro_call: MacroCall },
 
     /// Undefined macro variable.
-    #[error("no such macro variable: {varname:?}")]
     UndefinedMacroVar { varname: String },
 
     /// Macro arguments mismatched.
-    #[error("macro arguments mismatched: def={macro_def:?}, call={macro_call:?}")]
     MacroArgsMismatched {
         macro_call: MacroCall,
         macro_def: MacroDef,
     },
 
     /// Non UTF-8 path.
-    #[error("cannot convert a path {path:?} to a UTF-8 string")]
     NonUtf8Path { path: PathBuf },
 
     /// Unexpected '.' in `-define` directive.
-    #[error("found unexpected '.' in `-define` directive ({position})")]
     UnexpectedDotInMacroDef { position: Position },
 
     /// Missing `-ifdef` or `-ifndef`.
-    #[error("missing `-ifdef` or `ifndef` directives")]
     MissingIfDirective { directive: Directive },
 
     /// Tokenize error.
-    #[error(transparent)]
-    TokenizeError(#[from] erl_tokenize::Error),
+    TokenizeError(erl_tokenize::Error),
 
     /// Glob pattern error.
-    #[error(transparent)]
-    GlobPatternError(#[from] glob::PatternError),
+    GlobPatternError(glob::PatternError),
 
     /// Glob error.
-    #[error(transparent)]
-    GlobError(#[from] glob::GlobError),
+    GlobError(glob::GlobError),
 }
 
 impl Error {
@@ -147,5 +132,91 @@ impl Error {
 
     pub(crate) fn missing_if_directive(directive: Directive) -> Self {
         Self::MissingIfDirective { directive }
+    }
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnexpectedToken { token, expected } => {
+                write!(f, "expected a {expected:?} token, but found {token:?}")
+            }
+            Self::IncludeFileError {
+                source,
+                target_file_path,
+                ..
+            } => {
+                write!(
+                    f,
+                    "cannot include file: path={target_file_path:?}, reason={source}"
+                )
+            }
+            Self::MissingMacroArg { position } => {
+                write!(f, "expected an macro argument before ',' ({position})")
+            }
+            Self::UnbalancedParen { open, close } => {
+                write!(f, "unbalanced parentheses: open={open:?}, close={close:?}")
+            }
+            Self::UnexpectedEof => write!(f, "unexpected EOF"),
+            Self::FileNotSet { macro_call } => {
+                write!(f, "cannot expand ?FILE macro ({macro_call:?})")
+            }
+            Self::UndefinedMacro { macro_call } => write!(f, "undefined macro: {macro_call:?}"),
+            Self::UndefinedMacroVar { varname } => {
+                write!(f, "no such macro variable: {varname:?}")
+            }
+            Self::MacroArgsMismatched {
+                macro_call,
+                macro_def,
+            } => write!(
+                f,
+                "macro arguments mismatched: def={macro_def:?}, call={macro_call:?}"
+            ),
+            Self::NonUtf8Path { path } => {
+                write!(f, "cannot convert a path {path:?} to a UTF-8 string")
+            }
+            Self::UnexpectedDotInMacroDef { position } => {
+                write!(
+                    f,
+                    "found unexpected '.' in `-define` directive ({position})"
+                )
+            }
+            Self::MissingIfDirective { .. } => {
+                write!(f, "missing `-ifdef` or `ifndef` directives")
+            }
+            Self::TokenizeError(e) => e.fmt(f),
+            Self::GlobPatternError(e) => e.fmt(f),
+            Self::GlobError(e) => e.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::IncludeFileError { source, .. } => Some(source),
+            Self::TokenizeError(e) => Some(e),
+            Self::GlobPatternError(e) => Some(e),
+            Self::GlobError(e) => Some(e),
+            _ => None,
+        }
+    }
+}
+
+impl From<erl_tokenize::Error> for Error {
+    fn from(e: erl_tokenize::Error) -> Self {
+        Self::TokenizeError(e)
+    }
+}
+
+impl From<glob::PatternError> for Error {
+    fn from(e: glob::PatternError) -> Self {
+        Self::GlobPatternError(e)
+    }
+}
+
+impl From<glob::GlobError> for Error {
+    fn from(e: glob::GlobError) -> Self {
+        Self::GlobError(e)
     }
 }

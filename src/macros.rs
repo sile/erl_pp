@@ -3,10 +3,10 @@ use erl_tokenize::values::Symbol;
 use erl_tokenize::{LexicalToken, Position, PositionRange};
 use std::fmt;
 
+use crate::Result;
 use crate::directives::Define;
 use crate::token_reader::{ReadFrom, TokenReader};
 use crate::types::{MacroArgs, MacroName};
-use crate::Result;
 
 /// Macro definition.
 #[derive(Debug, Clone)]

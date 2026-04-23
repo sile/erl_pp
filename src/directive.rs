@@ -1,4 +1,4 @@
-use erl_tokenize::tokens::{AtomToken, SymbolToken};
+use erl_tokenize::tokens::SymbolToken;
 use erl_tokenize::values::Symbol;
 use erl_tokenize::{LexicalToken, Position, PositionRange};
 use std::fmt;
@@ -75,23 +75,28 @@ impl ReadFrom for Directive {
         T: Iterator<Item = erl_tokenize::Result<LexicalToken>>,
     {
         let _hyphen: SymbolToken = reader.read_expected(&Symbol::Hyphen)?;
-        let name: AtomToken = reader
-            .try_read()?
+        let name_token: LexicalToken = reader
+            .try_read_token()?
             .ok_or_else(|| Error::unexpected_token(_hyphen.clone().into(), "-{DIRECTIVE_NAME}"))?;
+        let name_text = match &name_token {
+            LexicalToken::Atom(t) => Some(t.value()),
+            LexicalToken::Keyword(t) => Some(t.text()),
+            _ => None,
+        };
 
-        reader.unread_token(name.clone().into());
+        reader.unread_token(name_token.clone());
         reader.unread_token(_hyphen.into());
-        match name.value() {
-            "include" => reader.read().map(Directive::Include),
-            "include_lib" => reader.read().map(Directive::IncludeLib),
-            "define" => reader.read().map(Directive::Define),
-            "undef" => reader.read().map(Directive::Undef),
-            "ifdef" => reader.read().map(Directive::Ifdef),
-            "ifndef" => reader.read().map(Directive::Ifndef),
-            "else" => reader.read().map(Directive::Else),
-            "endif" => reader.read().map(Directive::Endif),
-            "error" => reader.read().map(Directive::Error),
-            "warning" => reader.read().map(Directive::Warning),
+        match name_text {
+            Some("include") => reader.read().map(Directive::Include),
+            Some("include_lib") => reader.read().map(Directive::IncludeLib),
+            Some("define") => reader.read().map(Directive::Define),
+            Some("undef") => reader.read().map(Directive::Undef),
+            Some("ifdef") => reader.read().map(Directive::Ifdef),
+            Some("ifndef") => reader.read().map(Directive::Ifndef),
+            Some("else") => reader.read().map(Directive::Else),
+            Some("endif") => reader.read().map(Directive::Endif),
+            Some("error") => reader.read().map(Directive::Error),
+            Some("warning") => reader.read().map(Directive::Warning),
             _ => {
                 let _hyphen: SymbolToken = reader.read_expected(&Symbol::Hyphen)?;
                 Err(Error::unexpected_token(_hyphen.into(), "-{DIRECTIVE_NAME}"))
