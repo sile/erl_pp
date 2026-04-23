@@ -72,18 +72,18 @@ where
             if let Some(token) = self.expanded_tokens.pop_front() {
                 return Ok(Some(token));
             }
-            if self.can_directive_start {
-                if let Some(d) = self.try_read_directive()? {
-                    self.directives.insert(d.start_position(), d);
-                    continue;
-                }
+            if self.can_directive_start
+                && let Some(d) = self.try_read_directive()?
+            {
+                self.directives.insert(d.start_position(), d);
+                continue;
             }
-            if !self.ignore() {
-                if let Some(m) = self.reader.try_read_macro_call(&self.macros)? {
-                    self.macro_calls.insert(m.start_position(), m.clone());
-                    self.expanded_tokens = self.expand_macro(m)?;
-                    continue;
-                }
+            if !self.ignore()
+                && let Some(m) = self.reader.try_read_macro_call(&self.macros)?
+            {
+                self.macro_calls.insert(m.start_position(), m.clone());
+                self.expanded_tokens = self.expand_macro(m)?;
+                continue;
             }
             if let Some(token) = self.reader.try_read_token()? {
                 if self.ignore() {
@@ -91,7 +91,7 @@ where
                 }
                 self.can_directive_start = token
                     .as_symbol_token()
-                    .map_or(false, |s| s.value() == Symbol::Dot);
+                    .is_some_and(|s| s.value() == Symbol::Dot);
                 return Ok(Some(token));
             } else {
                 break;
@@ -118,7 +118,7 @@ where
             }
             "LINE" => {
                 let line = call.start_position().line();
-                IntegerToken::from_value(line.into(), call.start_position()).into()
+                IntegerToken::from_value(line as i64, call.start_position()).into()
             }
             "MACHINE" => AtomToken::from_value("BEAM", call.start_position()).into(),
             _ => return Ok(None),
@@ -235,10 +235,8 @@ where
                     return Err(Error::missing_if_directive(directive));
                 }
             }
-            Directive::Endif(_) => {
-                if self.branches.pop().is_none() {
-                    return Err(Error::missing_if_directive(directive));
-                }
+            Directive::Endif(_) if self.branches.pop().is_none() => {
+                return Err(Error::missing_if_directive(directive));
             }
             _ => {}
         }

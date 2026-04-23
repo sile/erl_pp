@@ -4,8 +4,7 @@ erl_pp
 [![erl_pp](https://img.shields.io/crates/v/erl_pp.svg)](https://crates.io/crates/erl_pp)
 [![Documentation](https://docs.rs/erl_pp/badge.svg)](https://docs.rs/erl_pp)
 [![Actions Status](https://github.com/sile/erl_pp/workflows/CI/badge.svg)](https://github.com/sile/erl_pp/actions)
-[![Coverage Status](https://coveralls.io/repos/github/sile/erl_pp/badge.svg?branch=master)](https://coveralls.io/github/sile/erl_pp?branch=master)
-[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![License](https://img.shields.io/crates/l/erl_pp)
 
 An Erlang source code preprocessor written in Rust.
 

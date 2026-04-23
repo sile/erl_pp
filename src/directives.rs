@@ -1,16 +1,16 @@
 //! Macro directives.
-use erl_tokenize::tokens::{AtomToken, StringToken, SymbolToken};
-use erl_tokenize::values::Symbol;
+use erl_tokenize::tokens::{AtomToken, KeywordToken, StringToken, SymbolToken};
+use erl_tokenize::values::{Keyword, Symbol};
 use erl_tokenize::{LexicalToken, Position, PositionRange};
 use glob::glob;
 use std::collections::VecDeque;
 use std::fmt;
 use std::path::{Component, PathBuf};
 
+use crate::Result;
 use crate::token_reader::{ReadFrom, TokenReader};
 use crate::types::{MacroName, MacroVariables};
 use crate::util;
-use crate::Result;
 
 /// `include` directive.
 ///
@@ -88,7 +88,7 @@ impl IncludeLib {
         if let Some(Component::Normal(app_name)) = components.next() {
             let app_name = app_name
                 .to_str()
-                .ok_or_else(|| crate::Error::non_utf8_path(&app_name))?;
+                .ok_or_else(|| crate::Error::non_utf8_path(app_name))?;
             let pattern = format!("{}-*", app_name);
             'root: for root in code_paths.iter() {
                 let pattern = root.join(&pattern);
@@ -276,7 +276,7 @@ impl ReadFrom for Endif {
 #[allow(missing_docs)]
 pub struct Else {
     pub _hyphen: SymbolToken,
-    pub _else: AtomToken,
+    pub _else: KeywordToken,
     pub _dot: SymbolToken,
 }
 impl PositionRange for Else {
@@ -299,7 +299,7 @@ impl ReadFrom for Else {
     {
         Ok(Else {
             _hyphen: reader.read_expected(&Symbol::Hyphen)?,
-            _else: reader.read_expected("else")?,
+            _else: reader.read_expected(&Keyword::Else)?,
             _dot: reader.read_expected(&Symbol::Dot)?,
         })
     }
@@ -518,7 +518,7 @@ impl ReadFrom for Define {
                 let token = reader.read_token()?;
                 if token
                     .as_symbol_token()
-                    .map_or(false, |s| s.value() == Symbol::Dot)
+                    .is_some_and(|s| s.value() == Symbol::Dot)
                 {
                     return Err(crate::Error::unexpected_dot_in_macro_def(&token));
                 }

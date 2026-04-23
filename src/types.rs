@@ -87,7 +87,7 @@ pub struct MacroVariables {
 }
 impl MacroVariables {
     /// Returns an iterator which iterates over this variables.
-    pub fn iter(&self) -> ListIter<VariableToken> {
+    pub fn iter(&self) -> ListIter<'_, VariableToken> {
         self.list.iter()
     }
 
@@ -137,7 +137,7 @@ pub struct MacroArgs {
 }
 impl MacroArgs {
     /// Returns an iterator which iterates over this arguments.
-    pub fn iter(&self) -> ListIter<MacroArg> {
+    pub fn iter(&self) -> ListIter<'_, MacroArg> {
         self.list.iter()
     }
 
@@ -304,7 +304,7 @@ pub enum List<T> {
 }
 impl<T> List<T> {
     /// Returns an iterator which iterates over the elements in this list.
-    pub fn iter(&self) -> ListIter<T> {
+    pub fn iter(&self) -> ListIter<'_, T> {
         ListIter(ListIterInner::List(self))
     }
 }
@@ -350,18 +350,16 @@ impl<'a, T: 'a> Iterator for ListIterInner<'a, T> {
     type Item = &'a T;
     fn next(&mut self) -> Option<Self::Item> {
         match mem::replace(self, ListIterInner::End) {
-            ListIterInner::List(&List::Cons { ref head, ref tail }) => {
+            ListIterInner::List(List::Cons { head, tail }) => {
                 *self = ListIterInner::Tail(tail);
                 Some(head)
             }
-            ListIterInner::Tail(&Tail::Cons {
-                ref head, ref tail, ..
-            }) => {
+            ListIterInner::Tail(Tail::Cons { head, tail, .. }) => {
                 *self = ListIterInner::Tail(tail);
                 Some(head)
             }
-            ListIterInner::List(&List::Null)
-            | ListIterInner::Tail(&Tail::Null)
+            ListIterInner::List(List::Null)
+            | ListIterInner::Tail(Tail::Null)
             | ListIterInner::End => None,
         }
     }

@@ -156,7 +156,9 @@ fn macro_expansion_works() {
     let tokens = pp(src).collect::<Result<Vec<_>, _>>().unwrap();
     assert_eq!(
         tokens.iter().map(|t| t.text()).collect::<Vec<_>>(),
-        ["aaa", ".", "{", "bar", ",", "[", "1", ",", "2", "]", "}", ".", "bbb", ".",]
+        [
+            "aaa", ".", "{", "bar", ",", "[", "1", ",", "2", "]", "}", ".", "bbb", ".",
+        ]
     );
 
     let src = r#"-define(foo(A), {bar, ??A}).aaa.?foo([1,2]).bbb."#;

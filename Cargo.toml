@@ -1,23 +1,17 @@
 [package]
 name = "erl_pp"
 version = "0.2.0"
-authors = ["Takeru Ohta <phjgt308@gmail.com>"]
+edition = "2024"
 description = "Erlang source code preprocessor"
 homepage = "https://github.com/sile/erl_pp"
 repository = "https://github.com/sile/erl_pp"
 readme = "README.md"
-keywords = ["erlang", "preprocessor"]
+categories = ["parser-implementations"]
 license = "MIT"
-edition = "2018"
-
-[badges]
-coveralls = {repository = "sile/erl_pp"}
 
 [dependencies]
-erl_tokenize = "0.4"
+erl_tokenize = "0.10"
 glob = "0.3"
-thiserror = "1"
 
 [dev-dependencies]
-anyhow = "1"
-clap = "2"
+noargs = "0.4"
