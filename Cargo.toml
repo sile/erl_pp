@@ -10,7 +10,7 @@ categories = ["parser-implementations"]
 license = "MIT"
 
 [dependencies]
-erl_tokenize = "0.10"
+erl_tokenize = "0.11"
 
 [dev-dependencies]
 noargs = "0.4"

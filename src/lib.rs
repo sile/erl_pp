@@ -1,44 +1,24 @@
 //! Erlang source code preprocessor.
 //!
-//! # Examples
+//! This crate is being rebuilt around a Sans-I/O state machine. The
+//! public API in this release exposes the shared data model that later
+//! work (state machine, directive parser, macro expansion, include
+//! handling, and so on) builds on: [`Source`], [`SourceStore`],
+//! [`SourceId`], [`SourceSpan`], [`Preprocessed`], and [`Origin`].
 //!
-//! ```
-//! # extern crate erl_pp;
-//! # extern crate erl_tokenize;
-//! use erl_pp::Preprocessor;
-//! use erl_tokenize::Lexer;
-//!
-//! # fn main() {
-//! let src = r#"-define(FOO(A), {A, ?LINE}). io:format("Hello: ~p", [?FOO(bar)])."#;
-//! let pp = Preprocessor::new(Lexer::new(src));
-//! let tokens = pp.collect::<Result<Vec<_>, _>>().unwrap();
-//!
-//! assert_eq!(tokens.iter().map(|t| t.text()).collect::<Vec<_>>(),
-//!            ["io", ":", "format", "(", r#""Hello: ~p""#, ",",
-//!             "[", "{", "bar", ",", "1", "}", "]", ")", "."]);
-//! # }
-//! ```
+//! Runnable examples of the full preprocessor loop will follow in
+//! later releases.
 //!
 //! # References
 //!
-//! - [Erlang Reference Manual -- Preprocessor](http://erlang.org/doc/reference_manual/macros.html)
-//!
+//! - [Erlang Reference Manual -- Preprocessor](https://www.erlang.org/doc/system/macros.html)
 #![warn(missing_docs)]
-#![expect(clippy::result_large_err)]
-pub use crate::directive::Directive;
-pub use crate::error::Error;
-pub use crate::macros::{MacroCall, MacroDef};
-pub use crate::preprocessor::Preprocessor;
 
-pub mod directives;
-pub mod types;
+pub use crate::origin::Origin;
+pub use crate::preprocessed::Preprocessed;
+pub use crate::source::{Source, SourceId, SourceSpan, SourceStore};
 
-mod directive;
 mod error;
-mod macros;
-mod preprocessor;
-mod token_reader;
-mod util;
-
-/// This crate specific `Result` type.
-pub type Result<T> = std::result::Result<T, Error>;
+mod origin;
+mod preprocessed;
+mod source;
