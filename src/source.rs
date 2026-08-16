@@ -10,10 +10,11 @@ use erl_tokenize::Position;
 
 /// Identifier of a [`Source`] inside a [`SourceStore`].
 ///
-/// The internal representation is [`NonZeroU32`] so that
-/// `Option<SourceId>` fits in four bytes. The value has no meaning
-/// outside the store that issued it; do not compare identifiers from
-/// different stores.
+/// Values are only meaningful inside the store that issued them; do
+/// not compare identifiers from different stores.
+//
+// Internally represented as `NonZeroU32` so that `Option<SourceId>`
+// fits in four bytes and 0 is unavailable as a valid handle.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SourceId(NonZeroU32);
 
@@ -30,11 +31,6 @@ impl SourceId {
 
     fn index(self) -> usize {
         (self.0.get() - 1) as usize
-    }
-
-    /// Returns the raw one-based value.
-    pub const fn get(self) -> NonZeroU32 {
-        self.0
     }
 }
 

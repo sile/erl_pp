@@ -7,7 +7,7 @@
 
 use std::sync::Arc;
 
-use erl_tokenize::{Token, TokenKind, TokenValue};
+use erl_tokenize::{Token, TokenValue};
 
 use crate::origin::Origin;
 use crate::source::{Source, SourceId, SourceSpan, SourceStore};
@@ -83,32 +83,29 @@ impl Preprocessed {
         &self.sources
     }
 
-    /// Returns the number of tokens in the container.
-    pub fn len(&self) -> usize {
-        self.tokens.len()
+    /// Returns the token stream as a slice.
+    ///
+    /// Use standard slice APIs (`len`, `iter`, `is_empty`, `windows`,
+    /// and so on) to work with the tokens.
+    pub fn tokens(&self) -> &[Token] {
+        &self.tokens
     }
 
-    /// Returns `true` if the container has no tokens.
-    pub fn is_empty(&self) -> bool {
-        self.tokens.is_empty()
+    /// Returns the per-token identifiers of the source each token was
+    /// scanned from.
+    ///
+    /// The slice has the same length as [`tokens`](Self::tokens); index
+    /// `i` refers to the same token as `tokens()[i]`.
+    pub fn source_ids(&self) -> &[SourceId] {
+        &self.source_ids
     }
 
-    /// Returns the token at `index`.
+    /// Returns the per-token origins.
     ///
-    /// # Panics
-    ///
-    /// Panics if `index >= self.len()`.
-    pub fn token(&self, index: usize) -> Token {
-        self.tokens[index]
-    }
-
-    /// Returns the [`TokenKind`] of the token at `index`.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `index >= self.len()`.
-    pub fn kind(&self, index: usize) -> TokenKind {
-        self.tokens[index].kind()
+    /// The slice has the same length as [`tokens`](Self::tokens); index
+    /// `i` refers to the same token as `tokens()[i]`.
+    pub fn origins(&self) -> &[Origin] {
+        &self.origins
     }
 
     /// Returns the substring of the source that the token at `index`
@@ -119,7 +116,7 @@ impl Preprocessed {
     ///
     /// # Panics
     ///
-    /// Panics if `index >= self.len()`.
+    /// Panics if `index >= self.tokens().len()`.
     pub fn text(&self, index: usize) -> &str {
         self.tokens[index].text(self.source_arcs[index].text())
     }
@@ -132,7 +129,7 @@ impl Preprocessed {
     ///
     /// # Panics
     ///
-    /// Panics if `index >= self.len()`.
+    /// Panics if `index >= self.tokens().len()`.
     pub fn value(&self, index: usize) -> TokenValue<'_> {
         self.tokens[index].value(self.source_arcs[index].text())
     }
@@ -141,7 +138,7 @@ impl Preprocessed {
     ///
     /// # Panics
     ///
-    /// Panics if `index >= self.len()`.
+    /// Panics if `index >= self.tokens().len()`.
     pub fn source_span(&self, index: usize) -> SourceSpan {
         SourceSpan::new(
             self.source_ids[index],
@@ -149,40 +146,13 @@ impl Preprocessed {
             self.tokens[index].end(),
         )
     }
-
-    /// Returns the [`SourceId`] the token at `index` belongs to.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `index >= self.len()`.
-    pub fn source_id(&self, index: usize) -> SourceId {
-        self.source_ids[index]
-    }
-
-    /// Returns the [`Origin`] of the token at `index`.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `index >= self.len()`.
-    pub fn origin(&self, index: usize) -> &Origin {
-        &self.origins[index]
-    }
-
-    /// Returns an iterator over the token stream.
-    ///
-    /// The iterator yields raw [`Token`]s; use the other accessor
-    /// methods on this container to obtain text, value, span or origin
-    /// for each token index.
-    pub fn iter(&self) -> impl Iterator<Item = Token> + '_ {
-        self.tokens.iter().copied()
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    use erl_tokenize::{Position, scan_token};
+    use erl_tokenize::{Position, TokenKind, scan_token};
 
     use crate::origin::Origin;
     use crate::source::Source;
@@ -208,12 +178,12 @@ mod tests {
             out.append(token, source_id, Origin::Source);
         }
 
-        assert_eq!(out.len(), 3);
+        assert_eq!(out.tokens().len(), 3);
         assert_eq!(out.text(0), "foo");
         assert_eq!(out.text(1), " ");
         assert_eq!(out.text(2), "bar");
-        assert!(out.kind(1).is_hidden());
-        assert!(!out.kind(0).is_hidden());
+        assert!(out.tokens()[1].kind().is_hidden());
+        assert!(!out.tokens()[0].kind().is_hidden());
     }
 
     #[test]
@@ -227,7 +197,7 @@ mod tests {
             out.append(token, source_id, Origin::Source);
         }
 
-        assert_eq!(out.len(), 1);
+        assert_eq!(out.tokens().len(), 1);
         assert_eq!(out.text(0), "'日本語'");
         match out.value(0) {
             TokenValue::Atom(atom) => assert_eq!(atom.as_ref(), "日本語"),
@@ -246,7 +216,7 @@ mod tests {
             out.append(token, source_id, Origin::Source);
         }
 
-        let kinds: Vec<_> = (0..out.len()).map(|i| out.kind(i)).collect();
+        let kinds: Vec<_> = out.tokens().iter().map(|t| t.kind()).collect();
         assert_eq!(
             kinds,
             [TokenKind::Comment, TokenKind::Whitespace, TokenKind::Atom]
@@ -280,9 +250,9 @@ mod tests {
             );
         }
 
-        let last = out.len() - 1;
-        assert!(matches!(out.origin(last), Origin::Predefined(_)));
-        assert_eq!(out.source_id(last), pseudo);
+        let last = out.tokens().len() - 1;
+        assert!(matches!(out.origins()[last], Origin::Predefined(_)));
+        assert_eq!(out.source_ids()[last], pseudo);
         assert_eq!(out.text(last), "\"main.erl\"");
         match out.value(last) {
             TokenValue::String(cow) => assert_eq!(cow.as_ref(), "main.erl"),
@@ -330,18 +300,17 @@ mod tests {
     }
 
     #[test]
-    fn iter_yields_all_tokens_in_order() {
+    fn tokens_slice_matches_append_order() {
         let store = Arc::new(SourceStore::new());
         let text = "a b c";
         let source_id = store.append(Source::new("m.erl", text));
 
+        let scanned = scan_all(text);
         let mut out = Preprocessed::new(Arc::clone(&store));
-        for token in scan_all(text) {
+        for token in scanned.iter().copied() {
             out.append(token, source_id, Origin::Source);
         }
 
-        let collected: Vec<_> = out.iter().map(|t| t.kind()).collect();
-        let expected: Vec<_> = (0..out.len()).map(|i| out.kind(i)).collect();
-        assert_eq!(collected, expected);
+        assert_eq!(out.tokens(), scanned.as_slice());
     }
 }
