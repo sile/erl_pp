@@ -73,6 +73,16 @@ impl Cursor {
         self.source_id
     }
 
+    /// Returns the source text the cursor walks.
+    ///
+    /// Callers pass this string to [`erl_tokenize::Token::text`] or
+    /// [`erl_tokenize::Token::value`] to decode a token that this
+    /// cursor produced.
+    #[allow(dead_code, reason = "consulted by preprocessor internals to be added")]
+    pub(crate) fn source_text(&self) -> &str {
+        self.source.text()
+    }
+
     /// Returns `Some(position)` when the cursor is waiting for a
     /// [`resume`](Self::resume) call after emitting a
     /// [`LexicalError`]. The position is the resume point suggested by
