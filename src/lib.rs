@@ -18,6 +18,7 @@ pub use crate::origin::Origin;
 pub use crate::preprocessed::Preprocessed;
 pub use crate::source::{Source, SourceId, SourceSpan, SourceStore};
 
+mod cursor;
 mod error;
 mod origin;
 mod preprocessed;
