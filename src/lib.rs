@@ -13,6 +13,7 @@
 //!
 //! - [Erlang Reference Manual -- Preprocessor](https://www.erlang.org/doc/system/macros.html)
 #![warn(missing_docs)]
+#![forbid(unsafe_code)]
 
 pub use crate::directive::{
     DefineDirective, Directive, ElseDirective, EndifDirective, ErrorDirective, IfdefDirective,
