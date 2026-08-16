@@ -24,6 +24,11 @@ use crate::source::{Source, SourceId, SourceSpan};
 /// A `Cursor` is created with the [`SourceId`] of the source it walks
 /// and an [`Arc<Source>`] handle so it never has to re-query the
 /// [`crate::SourceStore`] during scanning.
+///
+/// `Cursor` derives [`Clone`] so that a state machine can fork its
+/// scanning state; the clone owns an independent lookahead queue and
+/// resume state.
+#[derive(Clone)]
 pub(crate) struct Cursor {
     source_id: SourceId,
     source: Arc<Source>,
