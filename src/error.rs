@@ -7,10 +7,10 @@
 //!   macro/include/conditional variants). It is the payload of
 //!   `Action::PreprocessError`.
 //! - [`ProtocolError`] describes caller mistakes when driving the
-//!   state machine (double response, wrong request id, calling
-//!   `next_action` while a request is pending, and so on). It is
-//!   returned as `Err` from `next_action` and from the response
-//!   methods.
+//!   state machine (calling `next_action` while the machine is
+//!   awaiting a response, calling the wrong response method, and so
+//!   on). It is returned as `Err` from `next_action` and from the
+//!   response methods.
 //!
 //! The internal [`LexicalError`] emitted by the source cursor and the
 //! internal [`ParseError`] emitted by the directive parser stay
@@ -91,29 +91,18 @@ pub(crate) enum ParseFailure {
 /// An input-derived error that the preprocessor surfaced through the
 /// action stream.
 ///
-/// Every variant carries a [`SourceSpan`] anchoring the failure to a
-/// specific position in a specific source, plus variant-specific
-/// details. This type replaces exposing the crate-internal lexical
-/// and parse error types directly; the crate uses `From` conversions
-/// to move an internal error into this public shape at the API
-/// boundary.
-#[derive(Debug, Clone)]
-pub struct PreprocessError {
-    /// Where the failure was located.
-    pub span: SourceSpan,
-    /// What kind of failure it was.
-    pub kind: PreprocessErrorKind,
-}
-
-/// The concrete kind of a [`PreprocessError`].
+/// Every variant carries the source span at which the failure was
+/// located, alongside variant-specific details.
 ///
 /// Future work adds more variants (macro expansion, include reject,
 /// conditional syntax) as the corresponding parts of the preprocessor
 /// come online.
 #[derive(Debug, Clone)]
-pub enum PreprocessErrorKind {
+pub enum PreprocessError {
     /// The tokenizer failed to scan a token.
     Lexical {
+        /// Span at which the failing scan started.
+        span: SourceSpan,
         /// Underlying tokenizer error kind.
         error_kind: ErrorKind,
         /// Position the cursor can be resumed at.
@@ -122,6 +111,8 @@ pub enum PreprocessErrorKind {
     /// The directive parser committed to a known directive but its
     /// structure did not match.
     Parse {
+        /// Span covering the directive's opening `-`.
+        directive_start: SourceSpan,
         /// Human-readable description of what was expected.
         expected: String,
         /// What the parser actually saw at the point of failure.
@@ -130,7 +121,11 @@ pub enum PreprocessErrorKind {
 }
 
 /// The concrete failure the parser hit. Used as the `actual` field
-/// of [`PreprocessErrorKind::Parse`].
+/// of [`PreprocessError::Parse`].
+///
+/// Lexical failures that surface inside directive parsing are routed
+/// to [`PreprocessError::Lexical`] by the state machine, so this enum
+/// only covers structural mismatches.
 #[derive(Debug, Clone)]
 pub enum PreprocessParseFailure {
     /// An unexpected token was found.
@@ -142,25 +137,14 @@ pub enum PreprocessParseFailure {
     },
     /// The source ended before the directive was complete.
     UnexpectedEof,
-    /// The cursor surfaced a lexical error while parsing the directive.
-    Lexical {
-        /// Span of the failing scan.
-        span: SourceSpan,
-        /// Underlying tokenizer error kind.
-        error_kind: ErrorKind,
-        /// Position the cursor can be resumed at.
-        resume_position: Position,
-    },
 }
 
 impl From<LexicalError> for PreprocessError {
     fn from(e: LexicalError) -> Self {
-        Self {
+        PreprocessError::Lexical {
             span: e.span,
-            kind: PreprocessErrorKind::Lexical {
-                error_kind: e.kind,
-                resume_position: e.resume_position,
-            },
+            error_kind: e.kind,
+            resume_position: e.resume_position,
         }
     }
 }
@@ -172,18 +156,15 @@ impl From<ParseError> for PreprocessError {
                 PreprocessParseFailure::UnexpectedToken { span, kind }
             }
             ParseFailure::UnexpectedEof => PreprocessParseFailure::UnexpectedEof,
-            ParseFailure::Lexical(boxed) => PreprocessParseFailure::Lexical {
-                span: boxed.span,
-                error_kind: boxed.kind,
-                resume_position: boxed.resume_position,
-            },
+            ParseFailure::Lexical(_) => unreachable!(
+                "lexical failures inside directive parsing are routed to \
+                 PreprocessError::Lexical by the state machine before conversion",
+            ),
         };
-        Self {
-            span: e.directive_start,
-            kind: PreprocessErrorKind::Parse {
-                expected: e.expected,
-                actual,
-            },
+        PreprocessError::Parse {
+            directive_start: e.directive_start,
+            expected: e.expected,
+            actual,
         }
     }
 }
@@ -191,15 +172,8 @@ impl From<ParseError> for PreprocessError {
 /// Caller-driven-mistake error returned from response methods and from
 /// `next_action` when the caller uses the state machine's protocol
 /// incorrectly.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProtocolError {
-    /// What was wrong with the call.
-    pub kind: ProtocolErrorKind,
-}
-
-/// The concrete kind of a [`ProtocolError`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProtocolErrorKind {
+pub enum ProtocolError {
     /// A response method was called while the machine was not
     /// awaiting any response.
     UnexpectedResponse,

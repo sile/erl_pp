@@ -21,7 +21,7 @@ use erl_tokenize::{Position, Symbol, Token, TokenKind};
 use crate::action::Action;
 use crate::cursor::Cursor;
 use crate::directive::parse_directive;
-use crate::error::{LexicalError, ParseFailure, ProtocolError, ProtocolErrorKind};
+use crate::error::{LexicalError, ParseFailure, ProtocolError};
 use crate::origin::Origin;
 use crate::preprocessed::Preprocessed;
 use crate::source::{Source, SourceStore};
@@ -93,7 +93,7 @@ enum State {
 /// Returned by [`Preprocessor::status`]. Payload for awaiting variants
 /// is deliberately empty: the payload of the last action already
 /// carries the information the caller needs to respond (e.g.
-/// [`crate::PreprocessErrorKind::Lexical`] carries the resume
+/// [`crate::PreprocessError::Lexical`] carries the resume
 /// position).
 #[derive(Debug, Clone)]
 pub enum Status {
@@ -169,16 +169,14 @@ impl Preprocessor {
 
     /// Advances the state machine and returns one [`Action`].
     ///
-    /// Returns `Err(ProtocolError { kind: NextActionWhilePending })`
-    /// when the machine is awaiting a response; the caller must
-    /// respond before calling this method again.
+    /// Returns `Err(ProtocolError::NextActionWhilePending)` when the
+    /// machine is awaiting a response; the caller must respond before
+    /// calling this method again.
     pub fn next_action(&mut self) -> Result<Action, ProtocolError> {
         match self.state {
             State::AwaitingLexicalResume
             | State::AwaitingIncludeResolution
-            | State::AwaitingConditionalDecision => Err(ProtocolError {
-                kind: ProtocolErrorKind::NextActionWhilePending,
-            }),
+            | State::AwaitingConditionalDecision => Err(ProtocolError::NextActionWhilePending),
             State::Completed => Ok(Action::Complete),
             State::Scanning => Ok(self.step_scan()),
         }
@@ -187,9 +185,9 @@ impl Preprocessor {
     /// Resumes scanning after a lexical error.
     ///
     /// `at_position` is typically the `resume_position` carried on
-    /// the [`crate::PreprocessErrorKind::Lexical`] payload of the
-    /// most recent [`Action::PreprocessError`], but any position
-    /// strictly after the failing scan is accepted.
+    /// the [`crate::PreprocessError::Lexical`] variant of the most
+    /// recent [`Action::PreprocessError`], but any position strictly
+    /// after the failing scan is accepted.
     pub fn resume_lexical(&mut self, at_position: Position) -> Result<(), ProtocolError> {
         match self.state {
             State::AwaitingLexicalResume => {
@@ -198,13 +196,9 @@ impl Preprocessor {
                 Ok(())
             }
             State::AwaitingIncludeResolution | State::AwaitingConditionalDecision => {
-                Err(ProtocolError {
-                    kind: ProtocolErrorKind::WrongResponseKind,
-                })
+                Err(ProtocolError::WrongResponseKind)
             }
-            State::Scanning | State::Completed => Err(ProtocolError {
-                kind: ProtocolErrorKind::UnexpectedResponse,
-            }),
+            State::Scanning | State::Completed => Err(ProtocolError::UnexpectedResponse),
         }
     }
 
@@ -330,7 +324,7 @@ mod tests {
     use super::*;
 
     use crate::directive::Directive;
-    use crate::error::PreprocessErrorKind;
+    use crate::error::PreprocessError;
 
     fn make(text: &str) -> Preprocessor {
         Preprocessor::new(Source::new("main.erl", text))
@@ -462,19 +456,18 @@ mod tests {
         // trailing `unterminated` then scans as a plain atom.
         let mut pp = make("\"unterminated");
         let resume_position = match pp.next_action().unwrap() {
-            Action::PreprocessError(err) => match err.kind {
-                PreprocessErrorKind::Lexical {
-                    resume_position, ..
-                } => resume_position,
-                other => panic!("expected lexical kind, got {other:?}"),
-            },
-            other => panic!("expected PreprocessError, got {other:?}"),
+            Action::PreprocessError(PreprocessError::Lexical {
+                resume_position, ..
+            }) => resume_position,
+            other => panic!("expected PreprocessError::Lexical, got {other:?}"),
         };
         // status reflects the awaiting state.
         assert!(matches!(pp.status(), Status::AwaitingLexicalResume));
         // next_action while awaiting should fail with ProtocolError.
-        let err = pp.next_action().unwrap_err();
-        assert_eq!(err.kind, ProtocolErrorKind::NextActionWhilePending);
+        assert_eq!(
+            pp.next_action().unwrap_err(),
+            ProtocolError::NextActionWhilePending
+        );
         // Resume with the suggested position; scanning continues past
         // the bad character.
         pp.resume_lexical(resume_position).unwrap();
@@ -492,8 +485,10 @@ mod tests {
     #[test]
     fn resume_without_pending_is_protocol_error() {
         let mut pp = make("foo");
-        let err = pp.resume_lexical(Position::new()).unwrap_err();
-        assert_eq!(err.kind, ProtocolErrorKind::UnexpectedResponse);
+        assert_eq!(
+            pp.resume_lexical(Position::new()).unwrap_err(),
+            ProtocolError::UnexpectedResponse
+        );
     }
 
     #[test]
@@ -502,17 +497,16 @@ mod tests {
         // a second resume_lexical is treated as UnexpectedResponse.
         let mut pp = make("\"oops");
         let resume_position = match pp.next_action().unwrap() {
-            Action::PreprocessError(err) => match err.kind {
-                PreprocessErrorKind::Lexical {
-                    resume_position, ..
-                } => resume_position,
-                other => panic!("expected lexical, got {other:?}"),
-            },
-            other => panic!("expected PreprocessError, got {other:?}"),
+            Action::PreprocessError(PreprocessError::Lexical {
+                resume_position, ..
+            }) => resume_position,
+            other => panic!("expected PreprocessError::Lexical, got {other:?}"),
         };
         pp.resume_lexical(resume_position).unwrap();
-        let err = pp.resume_lexical(resume_position).unwrap_err();
-        assert_eq!(err.kind, ProtocolErrorKind::UnexpectedResponse);
+        assert_eq!(
+            pp.resume_lexical(resume_position).unwrap_err(),
+            ProtocolError::UnexpectedResponse
+        );
     }
 
     #[test]

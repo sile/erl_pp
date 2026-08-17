@@ -21,9 +21,7 @@ pub use crate::directive::{
     IfndefDirective, IncludeDirective, IncludeLibDirective, Param, UndefDirective,
     WarningDirective,
 };
-pub use crate::error::{
-    PreprocessError, PreprocessErrorKind, PreprocessParseFailure, ProtocolError, ProtocolErrorKind,
-};
+pub use crate::error::{PreprocessError, PreprocessParseFailure, ProtocolError};
 pub use crate::origin::Origin;
 pub use crate::preprocessed::Preprocessed;
 pub use crate::preprocessor::{Preprocessor, Status};
