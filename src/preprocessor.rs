@@ -2,12 +2,14 @@
 //!
 //! [`Preprocessor`] owns a [`Cursor`], a shared [`SourceStore`], an
 //! append-only [`Preprocessed`] output container, and a small state
-//! for pending requests. Callers drive the machine one action at a
-//! time with [`Preprocessor::next_action`] and, when the machine
-//! surfaces a request that only the caller can answer (a lexical
-//! recovery point today; include and conditional requests in later
-//! work), respond through one of the response methods before calling
-//! `next_action` again.
+//! variable that tracks whether the machine is currently awaiting a
+//! response. Callers drive the machine one action at a time with
+//! [`Preprocessor::next_action`] and, when the machine surfaces an
+//! action that leaves it awaiting (a lexical recovery point today;
+//! include and conditional responses in later work), respond through
+//! one of the response methods before calling `next_action` again.
+//! [`Preprocessor::status`] reports the current state without
+//! advancing it.
 //!
 //! This module intentionally does no I/O and holds no runtime, path,
 //! or logging dependency.
@@ -16,7 +18,7 @@ use std::sync::Arc;
 
 use erl_tokenize::{Position, Symbol, Token, TokenKind};
 
-use crate::action::{Action, RequestId};
+use crate::action::Action;
 use crate::cursor::Cursor;
 use crate::directive::parse_directive;
 use crate::error::{LexicalError, ParseFailure, ProtocolError, ProtocolErrorKind};
@@ -31,9 +33,11 @@ use crate::source::{Source, SourceStore};
 /// 1. Create with [`Preprocessor::new`] and an initial [`Source`].
 /// 2. Call [`next_action`](Self::next_action) repeatedly; every call
 ///    returns exactly one [`Action`].
-/// 3. When an action carries a pending request, respond through the
-///    matching method (currently [`resume_lexical`](Self::resume_lexical))
-///    before calling `next_action` again.
+/// 3. When an action leaves the machine awaiting a response, invoke
+///    the matching response method (currently
+///    [`resume_lexical`](Self::resume_lexical)) before calling
+///    `next_action` again. Use [`status`](Self::status) to inspect
+///    what response, if any, is expected.
 /// 4. When [`Action::Complete`] is returned, later `next_action`
 ///    calls keep returning `Action::Complete`. Call
 ///    [`into_preprocessed`](Self::into_preprocessed) to take ownership
@@ -55,8 +59,6 @@ pub struct Preprocessor {
     preprocessed: Preprocessed,
     /// State-machine state.
     state: State,
-    /// Monotonic counter used to allocate [`RequestId`]s.
-    next_request_id: u32,
     /// `true` when the cursor stands at a form boundary and the next
     /// scan step should attempt directive recognition.
     ///
@@ -74,53 +76,42 @@ enum State {
     /// Default state: `next_action` runs the scan loop.
     Scanning,
     /// A lexical error was surfaced; caller must call
-    /// [`Preprocessor::resume_lexical`] with the associated
-    /// [`RequestId`] to continue.
-    LexicalErrorPending {
-        request_id: RequestId,
-        /// The resume position suggested by the tokenizer. Callers
-        /// typically pass this back to `resume_lexical` unchanged.
-        suggested_resume_position: Position,
-    },
+    /// [`Preprocessor::resume_lexical`] to continue.
+    AwaitingLexicalResume,
     /// Placeholder for future include response handling.
     #[allow(dead_code, reason = "constructed by later include work")]
-    IncludeRequestPending { request_id: RequestId },
+    AwaitingIncludeResolution,
     /// Placeholder for future conditional response handling.
     #[allow(dead_code, reason = "constructed by later conditional work")]
-    ConditionalRequestPending { request_id: RequestId },
+    AwaitingConditionalDecision,
     /// The input has been fully processed.
     Completed,
 }
 
-/// Snapshot of a pending request that the caller must answer.
+/// Public view of the preprocessor's state.
 ///
-/// Obtained via [`Preprocessor::pending_request`]. This is a read-only
-/// view; call the appropriate response method to advance state.
+/// Returned by [`Preprocessor::status`]. Payload for awaiting variants
+/// is deliberately empty: the payload of the last action already
+/// carries the information the caller needs to respond (e.g.
+/// [`crate::PreprocessErrorKind::Lexical`] carries the resume
+/// position).
 #[derive(Debug, Clone)]
-pub struct PendingRequest {
-    /// Identifier of the pending request.
-    pub request_id: RequestId,
-    /// Kind of the pending request, with any hint the state machine
-    /// carries for the caller (e.g. a suggested resume position for
-    /// lexical errors).
-    pub kind: PendingRequestKind,
-}
-
-/// Kind of pending request.
-///
-/// The variants track the preprocessor's internal pending states.
-/// Later work adds `Include` and `Conditional` variants when the
-/// corresponding request infrastructure is wired up.
-#[derive(Debug, Clone)]
-pub enum PendingRequestKind {
-    /// The cursor hit a lexical error. Caller may respond with
-    /// [`Preprocessor::resume_lexical`] to continue scanning at
-    /// `suggested_resume_position` (or any later position).
-    Lexical {
-        /// Resume position suggested by the tokenizer. Guaranteed to
-        /// be strictly after the failing scan.
-        suggested_resume_position: Position,
-    },
+pub enum Status {
+    /// The machine is ready to advance; call
+    /// [`Preprocessor::next_action`] for the next event.
+    Scanning,
+    /// The machine paused after a lexical error and expects
+    /// [`Preprocessor::resume_lexical`] before it can advance again.
+    AwaitingLexicalResume,
+    /// The machine paused waiting for an include to be resolved.
+    /// Reserved for future work; not produced in this release.
+    AwaitingIncludeResolution,
+    /// The machine paused waiting for a conditional-branch decision.
+    /// Reserved for future work; not produced in this release.
+    AwaitingConditionalDecision,
+    /// All input has been consumed; further `next_action` calls
+    /// return [`Action::Complete`].
+    Completed,
 }
 
 impl Preprocessor {
@@ -140,7 +131,6 @@ impl Preprocessor {
             include_stack: Vec::new(),
             preprocessed,
             state: State::Scanning,
-            next_request_id: 0,
             at_form_boundary: true,
         }
     }
@@ -163,35 +153,30 @@ impl Preprocessor {
         self.preprocessed
     }
 
-    /// Returns the pending request, if any.
-    pub fn pending_request(&self) -> Option<PendingRequest> {
+    /// Reports the current state of the state machine.
+    ///
+    /// This is a read-only view; call the appropriate response method
+    /// to advance state.
+    pub fn status(&self) -> Status {
         match self.state {
-            State::LexicalErrorPending {
-                request_id,
-                suggested_resume_position,
-            } => Some(PendingRequest {
-                request_id,
-                kind: PendingRequestKind::Lexical {
-                    suggested_resume_position,
-                },
-            }),
-            State::Scanning
-            | State::IncludeRequestPending { .. }
-            | State::ConditionalRequestPending { .. }
-            | State::Completed => None,
+            State::Scanning => Status::Scanning,
+            State::AwaitingLexicalResume => Status::AwaitingLexicalResume,
+            State::AwaitingIncludeResolution => Status::AwaitingIncludeResolution,
+            State::AwaitingConditionalDecision => Status::AwaitingConditionalDecision,
+            State::Completed => Status::Completed,
         }
     }
 
     /// Advances the state machine and returns one [`Action`].
     ///
     /// Returns `Err(ProtocolError { kind: NextActionWhilePending })`
-    /// when a request is pending; the caller must respond before
-    /// calling this method again.
+    /// when the machine is awaiting a response; the caller must
+    /// respond before calling this method again.
     pub fn next_action(&mut self) -> Result<Action, ProtocolError> {
         match self.state {
-            State::LexicalErrorPending { .. }
-            | State::IncludeRequestPending { .. }
-            | State::ConditionalRequestPending { .. } => Err(ProtocolError {
+            State::AwaitingLexicalResume
+            | State::AwaitingIncludeResolution
+            | State::AwaitingConditionalDecision => Err(ProtocolError {
                 kind: ProtocolErrorKind::NextActionWhilePending,
             }),
             State::Completed => Ok(Action::Complete),
@@ -201,29 +186,18 @@ impl Preprocessor {
 
     /// Resumes scanning after a lexical error.
     ///
-    /// `at_position` is typically the `suggested_resume_position`
-    /// reported by [`pending_request`](Self::pending_request), but any
-    /// position strictly after the failing scan is accepted.
-    pub fn resume_lexical(
-        &mut self,
-        request_id: RequestId,
-        at_position: Position,
-    ) -> Result<(), ProtocolError> {
+    /// `at_position` is typically the `resume_position` carried on
+    /// the [`crate::PreprocessErrorKind::Lexical`] payload of the
+    /// most recent [`Action::PreprocessError`], but any position
+    /// strictly after the failing scan is accepted.
+    pub fn resume_lexical(&mut self, at_position: Position) -> Result<(), ProtocolError> {
         match self.state {
-            State::LexicalErrorPending {
-                request_id: expected,
-                ..
-            } => {
-                if expected != request_id {
-                    return Err(ProtocolError {
-                        kind: ProtocolErrorKind::UnknownRequestId,
-                    });
-                }
+            State::AwaitingLexicalResume => {
                 self.cursor.resume(at_position);
                 self.state = State::Scanning;
                 Ok(())
             }
-            State::IncludeRequestPending { .. } | State::ConditionalRequestPending { .. } => {
+            State::AwaitingIncludeResolution | State::AwaitingConditionalDecision => {
                 Err(ProtocolError {
                     kind: ProtocolErrorKind::WrongResponseKind,
                 })
@@ -269,10 +243,9 @@ impl Preprocessor {
                         // A lexical failure that surfaced inside
                         // parse_directive left the cursor in the
                         // pending-resume state. Recognise it and set
-                        // up our own pending-request bookkeeping so
-                        // callers can recover with resume_lexical
-                        // identically to the direct-scan lexical
-                        // error path.
+                        // up our own awaiting bookkeeping so callers
+                        // can recover with resume_lexical identically
+                        // to the direct-scan lexical error path.
                         if let ParseFailure::Lexical(boxed_lex) = pe.actual {
                             return self.emit_lexical_error(*boxed_lex);
                         }
@@ -295,20 +268,15 @@ impl Preprocessor {
         }
     }
 
-    /// Records pending-resume bookkeeping for a lexical error and
-    /// returns the action that surfaces it to the caller.
+    /// Marks the machine as awaiting a lexical resume and returns
+    /// the action that surfaces the error to the caller.
     ///
     /// Called from both the direct scan path and the parse-directive
     /// path so that a lexical failure recovered inside the directive
     /// parser reaches the caller with the same resume protocol as a
     /// bare scan failure.
     fn emit_lexical_error(&mut self, lex_err: LexicalError) -> Action {
-        let resume_position = lex_err.resume_position;
-        let request_id = self.allocate_request_id();
-        self.state = State::LexicalErrorPending {
-            request_id,
-            suggested_resume_position: resume_position,
-        };
+        self.state = State::AwaitingLexicalResume;
         Action::PreprocessError(lex_err.into())
     }
 
@@ -325,14 +293,6 @@ impl Preprocessor {
             _ => {}
         }
     }
-
-    fn allocate_request_id(&mut self) -> RequestId {
-        let index = self.next_request_id;
-        self.next_request_id = index
-            .checked_add(1)
-            .expect("Preprocessor issued more than u32::MAX requests");
-        RequestId::from_index(index)
-    }
 }
 
 // Manual Clone: the fork shares the SourceStore but starts a fresh
@@ -346,7 +306,6 @@ impl Clone for Preprocessor {
             include_stack: self.include_stack.clone(),
             preprocessed: Preprocessed::new(Arc::clone(&self.sources)),
             state: self.state.clone(),
-            next_request_id: self.next_request_id,
             at_form_boundary: self.at_form_boundary,
         }
     }
@@ -361,7 +320,6 @@ impl std::fmt::Debug for Preprocessor {
             .field("include_stack_depth", &self.include_stack.len())
             .field("preprocessed_len", &self.preprocessed.tokens().len())
             .field("state", &self.state)
-            .field("next_request_id", &self.next_request_id)
             .field("at_form_boundary", &self.at_form_boundary)
             .finish()
     }
@@ -397,6 +355,7 @@ mod tests {
         let actions = drain(&mut pp);
         assert_eq!(actions.len(), 1);
         assert!(matches!(actions[0], Action::Complete));
+        assert!(matches!(pp.status(), Status::Completed));
     }
 
     #[test]
@@ -446,7 +405,6 @@ mod tests {
             }
         }
         assert!(!kinds.is_empty());
-        // Verify the `-` and `.` both surface.
         let has_hyphen = kinds
             .iter()
             .any(|k| matches!(k, TokenKind::Symbol(Symbol::Hyphen)));
@@ -491,7 +449,6 @@ mod tests {
                 other => panic!("unexpected action: {other:?}"),
             }
         }
-        // `foo` + `.` + directive:endif + `bar` + `.` + complete
         assert!(description.iter().any(|s| s == "token:foo"));
         assert!(description.iter().any(|s| s == "token:bar"));
         assert!(description.iter().any(|s| s == "directive:endif"));
@@ -504,25 +461,24 @@ mod tests {
         // resume position skips past that single character and the
         // trailing `unterminated` then scans as a plain atom.
         let mut pp = make("\"unterminated");
-        match pp.next_action().unwrap() {
+        let resume_position = match pp.next_action().unwrap() {
             Action::PreprocessError(err) => match err.kind {
-                PreprocessErrorKind::Lexical { .. } => {}
+                PreprocessErrorKind::Lexical {
+                    resume_position, ..
+                } => resume_position,
                 other => panic!("expected lexical kind, got {other:?}"),
             },
             other => panic!("expected PreprocessError, got {other:?}"),
-        }
-        // next_action while pending should fail with ProtocolError.
+        };
+        // status reflects the awaiting state.
+        assert!(matches!(pp.status(), Status::AwaitingLexicalResume));
+        // next_action while awaiting should fail with ProtocolError.
         let err = pp.next_action().unwrap_err();
         assert_eq!(err.kind, ProtocolErrorKind::NextActionWhilePending);
-        // pending_request reflects the state.
-        let pending = pp.pending_request().expect("a request is pending");
-        let PendingRequestKind::Lexical {
-            suggested_resume_position,
-        } = pending.kind;
         // Resume with the suggested position; scanning continues past
         // the bad character.
-        pp.resume_lexical(pending.request_id, suggested_resume_position)
-            .unwrap();
+        pp.resume_lexical(resume_position).unwrap();
+        assert!(matches!(pp.status(), Status::Scanning));
         // The remaining `unterminated` scans as an atom, then EOF.
         let after = pp.next_action().unwrap();
         assert!(
@@ -534,27 +490,28 @@ mod tests {
     }
 
     #[test]
-    fn wrong_request_id_on_resume_is_protocol_error() {
-        let mut pp = make("\"oops");
-        let _ = pp.next_action().unwrap(); // PreprocessError
-        let bad_id = RequestId::from_index(999);
-        // Get the position from the pending request; use it with a
-        // bogus request id.
-        let PendingRequestKind::Lexical {
-            suggested_resume_position,
-        } = pp.pending_request().unwrap().kind;
-        let err = pp
-            .resume_lexical(bad_id, suggested_resume_position)
-            .unwrap_err();
-        assert_eq!(err.kind, ProtocolErrorKind::UnknownRequestId);
+    fn resume_without_pending_is_protocol_error() {
+        let mut pp = make("foo");
+        let err = pp.resume_lexical(Position::new()).unwrap_err();
+        assert_eq!(err.kind, ProtocolErrorKind::UnexpectedResponse);
     }
 
     #[test]
-    fn resume_without_pending_is_protocol_error() {
-        let mut pp = make("foo");
-        let err = pp
-            .resume_lexical(RequestId::from_index(0), Position::new())
-            .unwrap_err();
+    fn double_resume_is_protocol_error() {
+        // First response transitions the machine back to Scanning, so
+        // a second resume_lexical is treated as UnexpectedResponse.
+        let mut pp = make("\"oops");
+        let resume_position = match pp.next_action().unwrap() {
+            Action::PreprocessError(err) => match err.kind {
+                PreprocessErrorKind::Lexical {
+                    resume_position, ..
+                } => resume_position,
+                other => panic!("expected lexical, got {other:?}"),
+            },
+            other => panic!("expected PreprocessError, got {other:?}"),
+        };
+        pp.resume_lexical(resume_position).unwrap();
+        let err = pp.resume_lexical(resume_position).unwrap_err();
         assert_eq!(err.kind, ProtocolErrorKind::UnexpectedResponse);
     }
 
@@ -580,8 +537,6 @@ mod tests {
         let _ = fork.next_action().unwrap();
         let _ = fork.next_action().unwrap();
         let _ = fork.next_action().unwrap(); // Complete
-        // Fork read the same source from its own cursor state and
-        // appended everything from position where the fork was taken.
         assert_eq!(fork.preprocessed().tokens().len(), 2); // whitespace + bar
     }
 

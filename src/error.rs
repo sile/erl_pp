@@ -200,14 +200,14 @@ pub struct ProtocolError {
 /// The concrete kind of a [`ProtocolError`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProtocolErrorKind {
-    /// A response method was called but no request is pending.
+    /// A response method was called while the machine was not
+    /// awaiting any response.
     UnexpectedResponse,
-    /// The request id did not match the pending request.
-    UnknownRequestId,
-    /// The response kind did not match the pending request kind.
+    /// A response method was called that does not match what the
+    /// machine is awaiting (e.g. `resume_lexical` while awaiting an
+    /// include resolution).
     WrongResponseKind,
-    /// The same request received two responses.
-    DoubleResponse,
-    /// `next_action` was called while a request is pending.
+    /// `next_action` was called while the machine is awaiting a
+    /// response.
     NextActionWhilePending,
 }

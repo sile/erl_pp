@@ -15,9 +15,7 @@
 #![warn(missing_docs)]
 #![forbid(unsafe_code)]
 
-pub use crate::action::{
-    Action, BranchBoundary, ConditionalRequest, Diagnostic, IncludeRequest, RequestId,
-};
+pub use crate::action::{Action, BranchBoundary, ConditionalRequest, Diagnostic, IncludeRequest};
 pub use crate::directive::{
     DefineDirective, Directive, ElseDirective, EndifDirective, ErrorDirective, IfdefDirective,
     IfndefDirective, IncludeDirective, IncludeLibDirective, Param, UndefDirective,
@@ -28,7 +26,7 @@ pub use crate::error::{
 };
 pub use crate::origin::Origin;
 pub use crate::preprocessed::Preprocessed;
-pub use crate::preprocessor::{PendingRequest, PendingRequestKind, Preprocessor};
+pub use crate::preprocessor::{Preprocessor, Status};
 pub use crate::source::{Source, SourceId, SourceSpan, SourceStore};
 
 mod action;
