@@ -1,12 +1,28 @@
-//! Placeholder for preprocessor error types.
+//! Preprocessor error types.
 //!
-//! The full preprocessor error model is added by later work alongside
-//! the state machine. This module currently defines the internal
-//! errors emitted by the source cursor and the directive parser.
+//! The crate exposes two public error types:
+//!
+//! - [`PreprocessError`] wraps every input-derived failure the
+//!   preprocessor can surface as an action (lexical, parse, and later
+//!   macro/include/conditional variants). It is the payload of
+//!   `Action::PreprocessError`.
+//! - [`ProtocolError`] describes caller mistakes when driving the
+//!   state machine (calling `next_action` while the machine is
+//!   awaiting a response, calling the wrong response method, and so
+//!   on). It is returned as `Err` from `next_action` and from the
+//!   response methods.
+//!
+//! The internal [`LexicalError`] emitted by the source cursor and the
+//! internal [`ParseError`] emitted by the directive parser stay
+//! `pub(crate)`; they are turned into [`PreprocessError`] by `From`
+//! conversions when they cross the public API boundary.
 
 use erl_tokenize::{ErrorKind, Position, TokenKind};
 
 use crate::source::SourceSpan;
+
+// ---------------------------------------------------------------------------
+// crate-internal errors (produced by the cursor and the directive parser)
 
 /// Lexical error emitted by the source cursor when
 /// `erl_tokenize::scan_token` fails.
@@ -67,4 +83,105 @@ pub(crate) enum ParseFailure {
     ///
     /// Boxed to keep the enclosing [`ParseError`] small.
     Lexical(Box<LexicalError>),
+}
+
+// ---------------------------------------------------------------------------
+// public errors
+
+/// An input-derived error that the preprocessor surfaced through the
+/// action stream.
+///
+/// Every variant carries the source span at which the failure was
+/// located, alongside variant-specific details.
+///
+/// Future work adds more variants (macro expansion, include reject,
+/// conditional syntax) as the corresponding parts of the preprocessor
+/// come online.
+#[derive(Debug, Clone)]
+pub enum PreprocessError {
+    /// The tokenizer failed to scan a token.
+    Lexical {
+        /// Span at which the failing scan started.
+        span: SourceSpan,
+        /// Underlying tokenizer error kind.
+        error_kind: ErrorKind,
+        /// Position the cursor can be resumed at.
+        resume_position: Position,
+    },
+    /// The directive parser committed to a known directive but its
+    /// structure did not match.
+    Parse {
+        /// Span covering the directive's opening `-`.
+        directive_start: SourceSpan,
+        /// Human-readable description of what was expected.
+        expected: String,
+        /// What the parser actually saw at the point of failure.
+        actual: PreprocessParseFailure,
+    },
+}
+
+/// The concrete failure the parser hit. Used as the `actual` field
+/// of [`PreprocessError::Parse`].
+///
+/// Lexical failures that surface inside directive parsing are routed
+/// to [`PreprocessError::Lexical`] by the state machine, so this enum
+/// only covers structural mismatches.
+#[derive(Debug, Clone)]
+pub enum PreprocessParseFailure {
+    /// An unexpected token was found.
+    UnexpectedToken {
+        /// Span of the offending token.
+        span: SourceSpan,
+        /// Kind of the offending token.
+        kind: TokenKind,
+    },
+    /// The source ended before the directive was complete.
+    UnexpectedEof,
+}
+
+impl From<LexicalError> for PreprocessError {
+    fn from(e: LexicalError) -> Self {
+        PreprocessError::Lexical {
+            span: e.span,
+            error_kind: e.kind,
+            resume_position: e.resume_position,
+        }
+    }
+}
+
+impl From<ParseError> for PreprocessError {
+    fn from(e: ParseError) -> Self {
+        let actual = match e.actual {
+            ParseFailure::UnexpectedToken { span, kind } => {
+                PreprocessParseFailure::UnexpectedToken { span, kind }
+            }
+            ParseFailure::UnexpectedEof => PreprocessParseFailure::UnexpectedEof,
+            ParseFailure::Lexical(_) => unreachable!(
+                "lexical failures inside directive parsing are routed to \
+                 PreprocessError::Lexical by the state machine before conversion",
+            ),
+        };
+        PreprocessError::Parse {
+            directive_start: e.directive_start,
+            expected: e.expected,
+            actual,
+        }
+    }
+}
+
+/// Caller-driven-mistake error returned from response methods and from
+/// `next_action` when the caller uses the state machine's protocol
+/// incorrectly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProtocolError {
+    /// A response method was called while the machine was not
+    /// awaiting any response.
+    UnexpectedResponse,
+    /// A response method was called that does not match what the
+    /// machine is awaiting (e.g. `resume_lexical` while awaiting an
+    /// include resolution).
+    WrongResponseKind,
+    /// `next_action` was called while the machine is awaiting a
+    /// response.
+    NextActionWhilePending,
 }

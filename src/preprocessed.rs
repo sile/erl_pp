@@ -58,7 +58,8 @@ impl Preprocessed {
         }
     }
 
-    /// Appends a token together with its source and origin.
+    /// Appends a token together with its source and origin, and
+    /// returns the token index the append created.
     ///
     /// The three side tables are updated in a single call so their
     /// lengths cannot drift apart. This method is `pub(crate)` because
@@ -69,13 +70,14 @@ impl Preprocessed {
     ///
     /// Panics if `source_id` was not issued by the source store this
     /// container is backed by.
-    #[allow(dead_code, reason = "invoked by preprocessor internals to be added")]
-    pub(crate) fn append(&mut self, token: Token, source_id: SourceId, origin: Origin) {
+    pub(crate) fn append(&mut self, token: Token, source_id: SourceId, origin: Origin) -> usize {
         let source = self.sources.get(source_id);
+        let index = self.tokens.len();
         self.tokens.push(token);
         self.source_ids.push(source_id);
         self.source_arcs.push(source);
         self.origins.push(origin);
+        index
     }
 
     /// Returns a shared handle to the underlying source store.

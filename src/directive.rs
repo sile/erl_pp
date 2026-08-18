@@ -11,7 +11,7 @@
 //! The caller (the state machine) decides when to invoke this parser
 //! based on whether the cursor stands at a form boundary. The parser
 //! itself does not track form boundaries.
-#![allow(
+#![expect(
     clippy::result_large_err,
     reason = "ParseError deliberately carries structured span and failure info; \
               boxing every Result would add allocation overhead on every parse"
