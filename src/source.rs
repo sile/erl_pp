@@ -1,7 +1,8 @@
 //! Source text, source store, source identifier, and source span.
 //!
-//! These types form the storage layer that every token in [`crate::Preprocessed`]
-//! refers to. See the crate-level rustdoc for how they compose.
+//! These types form the storage layer that every
+//! [`crate::PreprocessedToken`] refers to. See the crate-level rustdoc
+//! for how they compose.
 
 use std::num::NonZeroU32;
 use std::sync::{Arc, RwLock};
@@ -75,7 +76,7 @@ impl Source {
 }
 
 /// Append-only store of [`Source`]s shared between a preprocessor and
-/// its output [`crate::Preprocessed`].
+/// the [`crate::PreprocessedToken`]s it emits.
 ///
 /// A store is designed to be wrapped in an [`Arc`] and shared with any
 /// preprocessor forks. Appending is done through a `&self` method with
@@ -152,9 +153,10 @@ impl SourceStore {
 
 /// Half-open range within a specific [`Source`].
 ///
-/// This is the common shape used by [`crate::Preprocessed`] helpers and,
-/// where needed, by later error, include, conditional, and diagnostic
-/// APIs so that ad hoc types do not proliferate.
+/// This is the common shape used by
+/// [`crate::PreprocessedToken::source_span`] and, where needed, by
+/// later error, include, conditional, and diagnostic APIs so that ad
+/// hoc types do not proliferate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SourceSpan {
     /// Identifier of the source that this span lies in.

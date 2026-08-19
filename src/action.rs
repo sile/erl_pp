@@ -1,14 +1,14 @@
 //! Actions produced by the preprocessor state machine.
 //!
 //! [`crate::Preprocessor::next_action`] returns one [`Action`] at a
-//! time. Callers consume the action, look up any related token in the
-//! [`crate::Preprocessed`] container, and — when the action leaves the
+//! time. Callers consume the action and — when the action leaves the
 //! machine awaiting a response — invoke the matching response method
 //! before calling `next_action` again. [`crate::Preprocessor::status`]
 //! reports which response (if any) the machine is currently awaiting.
 
 use crate::directive::Directive;
 use crate::error::PreprocessError;
+use crate::preprocessed_token::PreprocessedToken;
 
 /// One-shot output of [`crate::Preprocessor::next_action`].
 ///
@@ -20,22 +20,22 @@ use crate::error::PreprocessError;
 /// expected.
 #[derive(Debug, Clone)]
 pub enum Action {
-    /// A token was appended to the output container.
+    /// A token was scanned from the input.
     ///
-    /// The token itself, its span, and its origin are available via
-    /// [`crate::Preprocessed`] indexed by `index`.
-    Token {
-        /// Index into [`crate::Preprocessed`].
-        index: usize,
-    },
+    /// The bundled [`PreprocessedToken`] carries the token itself, the
+    /// [`crate::Source`] it came from, its [`crate::SourceSpan`], and
+    /// its [`crate::Origin`]. Callers that need the whole stream keep
+    /// their own accumulator; the preprocessor does not retain scanned
+    /// tokens.
+    Token(PreprocessedToken),
 
     /// A preprocessor directive was observed.
     ///
     /// The directive tokens are consumed from the source; they are
-    /// not appended to [`crate::Preprocessed`]. Downstream effects
-    /// (macro table updates, include resolution, conditional
-    /// selection, diagnostic emission) are the caller's or later
-    /// work's responsibility.
+    /// not streamed as [`Action::Token`]. Downstream effects (macro
+    /// table updates, include resolution, conditional selection,
+    /// diagnostic emission) are the caller's or later work's
+    /// responsibility.
     Directive(Directive),
 
     /// The preprocessor needs the caller to resolve an include.

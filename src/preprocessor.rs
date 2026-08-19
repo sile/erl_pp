@@ -1,15 +1,19 @@
 //! Sans-I/O preprocessor state machine.
 //!
-//! [`Preprocessor`] owns a [`Cursor`], a shared [`SourceStore`], an
-//! append-only [`Preprocessed`] output container, and a small state
-//! variable that tracks whether the machine is currently awaiting a
-//! response. Callers drive the machine one action at a time with
-//! [`Preprocessor::next_action`] and, when the machine surfaces an
-//! action that leaves it awaiting (a lexical recovery point today;
+//! [`Preprocessor`] owns a [`Cursor`], a shared [`SourceStore`], and a
+//! small state variable that tracks whether the machine is currently
+//! awaiting a response. Callers drive the machine one action at a time
+//! with [`Preprocessor::next_action`] and, when the machine surfaces
+//! an action that leaves it awaiting (a lexical recovery point today;
 //! include and conditional responses in later work), respond through
 //! one of the response methods before calling `next_action` again.
 //! [`Preprocessor::status`] reports the current state without
 //! advancing it.
+//!
+//! The preprocessor does not retain scanned tokens; each
+//! [`crate::Action::Token`] carries a self-contained
+//! [`PreprocessedToken`] and the caller keeps whatever accumulator
+//! they need.
 //!
 //! This module intentionally does no I/O and holds no runtime, path,
 //! or logging dependency.
@@ -23,7 +27,7 @@ use crate::cursor::Cursor;
 use crate::directive::parse_directive;
 use crate::error::{LexicalError, ParseFailure, ProtocolError};
 use crate::origin::Origin;
-use crate::preprocessed::Preprocessed;
+use crate::preprocessed_token::PreprocessedToken;
 use crate::source::{Source, SourceStore};
 
 /// Sans-I/O preprocessor state machine.
@@ -39,14 +43,15 @@ use crate::source::{Source, SourceStore};
 ///    `next_action` again. Use [`status`](Self::status) to inspect
 ///    what response, if any, is expected.
 /// 4. When [`Action::Complete`] is returned, later `next_action`
-///    calls keep returning `Action::Complete`. Call
-///    [`into_preprocessed`](Self::into_preprocessed) to take ownership
-///    of the finished output container.
+///    calls keep returning `Action::Complete`.
+///
+/// The preprocessor does not retain scanned tokens; each
+/// [`Action::Token`] carries a self-contained [`PreprocessedToken`]
+/// and the caller keeps whatever accumulator they need.
 ///
 /// The preprocessor implements [`Clone`] so that state machine forks
 /// (used by later conditional-branching work) can drive the two sides
-/// independently. The clone shares the [`SourceStore`] but starts a
-/// fresh, empty output container.
+/// independently. The clone shares the [`SourceStore`].
 pub struct Preprocessor {
     sources: Arc<SourceStore>,
     /// Cursor for the source currently being scanned.
@@ -55,8 +60,6 @@ pub struct Preprocessor {
     /// Placeholder for future include support; not populated in this
     /// release.
     include_stack: Vec<Cursor>,
-    /// Output container. Shares its `Arc<SourceStore>` with `self.sources`.
-    preprocessed: Preprocessed,
     /// State-machine state.
     state: State,
     /// `true` when the cursor stands at a form boundary and the next
@@ -124,12 +127,10 @@ impl Preprocessor {
         let source_id = sources.append(source);
         let arc_source = sources.get(source_id);
         let cursor = Cursor::new(source_id, arc_source);
-        let preprocessed = Preprocessed::new(Arc::clone(&sources));
         Self {
             sources,
             cursor,
             include_stack: Vec::new(),
-            preprocessed,
             state: State::Scanning,
             at_form_boundary: true,
         }
@@ -138,19 +139,6 @@ impl Preprocessor {
     /// Returns a shared handle to the underlying source store.
     pub fn sources(&self) -> &Arc<SourceStore> {
         &self.sources
-    }
-
-    /// Returns the output container built so far.
-    pub fn preprocessed(&self) -> &Preprocessed {
-        &self.preprocessed
-    }
-
-    /// Consumes the preprocessor and returns the accumulated output
-    /// container.
-    ///
-    /// Typically called after [`Action::Complete`].
-    pub fn into_preprocessed(self) -> Preprocessed {
-        self.preprocessed
     }
 
     /// Reports the current state of the state machine.
@@ -251,10 +239,13 @@ impl Preprocessor {
             match self.cursor.bump() {
                 Some(Ok(token)) => {
                     self.update_form_boundary_after_bump(token);
-                    let index =
-                        self.preprocessed
-                            .append(token, self.cursor.source_id(), Origin::Source);
-                    return Action::Token { index };
+                    let ppt = PreprocessedToken::new(
+                        token,
+                        Arc::clone(self.cursor.source()),
+                        self.cursor.source_id(),
+                        Origin::Source,
+                    );
+                    return Action::Token(ppt);
                 }
                 Some(Err(lex_err)) => return self.emit_lexical_error(lex_err),
                 None => continue,
@@ -289,30 +280,23 @@ impl Preprocessor {
     }
 }
 
-// Manual Clone: the fork shares the SourceStore but starts a fresh
-// empty Preprocessed. Deriving Clone would duplicate the accumulated
-// output, which is not what a state-machine fork wants.
 impl Clone for Preprocessor {
     fn clone(&self) -> Self {
         Self {
             sources: Arc::clone(&self.sources),
             cursor: self.cursor.clone(),
             include_stack: self.include_stack.clone(),
-            preprocessed: Preprocessed::new(Arc::clone(&self.sources)),
             state: self.state.clone(),
             at_form_boundary: self.at_form_boundary,
         }
     }
 }
 
-// Manual Debug so users can `dbg!(preprocessor)` without printing the
-// whole Preprocessed contents (which can be very large).
 impl std::fmt::Debug for Preprocessor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Preprocessor")
             .field("sources_len", &self.sources.len())
             .field("include_stack_depth", &self.include_stack.len())
-            .field("preprocessed_len", &self.preprocessed.tokens().len())
             .field("state", &self.state)
             .field("at_form_boundary", &self.at_form_boundary)
             .finish()
@@ -361,24 +345,21 @@ mod tests {
     }
 
     #[test]
-    fn tokens_are_appended_and_indexed() {
+    fn tokens_are_streamed_in_order() {
         let mut pp = make("foo bar");
-        let mut indices = Vec::new();
+        let mut streamed = Vec::new();
         loop {
             match pp.next_action().unwrap() {
-                Action::Token { index } => indices.push(index),
+                Action::Token(ppt) => streamed.push(ppt),
                 Action::Complete => break,
                 other => panic!("unexpected action: {other:?}"),
             }
         }
         // foo, whitespace, bar
-        assert_eq!(indices, [0, 1, 2]);
-        assert_eq!(pp.preprocessed().tokens().len(), 3);
-        assert_eq!(pp.preprocessed().text(0), "foo");
-        assert_eq!(pp.preprocessed().text(1), " ");
-        assert_eq!(pp.preprocessed().text(2), "bar");
+        let texts: Vec<&str> = streamed.iter().map(|t| t.text()).collect();
+        assert_eq!(texts, ["foo", " ", "bar"]);
         assert!(matches!(
-            pp.preprocessed().origins()[0],
+            streamed[0].origin(),
             crate::origin::Origin::Source
         ));
     }
@@ -392,7 +373,7 @@ mod tests {
         let mut kinds = Vec::new();
         loop {
             match pp.next_action().unwrap() {
-                Action::Token { index } => kinds.push(pp.preprocessed().tokens()[index].kind()),
+                Action::Token(ppt) => kinds.push(ppt.token().kind()),
                 Action::Complete => break,
                 Action::Directive(_) => panic!("should not recognise -module"),
                 other => panic!("unexpected action: {other:?}"),
@@ -411,12 +392,11 @@ mod tests {
     #[test]
     fn recognised_directive_becomes_action() {
         let mut pp = make("-endif.");
-        let action = pp.next_action().unwrap();
-        assert!(matches!(action, Action::Directive(Directive::Endif(_))));
+        let first = pp.next_action().unwrap();
+        assert!(matches!(first, Action::Directive(Directive::Endif(_))));
+        // Directive tokens are consumed by the parser, not streamed.
         let complete = pp.next_action().unwrap();
         assert!(matches!(complete, Action::Complete));
-        // No tokens were appended (directives are not appended).
-        assert_eq!(pp.preprocessed().tokens().len(), 0);
     }
 
     #[test]
@@ -425,14 +405,7 @@ mod tests {
         let mut description = Vec::new();
         loop {
             match pp.next_action().unwrap() {
-                Action::Token { index } => description.push(format!(
-                    "token:{}",
-                    pp.preprocessed().tokens()[index].text(
-                        pp.sources()
-                            .get(pp.preprocessed().source_ids()[index])
-                            .text()
-                    )
-                )),
+                Action::Token(ppt) => description.push(format!("token:{}", ppt.text())),
                 Action::Directive(Directive::Endif(_)) => {
                     description.push("directive:endif".into())
                 }
@@ -475,7 +448,7 @@ mod tests {
         // The remaining `unterminated` scans as an atom, then EOF.
         let after = pp.next_action().unwrap();
         assert!(
-            matches!(after, Action::Token { .. }),
+            matches!(after, Action::Token(_)),
             "expected token action after resume, got {after:?}"
         );
         let last = pp.next_action().unwrap();
@@ -510,36 +483,35 @@ mod tests {
     }
 
     #[test]
-    fn clone_shares_store_and_forks_output() {
+    fn clone_shares_store_and_advances_independently() {
+        // Take the first token from pp, then fork. pp and fork share
+        // the SourceStore but their cursors advance independently.
         let mut pp = make("foo bar");
-        let action = pp.next_action().unwrap();
-        assert!(matches!(action, Action::Token { .. }));
-        assert_eq!(pp.preprocessed().tokens().len(), 1);
+        let first = pp.next_action().unwrap();
+        assert!(matches!(first, Action::Token(_)));
 
         let mut fork = pp.clone();
-        // The fork starts with an empty Preprocessed but the same store.
-        assert_eq!(fork.preprocessed().tokens().len(), 0);
         assert!(Arc::ptr_eq(pp.sources(), fork.sources()));
 
-        // Both continue independently.
-        let _ = pp.next_action().unwrap();
-        let _ = pp.next_action().unwrap();
-        let _ = pp.next_action().unwrap(); // Complete
-        assert_eq!(pp.preprocessed().tokens().len(), 3);
+        let pp_tokens = collect_token_texts(&mut pp);
+        let fork_tokens = collect_token_texts(&mut fork);
 
-        let _ = fork.next_action().unwrap();
-        let _ = fork.next_action().unwrap();
-        let _ = fork.next_action().unwrap();
-        let _ = fork.next_action().unwrap(); // Complete
-        assert_eq!(fork.preprocessed().tokens().len(), 2); // whitespace + bar
+        // pp already emitted `foo`; the remainder is ` ` and `bar`.
+        assert_eq!(pp_tokens, [" ", "bar"]);
+        // The fork resumes from the same cursor position pp had at
+        // clone time.
+        assert_eq!(fork_tokens, [" ", "bar"]);
     }
 
-    #[test]
-    fn into_preprocessed_returns_the_container() {
-        let mut pp = make("foo");
-        while !matches!(pp.next_action().unwrap(), Action::Complete) {}
-        let pre = pp.into_preprocessed();
-        assert_eq!(pre.tokens().len(), 1);
-        assert_eq!(pre.text(0), "foo");
+    fn collect_token_texts(pp: &mut Preprocessor) -> Vec<String> {
+        let mut out = Vec::new();
+        loop {
+            match pp.next_action().unwrap() {
+                Action::Token(ppt) => out.push(ppt.text().to_string()),
+                Action::Complete => break,
+                other => panic!("unexpected action: {other:?}"),
+            }
+        }
+        out
     }
 }

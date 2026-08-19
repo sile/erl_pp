@@ -88,6 +88,12 @@ impl Cursor {
         self.source.text()
     }
 
+    /// Returns a shared handle to the source the cursor walks.
+    #[allow(dead_code, reason = "consulted by preprocessor internals to be added")]
+    pub(crate) fn source(&self) -> &Arc<Source> {
+        &self.source
+    }
+
     /// Returns `Some(position)` when the cursor is waiting for a
     /// [`resume`](Self::resume) call after emitting a
     /// [`LexicalError`]. The position is the resume point suggested by
