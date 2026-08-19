@@ -72,10 +72,7 @@ pub enum Event {
 
     /// An input-derived error surfaced.
     ///
-    /// See [`PreprocessError`] for the concrete failure kinds. If the
-    /// failure was a lexical error, the caller may respond with
-    /// [`crate::Preprocessor::resume_lexical`] to continue scanning at
-    /// the `resume_position` carried on the error.
+    /// See [`PreprocessError`] for the concrete failure kinds.
     PreprocessError(PreprocessError),
 
     /// The whole input has been processed.

@@ -3,12 +3,17 @@
 //! [`Preprocessor`] owns a [`Cursor`], a shared [`SourceStore`], and a
 //! small state variable that tracks whether the machine is currently
 //! awaiting a response. Callers drive the machine one step at a time
-//! with [`Preprocessor::step`] and, when the returned event leaves
-//! the machine awaiting a response (a lexical recovery point today;
-//! include and conditional responses in later work), respond through
-//! one of the response methods before calling `step` again.
-//! [`Preprocessor::status`] reports the current state without
-//! advancing it.
+//! with [`Preprocessor::step`] and, when the returned event leaves the
+//! machine awaiting a response (include and conditional responses in
+//! later work), respond through one of the response methods before
+//! calling `step` again. [`Preprocessor::status`] reports the current
+//! state without advancing it.
+//!
+//! The preprocessor consumes pre-scanned [`Source`] token streams;
+//! tokenization is the caller's responsibility (scan with
+//! [`erl_tokenize::scan_token`] and hand the resulting tokens to
+//! [`Source::new`]). Lexical errors surface only when the caller
+//! scans, never through [`Preprocessor::step`].
 //!
 //! The preprocessor does not retain scanned tokens; each
 //! [`crate::Event::Token`] carries a self-contained
@@ -25,11 +30,11 @@
 
 use std::sync::Arc;
 
-use erl_tokenize::{Position, Symbol, Token, TokenKind};
+use erl_tokenize::{Symbol, Token, TokenKind};
 
 use crate::cursor::Cursor;
 use crate::directive::{Directive, parse_directive};
-use crate::error::{LexicalError, ParseFailure, PreprocessError, ProtocolError};
+use crate::error::{PreprocessError, ProtocolError};
 use crate::event::Event;
 use crate::macros::{MacroDefinition, MacroTable};
 use crate::origin::Origin;
@@ -44,10 +49,9 @@ use crate::source::{Source, SourceStore};
 /// 2. Call [`step`](Self::step) repeatedly; every call advances the
 ///    machine by one transition and returns exactly one [`Event`].
 /// 3. When the returned event leaves the machine awaiting a response,
-///    invoke the matching response method (currently
-///    [`resume_lexical`](Self::resume_lexical)) before calling
-///    `step` again. Use [`status`](Self::status) to inspect what
-///    response, if any, is expected.
+///    invoke the matching response method before calling `step` again.
+///    Use [`status`](Self::status) to inspect what response, if any, is
+///    expected.
 /// 4. When [`Event::Complete`] is returned, later `step` calls keep
 ///    returning `Event::Complete`.
 ///
@@ -86,9 +90,6 @@ pub struct Preprocessor {
 enum State {
     /// Default state: `step` runs the scan loop.
     Scanning,
-    /// A lexical error was surfaced; caller must call
-    /// [`Preprocessor::resume_lexical`] to continue.
-    AwaitingLexicalResume,
     /// Placeholder for future include response handling.
     #[expect(dead_code, reason = "constructed by later include work")]
     AwaitingIncludeResolution,
@@ -103,17 +104,12 @@ enum State {
 ///
 /// Returned by [`Preprocessor::status`]. Payload for awaiting variants
 /// is deliberately empty: the payload of the last event already
-/// carries the information the caller needs to respond (e.g.
-/// [`crate::PreprocessError::Lexical`] carries the resume
-/// position).
+/// carries the information the caller needs to respond.
 #[derive(Debug, Clone)]
 pub enum Status {
     /// The machine is ready to advance; call
     /// [`Preprocessor::step`] for the next event.
     Scanning,
-    /// The machine paused after a lexical error and expects
-    /// [`Preprocessor::resume_lexical`] before it can advance again.
-    AwaitingLexicalResume,
     /// The machine paused waiting for an include to be resolved.
     /// Reserved for future work; not produced in this release.
     AwaitingIncludeResolution,
@@ -162,48 +158,37 @@ impl Preprocessor {
         &self.macros
     }
 
-    /// Registers an initial macro from a full `-define(...)` directive
-    /// text.
+    /// Registers an initial macro from a pre-scanned `-define(...)`
+    /// [`Source`].
     ///
-    /// The text is scanned in a fresh pseudo source appended to the
-    /// preprocessor's [`SourceStore`]; no direct `SourceStore` mutation
-    /// is exposed to the caller. Typically called before the first
-    /// [`step`](Self::step). When called mid-stream it simply adds a
-    /// definition to the current macro table.
+    /// The source is appended to the preprocessor's [`SourceStore`]
+    /// and parsed as a single `-define(...).` directive. Typically
+    /// called before the first [`step`](Self::step). When called
+    /// mid-stream it simply adds a definition to the current macro
+    /// table.
     ///
-    /// Returns `Err(PreprocessError::Parse)` when the text does not
-    /// parse as a `-define(...).` directive, or the underlying
-    /// [`PreprocessError`] when the definition itself is invalid
-    /// (duplicate parameter, etc.).
-    pub fn define_initial<S>(&mut self, directive_text: S) -> Result<(), PreprocessError>
-    where
-        S: AsRef<str>,
-    {
-        let text = directive_text.as_ref();
-        let source_id = self
-            .sources
-            .append_pseudo("<initial macro>", text.to_owned());
-        let source = self.sources.get(source_id);
-        let mut cursor = Cursor::new(source_id, Arc::clone(&source));
+    /// Returns `Err(PreprocessError::Parse)` when the source does not
+    /// parse as a `-define(...).` directive, or
+    /// [`PreprocessError::MacroDefinition`] when the definition
+    /// itself is invalid (duplicate parameter, etc.).
+    pub fn define_initial(&mut self, source: Source) -> Result<(), PreprocessError> {
+        let source_id = self.sources.append(source);
+        let source_arc = self.sources.get(source_id);
+        let mut cursor = Cursor::new(source_id, Arc::clone(&source_arc));
         let parsed = match parse_directive(&mut cursor) {
             Ok(Some(d)) => d,
             Ok(None) => {
                 return Err(PreprocessError::Parse {
                     directive_start: crate::source::SourceSpan::new(
                         source_id,
-                        Position::new(),
-                        Position::new(),
+                        erl_tokenize::Position::new(),
+                        erl_tokenize::Position::new(),
                     ),
                     expected: "-define directive".to_owned(),
                     actual: crate::error::PreprocessParseFailure::UnexpectedEof,
                 });
             }
-            Err(pe) => {
-                if let ParseFailure::Lexical(boxed) = pe.actual {
-                    return Err(PreprocessError::from(*boxed));
-                }
-                return Err(pe.into());
-            }
+            Err(pe) => return Err(pe.into()),
         };
         let define = match parsed {
             Directive::Define(d) => d,
@@ -213,13 +198,13 @@ impl Preprocessor {
                     expected: "-define directive".to_owned(),
                     actual: crate::error::PreprocessParseFailure::UnexpectedToken {
                         span: directive_span_of(&other),
-                        kind: erl_tokenize::TokenKind::Symbol(Symbol::Hyphen),
+                        kind: TokenKind::Symbol(Symbol::Hyphen),
                     },
                 });
             }
         };
         let origin = Origin::Predefined(Arc::new(Origin::Source));
-        let def = MacroDefinition::from_directive(&define, source, source_id, origin)?;
+        let def = MacroDefinition::from_directive(&define, source_arc, source_id, origin)?;
         self.macros.insert(def);
         Ok(())
     }
@@ -231,7 +216,6 @@ impl Preprocessor {
     pub fn status(&self) -> Status {
         match self.state {
             State::Scanning => Status::Scanning,
-            State::AwaitingLexicalResume => Status::AwaitingLexicalResume,
             State::AwaitingIncludeResolution => Status::AwaitingIncludeResolution,
             State::AwaitingConditionalDecision => Status::AwaitingConditionalDecision,
             State::Completed => Status::Completed,
@@ -245,31 +229,11 @@ impl Preprocessor {
     /// calling this method again.
     pub fn step(&mut self) -> Result<Event, ProtocolError> {
         match self.state {
-            State::AwaitingLexicalResume
-            | State::AwaitingIncludeResolution
-            | State::AwaitingConditionalDecision => Err(ProtocolError::StepWhilePending),
+            State::AwaitingIncludeResolution | State::AwaitingConditionalDecision => {
+                Err(ProtocolError::StepWhilePending)
+            }
             State::Completed => Ok(Event::Complete),
             State::Scanning => Ok(self.step_scan()),
-        }
-    }
-
-    /// Resumes scanning after a lexical error.
-    ///
-    /// `at_position` is typically the `resume_position` carried on
-    /// the [`crate::PreprocessError::Lexical`] variant of the most
-    /// recent [`Event::PreprocessError`], but any position strictly
-    /// after the failing scan is accepted.
-    pub fn resume_lexical(&mut self, at_position: Position) -> Result<(), ProtocolError> {
-        match self.state {
-            State::AwaitingLexicalResume => {
-                self.cursor.resume(at_position);
-                self.state = State::Scanning;
-                Ok(())
-            }
-            State::AwaitingIncludeResolution | State::AwaitingConditionalDecision => {
-                Err(ProtocolError::WrongResponseKind)
-            }
-            State::Scanning | State::Completed => Err(ProtocolError::UnexpectedResponse),
         }
     }
 
@@ -312,22 +276,13 @@ impl Preprocessor {
                     }
                     Err(pe) => {
                         self.at_form_boundary = false;
-                        // A lexical failure that surfaced inside
-                        // parse_directive left the cursor in the
-                        // pending-resume state. Recognise it and set
-                        // up our own awaiting bookkeeping so callers
-                        // can recover with resume_lexical identically
-                        // to the direct-scan lexical error path.
-                        if let ParseFailure::Lexical(boxed_lex) = pe.actual {
-                            return self.emit_lexical_error(*boxed_lex);
-                        }
                         return Event::PreprocessError(pe.into());
                     }
                 }
             }
 
             match self.cursor.bump() {
-                Ok(Some(token)) => {
+                Some(token) => {
                     self.update_form_boundary_after_bump(token);
                     let ppt = PreprocessedToken::new(
                         token,
@@ -337,22 +292,9 @@ impl Preprocessor {
                     );
                     return Event::Token(ppt);
                 }
-                Ok(None) => continue,
-                Err(lex_err) => return self.emit_lexical_error(lex_err),
+                None => continue,
             }
         }
-    }
-
-    /// Marks the machine as awaiting a lexical resume and returns
-    /// the event that surfaces the error to the caller.
-    ///
-    /// Called from both the direct scan path and the parse-directive
-    /// path so that a lexical failure recovered inside the directive
-    /// parser reaches the caller with the same resume protocol as a
-    /// bare scan failure.
-    fn emit_lexical_error(&mut self, lex_err: LexicalError) -> Event {
-        self.state = State::AwaitingLexicalResume;
-        Event::PreprocessError(lex_err.into())
     }
 
     fn apply_directive_effects(&mut self, directive: &Directive) -> Result<(), PreprocessError> {
@@ -435,7 +377,11 @@ mod tests {
     use crate::error::PreprocessError;
 
     fn make(text: &str) -> Preprocessor {
-        Preprocessor::new(Source::new("main.erl", text))
+        Preprocessor::new(Source::from_text("main.erl", text))
+    }
+
+    fn define_source(text: &str) -> Source {
+        Source::from_text("<initial macro>", text)
     }
 
     fn drain(pp: &mut Preprocessor) -> Vec<Event> {
@@ -554,68 +500,6 @@ mod tests {
     }
 
     #[test]
-    fn lexical_error_pauses_the_machine() {
-        // The bare `"` is a lexical failure; the tokenizer's suggested
-        // resume position skips past that single character and the
-        // trailing `unterminated` then scans as a plain atom.
-        let mut pp = make("\"unterminated");
-        let resume_position = match pp.step().expect("no protocol error") {
-            Event::PreprocessError(PreprocessError::Lexical {
-                resume_position, ..
-            }) => resume_position,
-            other => panic!("expected PreprocessError::Lexical, got {other:?}"),
-        };
-        // status reflects the awaiting state.
-        assert!(matches!(pp.status(), Status::AwaitingLexicalResume));
-        // step while awaiting should fail with ProtocolError.
-        assert_eq!(
-            pp.step().expect_err("protocol error expected"),
-            ProtocolError::StepWhilePending
-        );
-        // Resume with the suggested position; scanning continues past
-        // the bad character.
-        pp.resume_lexical(resume_position).expect("resume accepted");
-        assert!(matches!(pp.status(), Status::Scanning));
-        // The remaining `unterminated` scans as an atom, then EOF.
-        let after = pp.step().expect("no protocol error");
-        assert!(
-            matches!(after, Event::Token(_)),
-            "expected token event after resume, got {after:?}"
-        );
-        let last = pp.step().expect("no protocol error");
-        assert!(matches!(last, Event::Complete));
-    }
-
-    #[test]
-    fn resume_without_pending_is_protocol_error() {
-        let mut pp = make("foo");
-        assert_eq!(
-            pp.resume_lexical(Position::new())
-                .expect_err("protocol error expected"),
-            ProtocolError::UnexpectedResponse
-        );
-    }
-
-    #[test]
-    fn double_resume_is_protocol_error() {
-        // First response transitions the machine back to Scanning, so
-        // a second resume_lexical is treated as UnexpectedResponse.
-        let mut pp = make("\"oops");
-        let resume_position = match pp.step().expect("no protocol error") {
-            Event::PreprocessError(PreprocessError::Lexical {
-                resume_position, ..
-            }) => resume_position,
-            other => panic!("expected PreprocessError::Lexical, got {other:?}"),
-        };
-        pp.resume_lexical(resume_position).expect("resume accepted");
-        assert_eq!(
-            pp.resume_lexical(resume_position)
-                .expect_err("protocol error expected"),
-            ProtocolError::UnexpectedResponse
-        );
-    }
-
-    #[test]
     fn clone_shares_store_and_advances_independently() {
         // Take the first token from pp, then fork. pp and fork share
         // the SourceStore but their cursors advance independently.
@@ -703,9 +587,9 @@ mod tests {
     #[test]
     fn define_initial_registers_before_step() {
         let mut pp = make("");
-        pp.define_initial("-define(FOO, 1).")
+        pp.define_initial(define_source("-define(FOO, 1)."))
             .expect("valid define text");
-        pp.define_initial("-define(BAR(A), A).")
+        pp.define_initial(define_source("-define(BAR(A), A)."))
             .expect("valid define text");
         assert_eq!(pp.macros().len(), 2);
         assert!(pp.macros().get_constant("FOO").is_some());
@@ -717,7 +601,7 @@ mod tests {
     #[test]
     fn define_initial_uses_predefined_origin() {
         let mut pp = make("");
-        pp.define_initial("-define(FOO, 1).")
+        pp.define_initial(define_source("-define(FOO, 1)."))
             .expect("valid define text");
         let def = pp.macros().get_constant("FOO").expect("defined");
         assert!(matches!(def.origin, Origin::Predefined(_)));
@@ -728,7 +612,7 @@ mod tests {
         let mut pp = make("");
         // A recognised but non-define directive is rejected.
         let err = pp
-            .define_initial("-endif.")
+            .define_initial(define_source("-endif."))
             .expect_err("preprocess error expected");
         assert!(matches!(err, PreprocessError::Parse { .. }));
     }
@@ -741,10 +625,9 @@ mod tests {
 
         // Clone before original scans further.
         let mut clone = original.clone();
-        // Add another define into the clone by feeding it a fresh
-        // source through define_initial.
+        // Add another define into the clone.
         clone
-            .define_initial("-define(BAR, 2).")
+            .define_initial(define_source("-define(BAR, 2)."))
             .expect("valid define text");
 
         assert!(clone.macros().get_constant("BAR").is_some());

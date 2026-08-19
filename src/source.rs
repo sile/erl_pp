@@ -7,7 +7,7 @@
 use std::num::NonZeroU32;
 use std::sync::{Arc, RwLock};
 
-use erl_tokenize::Position;
+use erl_tokenize::{Position, Token};
 
 /// Identifier of a [`Source`] inside a [`SourceStore`].
 ///
@@ -34,25 +34,38 @@ impl SourceId {
     }
 }
 
-/// UTF-8 source text with a display name.
+/// UTF-8 source text with a display name and its pre-scanned token
+/// stream.
 ///
-/// A `Source` is immutable once constructed; its text is not appended to
-/// later. [`Source::clone`] shares the internal buffers without copying
-/// the text.
+/// A `Source` is immutable once constructed; its text and its token
+/// stream are not appended to later. [`Source::clone`] shares the
+/// internal buffers without copying the text or the tokens.
 ///
 /// The display name is an identifier (e.g. a file path, a URL, or an
 /// editor buffer name). It is not required to be an existing file path.
 /// Synthesized "pseudo" sources used for macro expansion also live here
 /// with a display name that marks them as synthesized.
+///
+/// Tokenization is the caller's responsibility. Scan `text` with
+/// [`erl_tokenize::scan_token`] (or a compatible tokenizer, or a
+/// shared cache) and pass the resulting [`Vec<Token>`] to
+/// [`Source::new`].
 #[derive(Debug, Clone)]
 pub struct Source {
     display_name: Arc<str>,
     text: Arc<str>,
+    tokens: Arc<Vec<Token>>,
 }
 
 impl Source {
-    /// Creates a source with the given display name and text.
-    pub fn new<N, T>(display_name: N, text: T) -> Self
+    /// Creates a source with the given display name, text, and
+    /// pre-scanned token stream.
+    ///
+    /// The tokens must have been scanned from `text` (their internal
+    /// offsets are indexed into that same string). No consistency
+    /// check is performed; passing tokens scanned from a different
+    /// text produces incorrect spans and decoded values.
+    pub fn new<N, T>(display_name: N, text: T, tokens: Vec<Token>) -> Self
     where
         N: Into<Arc<str>>,
         T: Into<Arc<str>>,
@@ -60,6 +73,7 @@ impl Source {
         Self {
             display_name: display_name.into(),
             text: text.into(),
+            tokens: Arc::new(tokens),
         }
     }
 
@@ -71,6 +85,41 @@ impl Source {
     /// Returns the source text.
     pub fn text(&self) -> &str {
         &self.text
+    }
+
+    /// Returns the pre-scanned token stream (in source order,
+    /// including hidden tokens like comments and whitespace).
+    pub fn tokens(&self) -> &[Token] {
+        &self.tokens
+    }
+}
+
+#[cfg(test)]
+impl Source {
+    /// Test-only convenience: scans `text` with
+    /// [`erl_tokenize::scan_token`] and returns a `Source`. Panics on
+    /// a lexical failure so tests do not need to name a well-formed
+    /// token stream inline.
+    pub(crate) fn from_text<N, T>(display_name: N, text: T) -> Self
+    where
+        N: Into<Arc<str>>,
+        T: Into<Arc<str>>,
+    {
+        let text = text.into();
+        let mut tokens = Vec::new();
+        let mut position = Position::new();
+        loop {
+            match erl_tokenize::scan_token(&text, position)
+                .expect("test input must scan without lex errors")
+            {
+                None => break,
+                Some(token) => {
+                    position = token.end();
+                    tokens.push(token);
+                }
+            }
+        }
+        Self::new(display_name, text, tokens)
     }
 }
 
@@ -105,19 +154,6 @@ impl SourceStore {
         let index = sources.len();
         sources.push(Arc::new(source));
         SourceId::from_index(index)
-    }
-
-    /// Appends a synthesized pseudo source and returns its identifier.
-    ///
-    /// The display name should mark the source as synthesized so that
-    /// callers can distinguish it from real files
-    /// (e.g. `"<synth:?FILE at main.erl:3>"`).
-    pub(crate) fn append_pseudo<N, T>(&self, display_name: N, text: T) -> SourceId
-    where
-        N: Into<Arc<str>>,
-        T: Into<Arc<str>>,
-    {
-        self.append(Source::new(display_name, text))
     }
 
     /// Returns a shared handle to the source with the given identifier.
@@ -181,10 +217,30 @@ mod tests {
 
     #[test]
     fn clone_shares_text() {
-        let src = Source::new("main.erl", "foo");
+        let src = Source::from_text("main.erl", "foo");
         let cloned = src.clone();
         assert!(std::ptr::eq(src.text(), cloned.text()));
         assert!(std::ptr::eq(src.display_name(), cloned.display_name()));
+        assert!(std::ptr::eq(
+            src.tokens().as_ptr(),
+            cloned.tokens().as_ptr()
+        ));
+    }
+
+    #[test]
+    fn from_text_scans_tokens() {
+        let src = Source::from_text("main.erl", "foo bar");
+        // foo, whitespace, bar
+        assert_eq!(src.tokens().len(), 3);
+    }
+
+    #[test]
+    fn new_accepts_external_tokens() {
+        // Same tokens as would come from from_text but constructed via
+        // Source::new to prove the two paths converge.
+        let scanned = Source::from_text("main.erl", "foo bar");
+        let by_new = Source::new("main.erl", "foo bar", scanned.tokens().to_vec());
+        assert_eq!(by_new.tokens().len(), scanned.tokens().len());
     }
 
     #[test]
@@ -192,8 +248,8 @@ mod tests {
         let store = SourceStore::new();
         assert!(store.is_empty());
 
-        let id_a = store.append(Source::new("a.erl", "a"));
-        let id_b = store.append(Source::new("b.erl", "bb"));
+        let id_a = store.append(Source::from_text("a.erl", "a"));
+        let id_b = store.append(Source::from_text("b.erl", "bb"));
         assert_ne!(id_a, id_b);
         assert_eq!(store.len(), 2);
 
@@ -203,22 +259,14 @@ mod tests {
     }
 
     #[test]
-    fn append_pseudo() {
-        let store = SourceStore::new();
-        let id = store.append_pseudo("<synth:?FILE at main.erl:3>", "\"main.erl\"");
-        assert_eq!(store.get(id).text(), "\"main.erl\"");
-        assert_eq!(store.get(id).display_name(), "<synth:?FILE at main.erl:3>");
-    }
-
-    #[test]
     fn stable_addresses_after_further_append() {
         let store = SourceStore::new();
-        let id = store.append(Source::new("a.erl", "hello"));
+        let id = store.append(Source::from_text("a.erl", "hello"));
         let first = store.get(id);
         let first_ptr = first.text().as_ptr();
 
         for i in 0..64 {
-            store.append(Source::new(format!("f{i}.erl"), format!("body {i}")));
+            store.append(Source::from_text(format!("f{i}.erl"), format!("body {i}")));
         }
 
         let after = store.get(id);
@@ -232,10 +280,10 @@ mod tests {
         let store = Arc::new(SourceStore::new());
         let fork = Arc::clone(&store);
 
-        let id = store.append(Source::new("main.erl", "-module(m)."));
+        let id = store.append(Source::from_text("main.erl", "-module(m)."));
         assert_eq!(fork.get(id).text(), "-module(m).");
 
-        let fork_id = fork.append(Source::new("inc.hrl", "-define(X, 1)."));
+        let fork_id = fork.append(Source::from_text("inc.hrl", "-define(X, 1)."));
         assert_eq!(store.get(fork_id).text(), "-define(X, 1).");
         assert_eq!(store.len(), 2);
         assert_eq!(fork.len(), 2);

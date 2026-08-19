@@ -14,6 +14,7 @@
 use std::cell::Cell;
 
 use erl_pp::{Event, PreprocessError, Preprocessor, Source};
+use erl_tokenize::{Position, Token, scan_token};
 use noprop::{
     Ratio, Runner, TestCaseContext, TestResult, sample_ascii_printable_char, sample_weighted_index,
     sample_with_boundaries,
@@ -179,7 +180,9 @@ fn inject_close_paren(ctx: &mut TestCaseContext, node: &mut Node) {
 
 fn parse_define_body(body: &str) -> Result<usize, DriveError> {
     let text = format!("-define(FOO, {body}).\n");
-    let mut pp = Preprocessor::new(Source::new("prop.erl", text));
+    let tokens = scan_all(&text).map_err(DriveError::Lexical)?;
+    let source = Source::new("prop.erl", text, tokens);
+    let mut pp = Preprocessor::new(source);
     match pp.step().map_err(DriveError::Protocol)? {
         Event::Directive(erl_pp::Directive::Define(def)) => Ok(def.replacement.len()),
         Event::PreprocessError(err) => Err(DriveError::Preprocess(Box::new(err))),
@@ -187,10 +190,21 @@ fn parse_define_body(body: &str) -> Result<usize, DriveError> {
     }
 }
 
+fn scan_all(text: &str) -> Result<Vec<Token>, erl_tokenize::Error> {
+    let mut tokens = Vec::new();
+    let mut position = Position::new();
+    while let Some(token) = scan_token(text, position)? {
+        position = token.end();
+        tokens.push(token);
+    }
+    Ok(tokens)
+}
+
 #[derive(Debug)]
 #[expect(dead_code, reason = "fields surface through Debug in failure messages")]
 enum DriveError {
     Preprocess(Box<PreprocessError>),
+    Lexical(erl_tokenize::Error),
     Protocol(erl_pp::ProtocolError),
     UnexpectedEvent(String),
 }
