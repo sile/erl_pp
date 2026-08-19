@@ -175,10 +175,10 @@ impl Preprocessor {
     /// parse as a `-define(...).` directive, or the underlying
     /// [`PreprocessError`] when the definition itself is invalid
     /// (duplicate parameter, etc.).
-    pub fn define_initial(
-        &mut self,
-        directive_text: impl AsRef<str>,
-    ) -> Result<(), PreprocessError> {
+    pub fn define_initial<S>(&mut self, directive_text: S) -> Result<(), PreprocessError>
+    where
+        S: AsRef<str>,
+    {
         let text = directive_text.as_ref();
         let source_id = self
             .sources
