@@ -18,7 +18,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use erl_tokenize::Token;
+use erl_tokenize::{Symbol, Token, TokenKind};
 
 use crate::directive::{DefineDirective, Param};
 use crate::error::{MacroDefinitionErrorKind, PreprocessError};
@@ -164,9 +164,16 @@ fn first_duplicate_param(params: &[Param]) -> Option<SourceString> {
 /// Exposed by [`crate::Preprocessor::macros`]. Modifications happen
 /// through directive processing and through the preprocessor's
 /// initialization API; the caller has no direct mutator.
+///
+/// Internally the table maintains a parallel "uses" map that records,
+/// for every stored definition, the `(name, arity)` macro references
+/// that its replacement body statically calls. This drives the OTP
+/// `check_uses/4`-style top-level DFS used for circular expansion
+/// detection.
 #[derive(Debug, Clone, Default)]
 pub struct MacroTable {
     entries: HashMap<MacroKey, MacroDefinition>,
+    uses: HashMap<MacroKey, Vec<(String, Option<usize>)>>,
 }
 
 impl MacroTable {
@@ -221,10 +228,32 @@ impl MacroTable {
         self.entries.keys().any(|k| k.name == name)
     }
 
+    /// Returns the statically collected macro references that the
+    /// definition for `key` calls from its replacement body.
+    ///
+    /// Used by circular-expansion detection.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "consumed by later work on circular expansion detection"
+        )
+    )]
+    pub(crate) fn uses_of(&self, key: &MacroKey) -> Option<&[(String, Option<usize>)]> {
+        self.uses.get(key).map(Vec::as_slice)
+    }
+
     /// Inserts `def`, returning the previous entry for the same key
     /// if one was replaced.
+    ///
+    /// Also refreshes the uses-map entry for the key with the
+    /// statically collected references from the new definition's
+    /// replacement body.
     pub(crate) fn insert(&mut self, def: MacroDefinition) -> Option<MacroDefinition> {
-        self.entries.insert(def.key.clone(), def)
+        let key = def.key.clone();
+        let uses = collect_uses(&def.replacement);
+        self.uses.insert(key.clone(), uses);
+        self.entries.insert(key, def)
     }
 
     /// Removes every entry whose key matches `name` (regardless of
@@ -232,11 +261,119 @@ impl MacroTable {
     ///
     /// This is the semantics of `-undef(NAME).`: OTP removes both the
     /// constant-like `NAME` and every function-like arity of `NAME`.
+    /// The uses-map entries for the removed keys are dropped in the
+    /// same step.
     pub(crate) fn remove_all_by_name(&mut self, name: &str) -> usize {
         let before = self.entries.len();
+        self.uses.retain(|k, _| k.name != name);
         self.entries.retain(|k, _| k.name != name);
         before - self.entries.len()
     }
+}
+
+fn collect_uses(replacement: &[PreprocessedToken]) -> Vec<(String, Option<usize>)> {
+    let lex: Vec<&PreprocessedToken> = replacement
+        .iter()
+        .filter(|pt| pt.token().kind().is_lexical())
+        .collect();
+
+    let mut uses = Vec::new();
+    let mut i = 0;
+    while i < lex.len() {
+        if !is_symbol(lex[i].token(), Symbol::Question) {
+            i += 1;
+            continue;
+        }
+        // Skip `??` stringification prefix.
+        if lex
+            .get(i + 1)
+            .is_some_and(|t| is_symbol(t.token(), Symbol::Question))
+        {
+            i += 2;
+            continue;
+        }
+        let Some(name_tok) = lex.get(i + 1) else {
+            break;
+        };
+        if !matches!(
+            name_tok.token().kind(),
+            TokenKind::Atom | TokenKind::Variable
+        ) {
+            i += 1;
+            continue;
+        }
+        let name = name_tok.text().to_owned();
+        let arity = if lex
+            .get(i + 2)
+            .is_some_and(|t| is_symbol(t.token(), Symbol::OpenParen))
+        {
+            let (arity, consumed) = count_call_args(&lex[i + 3..]);
+            uses.push((name, Some(arity)));
+            i += 3 + consumed;
+            continue;
+        } else {
+            None
+        };
+        uses.push((name, arity));
+        i += 2;
+    }
+    uses
+}
+
+fn is_symbol(token: &Token, sym: Symbol) -> bool {
+    matches!(token.kind(), TokenKind::Symbol(s) if s == sym)
+}
+
+/// Counts the top-level arguments inside a macro call whose opening
+/// `(` has already been consumed.
+///
+/// Returns `(arity, tokens_consumed)` where `tokens_consumed` covers
+/// every token up to and including the matching `)`. `arity` counts
+/// top-level `,`-separated groups (an empty balanced `()` is arity 0,
+/// a single group is arity 1, etc.).
+///
+/// This is a lightweight version that tracks paren-family balance
+/// (`( )`, `[ ]`, `{ }`, `<< >>`) but not `end`-terminated keyword
+/// blocks. It is used only for building the static uses graph; the
+/// runtime argument parser at call time is exact.
+fn count_call_args(rest: &[&PreprocessedToken]) -> (usize, usize) {
+    let mut depth = 0usize;
+    let mut has_content = false;
+    let mut commas = 0usize;
+    for (i, t) in rest.iter().enumerate() {
+        let kind = t.token().kind();
+        match kind {
+            TokenKind::Symbol(Symbol::OpenParen)
+            | TokenKind::Symbol(Symbol::OpenSquare)
+            | TokenKind::Symbol(Symbol::OpenBrace)
+            | TokenKind::Symbol(Symbol::DoubleLeftAngle) => {
+                depth += 1;
+                has_content = true;
+            }
+            TokenKind::Symbol(Symbol::CloseSquare)
+            | TokenKind::Symbol(Symbol::CloseBrace)
+            | TokenKind::Symbol(Symbol::DoubleRightAngle) => {
+                depth = depth.saturating_sub(1);
+            }
+            TokenKind::Symbol(Symbol::CloseParen) => {
+                if depth == 0 {
+                    let arity = if has_content { commas + 1 } else { 0 };
+                    return (arity, i + 1);
+                }
+                depth -= 1;
+            }
+            TokenKind::Symbol(Symbol::Comma) if depth == 0 => {
+                commas += 1;
+                has_content = true;
+            }
+            _ => {
+                has_content = true;
+            }
+        }
+    }
+    // Unbalanced — treat as arity 0 (best-effort static analysis).
+    let arity = if has_content { commas + 1 } else { 0 };
+    (arity, rest.len())
 }
 
 #[cfg(test)]
@@ -380,6 +517,51 @@ mod tests {
         table.insert(definition("-define(BAR, 1)."));
         assert_eq!(table.remove_all_by_name("FOO"), 0);
         assert_eq!(table.len(), 1);
+    }
+
+    #[test]
+    fn insert_populates_uses_map_for_constant_like_ref() {
+        let mut table = MacroTable::new();
+        // Body contains ?BAR (constant-like reference).
+        table.insert(definition("-define(FOO, ?BAR + 1)."));
+        let uses = table
+            .uses_of(&MacroKey::constant("FOO"))
+            .expect("uses recorded");
+        assert_eq!(uses, &[("BAR".to_owned(), None)]);
+    }
+
+    #[test]
+    fn insert_populates_uses_map_for_function_like_ref() {
+        let mut table = MacroTable::new();
+        // Body contains ?BAR(A, B) (function-like reference, arity 2).
+        table.insert(definition("-define(FOO(A, B), ?BAR(A, B) + 1)."));
+        let uses = table
+            .uses_of(&MacroKey::function("FOO", 2))
+            .expect("uses recorded");
+        assert_eq!(uses, &[("BAR".to_owned(), Some(2))]);
+    }
+
+    #[test]
+    fn stringification_ref_is_skipped_from_uses() {
+        let mut table = MacroTable::new();
+        // ??A is a stringification, not a macro use.
+        table.insert(definition("-define(FOO(A), ??A)."));
+        let uses = table
+            .uses_of(&MacroKey::function("FOO", 1))
+            .expect("uses recorded");
+        assert!(uses.is_empty());
+    }
+
+    #[test]
+    fn undef_drops_uses_entries() {
+        let mut table = MacroTable::new();
+        table.insert(definition("-define(FOO, ?BAR)."));
+        table.insert(definition("-define(FOO(X), ?BAR(X))."));
+        assert!(table.uses_of(&MacroKey::constant("FOO")).is_some());
+        assert!(table.uses_of(&MacroKey::function("FOO", 1)).is_some());
+        table.remove_all_by_name("FOO");
+        assert!(table.uses_of(&MacroKey::constant("FOO")).is_none());
+        assert!(table.uses_of(&MacroKey::function("FOO", 1)).is_none());
     }
 
     #[test]
