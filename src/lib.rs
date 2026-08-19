@@ -20,8 +20,11 @@ pub use crate::directive::{
     IfndefDirective, IncludeDirective, IncludeLibDirective, Param, UndefDirective,
     WarningDirective,
 };
-pub use crate::error::{PreprocessError, PreprocessParseFailure, ProtocolError};
+pub use crate::error::{
+    MacroDefinitionErrorKind, PreprocessError, PreprocessParseFailure, ProtocolError,
+};
 pub use crate::event::{BranchBoundary, ConditionalRequest, Diagnostic, Event, IncludeRequest};
+pub use crate::macros::{MacroDefinition, MacroKey, MacroTable};
 pub use crate::origin::Origin;
 pub use crate::preprocessed_token::PreprocessedToken;
 pub use crate::preprocessor::{Preprocessor, Status};
@@ -31,6 +34,7 @@ mod cursor;
 mod directive;
 mod error;
 mod event;
+mod macros;
 mod origin;
 mod preprocessed_token;
 mod preprocessor;

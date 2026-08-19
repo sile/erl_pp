@@ -117,6 +117,26 @@ pub enum PreprocessError {
         /// What the parser actually saw at the point of failure.
         actual: PreprocessParseFailure,
     },
+    /// A `-define(...)` directive's structure is rejected by the macro
+    /// table (duplicate parameter name, etc.).
+    MacroDefinition {
+        /// Span covering the whole directive.
+        span: SourceSpan,
+        /// What made the definition invalid.
+        kind: MacroDefinitionErrorKind,
+    },
+}
+
+/// Reasons a `-define(...)` directive is rejected by the macro table.
+#[derive(Debug, Clone)]
+pub enum MacroDefinitionErrorKind {
+    /// The parameter list repeats the same name.
+    DuplicateParameter {
+        /// The repeated parameter name.
+        name: String,
+        /// Span of the offending later occurrence.
+        span: SourceSpan,
+    },
 }
 
 /// The concrete failure the parser hit. Used as the `actual` field
