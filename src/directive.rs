@@ -601,16 +601,20 @@ fn parse_identifier(
 
 /// Collects every token (including hidden ones) up to but not
 /// including the closing `)` that matches the paren the caller has
-/// already consumed. Tracks nested parens, braces, and brackets so
-/// that commas or delimiters inside them do not terminate the collect
-/// prematurely.
+/// already consumed.
+///
+/// Uses 2-token lookahead on lexical tokens: only a `)` whose next
+/// lexical token is `.` terminates the collect. Intermediate `)`
+/// and any `[` / `{` / `<<` / `begin`...`end` delimiters are taken
+/// as-is and go into the replacement without depth tracking, matching
+/// how OTP's `epp:macro_expansion/2` (`stdlib/src/epp.erl`) and
+/// `efmt`'s `MacroReplacement::parse` scan the body of `-define`.
 fn collect_until_close_paren(
     cursor: &mut Cursor,
     source_id: SourceId,
     directive_start: &SourceSpan,
 ) -> Result<(Vec<Token>, Option<SourceSpan>), ParseError> {
     let mut tokens = Vec::new();
-    let mut depth: usize = 0;
     let mut span_start: Option<Position> = None;
     let mut span_end: Option<Position> = None;
 
@@ -622,18 +626,15 @@ fn collect_until_close_paren(
                 actual: ParseFailure::UnexpectedEof,
             });
         };
-        if depth == 0 && matches!(next.kind(), TokenKind::Symbol(Symbol::CloseParen)) {
+        if matches!(next.kind(), TokenKind::Symbol(Symbol::CloseParen))
+            && next_lexical_is_dot_after_close_paren(cursor, directive_start)?
+        {
             return Ok((
                 tokens,
                 span_start.map(|start| {
                     SourceSpan::new(source_id, start, span_end.expect("start implies end"))
                 }),
             ));
-        }
-        match next.kind() {
-            TokenKind::Symbol(Symbol::OpenParen) => depth += 1,
-            TokenKind::Symbol(Symbol::CloseParen) => depth -= 1,
-            _ => {}
         }
         // Track span over lexical tokens (start of first lexical to end of last lexical).
         if next.kind().is_lexical() {
@@ -645,6 +646,24 @@ fn collect_until_close_paren(
         tokens.push(next);
         bump_ok(cursor)?; // consume the peeked token
     }
+}
+
+/// Given a cursor whose next raw token is a `)`, returns `true` when
+/// the lexical token immediately following that `)` is `.` (i.e. the
+/// caller is looking at the closing `).` of the enclosing directive).
+/// Leaves the cursor position unchanged.
+fn next_lexical_is_dot_after_close_paren(
+    cursor: &mut Cursor,
+    directive_start: &SourceSpan,
+) -> Result<bool, ParseError> {
+    let checkpoint = cursor.checkpoint();
+    bump_ok(cursor)?; // consume the `)`
+    let result = matches!(
+        peek_lexical_ok(cursor, Some(directive_start))?,
+        Some(t) if t.kind() == TokenKind::Symbol(Symbol::Dot)
+    );
+    cursor.restore(checkpoint);
+    Ok(result)
 }
 
 // ---------------------------------------------------------------------------
@@ -1014,5 +1033,125 @@ mod tests {
         let mut cursor = Cursor::new(id, store.get(id));
         let d = parse_directive(&mut cursor).unwrap().unwrap();
         assert_eq!(d.span().source_id, id);
+    }
+
+    // ---------------------------------------------------------------
+    // 2-token lookahead regression: `)` inside `[` / `{` / `<<` /
+    // keyword blocks must not terminate the `-define` body prematurely.
+    // Only the outer `)` followed by `.` terminates.
+
+    fn define_of(text: &str) -> DefineDirective {
+        match parse_ok(text) {
+            Directive::Define(d) => d,
+            other => panic!("expected Define, got {other:?}"),
+        }
+    }
+
+    fn replacement_texts(def: &DefineDirective, source: &str) -> Vec<String> {
+        def.replacement
+            .iter()
+            .map(|t| t.text(source).to_owned())
+            .collect()
+    }
+
+    #[test]
+    fn define_body_close_paren_inside_brackets() {
+        let text = "-define(FOO, [ ) ]).";
+        let def = define_of(text);
+        assert_eq!(def.name.as_str(), "FOO");
+        let parts = replacement_texts(&def, text);
+        assert!(parts.iter().any(|s| s == "["));
+        assert!(parts.iter().any(|s| s == ")"));
+        assert!(parts.iter().any(|s| s == "]"));
+    }
+
+    #[test]
+    fn define_body_close_paren_inside_braces() {
+        let text = "-define(FOO, {a, )}).";
+        let def = define_of(text);
+        let parts = replacement_texts(&def, text);
+        assert!(parts.iter().any(|s| s == "{"));
+        assert!(parts.iter().any(|s| s == ")"));
+        assert!(parts.iter().any(|s| s == "}"));
+    }
+
+    #[test]
+    fn define_body_close_paren_inside_binary() {
+        let text = "-define(FOO, << 1, )>>).";
+        let def = define_of(text);
+        let parts = replacement_texts(&def, text);
+        assert!(parts.iter().any(|s| s == "<<"));
+        assert!(parts.iter().any(|s| s == ")"));
+        assert!(parts.iter().any(|s| s == ">>"));
+    }
+
+    #[test]
+    fn define_body_close_paren_inside_begin_block() {
+        let text = "-define(FOO, begin ) end).";
+        let def = define_of(text);
+        let parts = replacement_texts(&def, text);
+        assert!(parts.iter().any(|s| s == "begin"));
+        assert!(parts.iter().any(|s| s == ")"));
+        assert!(parts.iter().any(|s| s == "end"));
+    }
+
+    #[test]
+    fn define_body_close_paren_inside_if_block() {
+        let text = "-define(FOO, if ) end).";
+        let def = define_of(text);
+        let parts = replacement_texts(&def, text);
+        assert!(parts.iter().any(|s| s == "if"));
+        assert!(parts.iter().any(|s| s == ")"));
+        assert!(parts.iter().any(|s| s == "end"));
+    }
+
+    #[test]
+    fn define_body_close_paren_inside_case_block() {
+        let text = "-define(FOO, case ) end).";
+        let def = define_of(text);
+        let parts = replacement_texts(&def, text);
+        assert!(parts.iter().any(|s| s == "case"));
+        assert!(parts.iter().any(|s| s == ")"));
+        assert!(parts.iter().any(|s| s == "end"));
+    }
+
+    #[test]
+    fn define_body_double_close_paren_before_dot() {
+        // The first `)` is not followed by `.`, so it stays in the
+        // replacement; only the second `)` (followed by `.`) closes
+        // the directive.
+        let text = "-define(FOO, )).";
+        let def = define_of(text);
+        let lexical: Vec<String> = def
+            .replacement
+            .iter()
+            .filter(|t| t.kind().is_lexical())
+            .map(|t| t.text(text).to_owned())
+            .collect();
+        assert_eq!(lexical, [")"]);
+    }
+
+    #[test]
+    fn define_body_fun_type_stays_parsable() {
+        // A fun type ends with `)`, not `end`. Under the previous
+        // depth-counting design a stack-based fix would have broken
+        // this because `fun` was mapped to an `end` closer; the
+        // 2-token lookahead treats it uniformly.
+        let text = "-define(FOO, fun((atom()) -> ok)).";
+        let def = define_of(text);
+        assert_eq!(def.name.as_str(), "FOO");
+        let parts = replacement_texts(&def, text);
+        assert!(parts.iter().any(|s| s == "fun"));
+        assert!(parts.iter().any(|s| s == "->"));
+        assert!(parts.iter().any(|s| s == "ok"));
+    }
+
+    #[test]
+    fn error_directive_close_paren_inside_brackets() {
+        // `parse_diagnostic` shares `collect_until_close_paren`, so
+        // `-error(...)` benefits from the same fix.
+        let text = "-error([ ) ]).";
+        let d = parse_ok(text);
+        assert!(matches!(d, Directive::Error(_)));
     }
 }

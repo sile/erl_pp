@@ -14,3 +14,4 @@ erl_tokenize = "0.11"
 
 [dev-dependencies]
 noargs = "0.4"
+noprop = "0.2"
