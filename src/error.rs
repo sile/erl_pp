@@ -24,6 +24,15 @@ use erl_tokenize::TokenKind;
 use crate::source::SourceSpan;
 use crate::source_string::SourceString;
 
+/// Position of an empty argument within a macro call's argument list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum EmptyArgumentPosition {
+    /// `?NAME(, ...)` — leading empty argument.
+    First,
+    /// `?NAME(..., )` — trailing empty argument.
+    Last,
+}
+
 // ---------------------------------------------------------------------------
 // crate-internal parse error (produced by the directive parser)
 
@@ -67,9 +76,9 @@ pub(crate) enum ParseFailure {
 /// Every variant carries the source span at which the failure was
 /// located, alongside variant-specific details.
 ///
-/// Future work adds more variants (macro expansion, include reject,
-/// conditional syntax) as the corresponding parts of the preprocessor
-/// come online.
+/// Future work adds more variants (include reject, conditional
+/// syntax) as the corresponding parts of the preprocessor come
+/// online.
 #[derive(Debug, Clone)]
 pub enum PreprocessError {
     /// The directive parser committed to a known directive but its
@@ -90,6 +99,14 @@ pub enum PreprocessError {
         /// What made the definition invalid.
         kind: MacroDefinitionErrorKind,
     },
+    /// A macro call (`?NAME`, `?NAME(...)`, `??Param`) could not be
+    /// expanded.
+    MacroCall {
+        /// Span of the call site.
+        span: SourceSpan,
+        /// What made the call invalid.
+        kind: MacroCallErrorKind,
+    },
 }
 
 /// Reasons a `-define(...)` directive is rejected by the macro table.
@@ -100,6 +117,59 @@ pub enum MacroDefinitionErrorKind {
         /// The repeated parameter (name span points at the later
         /// occurrence, not the original).
         name: SourceString,
+    },
+}
+
+/// Reasons a macro call could not be expanded.
+#[derive(Debug, Clone)]
+pub enum MacroCallErrorKind {
+    /// The macro is not defined for any arity (constant-like or
+    /// function-like).
+    Undefined {
+        /// Called name.
+        name: SourceString,
+        /// Called arity (`None` for constant-like calls, `Some(n)` for
+        /// function-like calls).
+        arity: Option<usize>,
+    },
+    /// The macro is defined, but not for the called shape. The
+    /// `defined_arities` list carries every arity currently defined
+    /// for the name (constant-like is `None`, function-like is
+    /// `Some(n)`).
+    ArityMismatch {
+        /// Called name.
+        name: SourceString,
+        /// Called arity (`None` for constant-like call, `Some(n)` for
+        /// function-like call with `n` arguments).
+        called_arity: Option<usize>,
+        /// Arities currently defined for `name`.
+        defined_arities: Vec<Option<usize>>,
+    },
+    /// The argument list of a function-like call was never closed
+    /// before the end of source.
+    UnclosedArgument,
+    /// An empty argument appeared at a position OTP rejects
+    /// (`?NAME(, ...)` or `?NAME(..., )`).
+    EmptyArgument {
+        /// Which end of the argument list the empty argument was at.
+        position: EmptyArgumentPosition,
+    },
+    /// The token following `??` is not a parameter name of the
+    /// enclosing macro.
+    InvalidStringificationTarget {
+        /// Span of the offending token following `??`.
+        span: SourceSpan,
+    },
+    /// A macro call would recurse into itself directly or
+    /// transitively.
+    CircularExpansion {
+        /// Called name.
+        name: String,
+        /// Called arity.
+        arity: Option<usize>,
+        /// The `(name, arity)` chain that closes back on the call, in
+        /// call order.
+        chain: Vec<(String, Option<usize>)>,
     },
 }
 

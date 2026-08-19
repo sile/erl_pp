@@ -203,8 +203,7 @@ impl Preprocessor {
                 });
             }
         };
-        let origin = Origin::Predefined(Arc::new(Origin::Source));
-        let def = MacroDefinition::from_directive(&define, source_arc, source_id, origin)?;
+        let def = MacroDefinition::from_directive(&define, source_arc, source_id, Origin::Source)?;
         self.macros.insert(def);
         Ok(())
     }
@@ -599,12 +598,12 @@ mod tests {
     }
 
     #[test]
-    fn define_initial_uses_predefined_origin() {
+    fn define_initial_uses_source_origin() {
         let mut pp = make("");
         pp.define_initial(define_source("-define(FOO, 1)."))
             .expect("valid define text");
         let def = pp.macros().get_constant("FOO").expect("defined");
-        assert!(matches!(def.origin, Origin::Predefined(_)));
+        assert!(matches!(def.origin, Origin::Source));
     }
 
     #[test]

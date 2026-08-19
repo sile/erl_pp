@@ -4,13 +4,25 @@
 //! whether it came directly from the source text, from an include, from
 //! a macro body, from a macro argument, from a stringification (`??Arg`),
 //! or from a predefined macro (`?FILE`, `?LINE`, `?MACHINE`).
-//!
-//! Payload details for each variant (call site span, definition site
-//! span, parameter name, and so on) are added by later work that
-//! actually produces each variant. This module fixes only the variant
-//! list and the shared parent-chain shape.
 
 use std::sync::Arc;
+
+use crate::source::SourceSpan;
+use crate::source_string::SourceString;
+
+/// Kind of predefined macro that a synthesized token came from.
+///
+/// Attached to [`Origin::Predefined`] so callers can distinguish the
+/// three built-in predefined macros the preprocessor expands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PredefinedMacroKind {
+    /// `?FILE` — the display name of the current source.
+    File,
+    /// `?LINE` — the line number at the call site.
+    Line,
+    /// `?MACHINE` — atom `'BEAM'`.
+    Machine,
+}
 
 /// Provenance of a token emitted by the preprocessor.
 ///
@@ -20,10 +32,6 @@ use std::sync::Arc;
 /// [`Arc<Origin>`] so that deep chains produced by nested macro
 /// expansion or by macros inside include sources are structurally
 /// shared and are not deep-copied when the enclosing state is cloned.
-///
-/// The concrete payloads carried by each variant will be filled in by
-/// later work that produces them; this module commits only to the enum
-/// shape and the parent-sharing scheme.
 #[derive(Debug, Clone)]
 pub enum Origin {
     /// Token was written directly in an input [`crate::Source`].
@@ -40,35 +48,73 @@ pub enum Origin {
 
     /// Token was copied from the replacement body of a user-defined
     /// macro.
-    ///
-    /// The parent points at the origin of the macro call site.
-    MacroBody(Arc<Origin>),
+    MacroBody {
+        /// Parent origin (the origin at the macro call site).
+        parent: Arc<Origin>,
+        /// Span covering the whole `?NAME(...)` call at the call site.
+        call_site: SourceSpan,
+        /// Span of the whole `-define(...)` directive the token came
+        /// from (matches `MacroDefinition::directive_span`).
+        definition_span: SourceSpan,
+    },
 
     /// Token came from a macro argument that was substituted for a
     /// parameter in the replacement body.
-    ///
-    /// The parent points at the origin of the macro call site (and
-    /// through it at the parameter/definition information that later
-    /// work will add).
-    MacroArgument(Arc<Origin>),
+    MacroArgument {
+        /// Parent origin (the origin at the macro call site).
+        parent: Arc<Origin>,
+        /// Span covering the whole `?NAME(...)` call at the call site.
+        call_site: SourceSpan,
+        /// The parameter this token was substituted for.
+        parameter: SourceString,
+        /// Span of the whole `-define(...)` directive that declared the
+        /// parameter (matches `MacroDefinition::directive_span`).
+        definition_span: SourceSpan,
+    },
 
     /// Token was synthesized by stringification (`??Arg`).
-    ///
-    /// The parent points at the origin of the macro call site whose
-    /// argument was stringified.
-    Stringification(Arc<Origin>),
+    Stringification {
+        /// Parent origin (the origin at the macro call site).
+        parent: Arc<Origin>,
+        /// Span covering the whole `?NAME(...)` call at the call site.
+        call_site: SourceSpan,
+        /// The parameter that was stringified.
+        parameter: SourceString,
+        /// Span of the whole `-define(...)` directive that declared the
+        /// parameter (matches `MacroDefinition::directive_span`).
+        definition_span: SourceSpan,
+    },
 
     /// Token was synthesized by a predefined macro
     /// (`?FILE`, `?LINE`, `?MACHINE`).
-    ///
-    /// The parent points at the origin of the predefined macro use
-    /// site.
-    Predefined(Arc<Origin>),
+    Predefined {
+        /// Parent origin (the origin at the predefined macro use site).
+        parent: Arc<Origin>,
+        /// Span covering the `?FILE` / `?LINE` / `?MACHINE` token pair
+        /// at the call site.
+        call_site: SourceSpan,
+        /// Which predefined macro this token came from.
+        kind: PredefinedMacroKind,
+    },
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use erl_tokenize::Position;
+
+    use crate::source::{Source, SourceStore};
+
+    fn dummy_span() -> SourceSpan {
+        let store = SourceStore::new();
+        let id = store.append(Source::from_text("m.erl", "x"));
+        SourceSpan::new(id, Position::new(), Position::new())
+    }
+
+    fn dummy_source_string() -> SourceString {
+        SourceString::new("X", dummy_span())
+    }
 
     fn kind_label(o: &Origin) -> &'static str {
         // If a new variant is added and this match stops being
@@ -77,10 +123,10 @@ mod tests {
         match o {
             Origin::Source => "source",
             Origin::Include(_) => "include",
-            Origin::MacroBody(_) => "macro_body",
-            Origin::MacroArgument(_) => "macro_argument",
-            Origin::Stringification(_) => "stringification",
-            Origin::Predefined(_) => "predefined",
+            Origin::MacroBody { .. } => "macro_body",
+            Origin::MacroArgument { .. } => "macro_argument",
+            Origin::Stringification { .. } => "stringification",
+            Origin::Predefined { .. } => "predefined",
         }
     }
 
@@ -90,13 +136,33 @@ mod tests {
 
     #[test]
     fn all_variants_constructible_and_exhaustive() {
+        let span = dummy_span();
+        let param = dummy_source_string();
         let all = [
             Origin::Source,
             Origin::Include(dummy_parent()),
-            Origin::MacroBody(dummy_parent()),
-            Origin::MacroArgument(dummy_parent()),
-            Origin::Stringification(dummy_parent()),
-            Origin::Predefined(dummy_parent()),
+            Origin::MacroBody {
+                parent: dummy_parent(),
+                call_site: span,
+                definition_span: span,
+            },
+            Origin::MacroArgument {
+                parent: dummy_parent(),
+                call_site: span,
+                parameter: param.clone(),
+                definition_span: span,
+            },
+            Origin::Stringification {
+                parent: dummy_parent(),
+                call_site: span,
+                parameter: param,
+                definition_span: span,
+            },
+            Origin::Predefined {
+                parent: dummy_parent(),
+                call_site: span,
+                kind: PredefinedMacroKind::File,
+            },
         ];
         let kinds: Vec<_> = all.iter().map(kind_label).collect();
         assert_eq!(
@@ -114,14 +180,20 @@ mod tests {
 
     #[test]
     fn parent_chain_shared_on_clone() {
+        let span = dummy_span();
         let root = Arc::new(Origin::Source);
-        let leaf = Origin::MacroBody(Arc::clone(&root));
+        let leaf = Origin::MacroBody {
+            parent: Arc::clone(&root),
+            call_site: span,
+            definition_span: span,
+        };
         let before = Arc::strong_count(&root);
         let cloned = leaf.clone();
         let after = Arc::strong_count(&root);
 
-        // Both leaf and cloned should point at the same parent Origin.
-        let (Origin::MacroBody(a), Origin::MacroBody(b)) = (&leaf, &cloned) else {
+        let (Origin::MacroBody { parent: a, .. }, Origin::MacroBody { parent: b, .. }) =
+            (&leaf, &cloned)
+        else {
             panic!("expected MacroBody variants");
         };
         assert!(Arc::ptr_eq(a, b));
@@ -132,12 +204,20 @@ mod tests {
 
     #[test]
     fn nested_chain_survives_cloning() {
+        let span = dummy_span();
         let root = Arc::new(Origin::Source);
         let mid = Arc::new(Origin::Include(Arc::clone(&root)));
-        let leaf = Origin::MacroBody(Arc::clone(&mid));
+        let leaf = Origin::MacroBody {
+            parent: Arc::clone(&mid),
+            call_site: span,
+            definition_span: span,
+        };
 
         let cloned = leaf.clone();
-        let Origin::MacroBody(cloned_mid) = cloned else {
+        let Origin::MacroBody {
+            parent: cloned_mid, ..
+        } = cloned
+        else {
             panic!("expected MacroBody");
         };
         let Origin::Include(cloned_root) = cloned_mid.as_ref() else {
