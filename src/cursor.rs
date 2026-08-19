@@ -247,8 +247,8 @@ mod tests {
     fn empty_source_reports_eof() {
         let mut cursor = make_cursor("");
         assert!(cursor.is_at_eof());
-        assert!(cursor.peek().unwrap().is_none());
-        assert!(cursor.bump().unwrap().is_none());
+        assert!(cursor.peek().expect("no lex error").is_none());
+        assert!(cursor.bump().expect("no lex error").is_none());
     }
 
     #[test]
@@ -268,9 +268,18 @@ mod tests {
     #[test]
     fn peek_does_not_advance() {
         let mut cursor = make_cursor("foo");
-        let peeked = cursor.peek().unwrap().unwrap();
-        let peeked_again = cursor.peek().unwrap().unwrap();
-        let bumped = cursor.bump().unwrap().unwrap();
+        let peeked = cursor
+            .peek()
+            .expect("no lex error")
+            .expect("token available");
+        let peeked_again = cursor
+            .peek()
+            .expect("no lex error")
+            .expect("token available");
+        let bumped = cursor
+            .bump()
+            .expect("no lex error")
+            .expect("token available");
         assert_eq!(peeked.start(), bumped.start());
         assert_eq!(peeked_again.start(), bumped.start());
     }
@@ -279,20 +288,35 @@ mod tests {
     fn utf8_atom_round_trips_through_value() {
         let text = "'日本語'";
         let mut cursor = make_cursor(text);
-        let token = cursor.bump().unwrap().unwrap();
+        let token = cursor
+            .bump()
+            .expect("no lex error")
+            .expect("token available");
         assert_eq!(token.text(text), text);
     }
 
     #[test]
     fn peek_lexical_queues_hidden_tokens() {
         let mut cursor = make_cursor("% cmt\nfoo");
-        let lexical = cursor.peek_lexical().unwrap().unwrap();
+        let lexical = cursor
+            .peek_lexical()
+            .expect("no lex error")
+            .expect("token available");
         assert_eq!(lexical.kind(), TokenKind::Atom);
 
         // Bumps should yield comment, whitespace, atom in source order.
-        let a = cursor.bump().unwrap().unwrap();
-        let b = cursor.bump().unwrap().unwrap();
-        let c = cursor.bump().unwrap().unwrap();
+        let a = cursor
+            .bump()
+            .expect("no lex error")
+            .expect("token available");
+        let b = cursor
+            .bump()
+            .expect("no lex error")
+            .expect("token available");
+        let c = cursor
+            .bump()
+            .expect("no lex error")
+            .expect("token available");
         assert_eq!(a.kind(), TokenKind::Comment);
         assert_eq!(b.kind(), TokenKind::Whitespace);
         assert_eq!(c.kind(), TokenKind::Atom);
@@ -303,18 +327,24 @@ mod tests {
     #[test]
     fn checkpoint_and_restore_rewind_stream() {
         let mut cursor = make_cursor("foo bar baz");
-        let first = cursor.bump().unwrap().unwrap();
+        let first = cursor
+            .bump()
+            .expect("no lex error")
+            .expect("token available");
         let saved = cursor.checkpoint();
-        let _ = cursor.bump().unwrap();
-        let _ = cursor.bump().unwrap();
+        let _ = cursor.bump().expect("no lex error");
+        let _ = cursor.bump().expect("no lex error");
 
         cursor.restore(saved);
-        let after_restore = cursor.bump().unwrap().unwrap();
+        let after_restore = cursor
+            .bump()
+            .expect("no lex error")
+            .expect("token available");
         assert_ne!(first.start(), after_restore.start());
         assert_eq!(after_restore.kind(), TokenKind::Whitespace);
 
         // Continue scanning to the end.
-        while cursor.bump().unwrap().is_some() {}
+        while cursor.bump().expect("no lex error").is_some() {}
         assert!(cursor.is_at_eof());
     }
 
@@ -322,17 +352,23 @@ mod tests {
     fn nested_checkpoints_are_lifo() {
         let mut cursor = make_cursor("a b c");
         let outer = cursor.checkpoint();
-        let _ = cursor.bump().unwrap(); // 'a'
+        let _ = cursor.bump().expect("no lex error"); // 'a'
         let inner = cursor.checkpoint();
-        let _ = cursor.bump().unwrap(); // ws
-        let _ = cursor.bump().unwrap(); // 'b'
+        let _ = cursor.bump().expect("no lex error"); // ws
+        let _ = cursor.bump().expect("no lex error"); // 'b'
 
         cursor.restore(inner);
-        let after_inner = cursor.bump().unwrap().unwrap();
+        let after_inner = cursor
+            .bump()
+            .expect("no lex error")
+            .expect("token available");
         assert_eq!(after_inner.kind(), TokenKind::Whitespace);
 
         cursor.restore(outer);
-        let after_outer = cursor.bump().unwrap().unwrap();
+        let after_outer = cursor
+            .bump()
+            .expect("no lex error")
+            .expect("token available");
         assert_eq!(after_outer.kind(), TokenKind::Atom);
     }
 
@@ -341,7 +377,7 @@ mod tests {
         // Unterminated string literal triggers a NoClosingQuotation
         // error.
         let mut cursor = make_cursor("\"oops");
-        let err = cursor.bump().unwrap_err();
+        let err = cursor.bump().expect_err("lex error expected");
         assert_eq!(err.kind, ErrorKind::NoClosingQuotation);
         assert_eq!(err.span.source_id, cursor.source_id());
         assert!(err.span.start.offset() < err.span.end.offset());
@@ -352,7 +388,7 @@ mod tests {
     #[test]
     fn resume_advances_past_lexical_error() {
         let mut cursor = make_cursor("\"oops\nfoo");
-        let err = cursor.bump().unwrap_err();
+        let err = cursor.bump().expect_err("lex error expected");
         assert!(cursor.pending_resume().is_some());
 
         cursor.resume(err.resume_position);
@@ -370,8 +406,8 @@ mod tests {
     #[test]
     fn calling_bump_without_resume_re_emits_the_same_error() {
         let mut cursor = make_cursor("\"oops");
-        let first = cursor.bump().unwrap_err();
-        let second = cursor.bump().unwrap_err();
+        let first = cursor.bump().expect_err("lex error expected");
+        let second = cursor.bump().expect_err("lex error expected");
         assert_eq!(first.span, second.span);
         assert_eq!(first.resume_position, second.resume_position);
     }
@@ -382,17 +418,23 @@ mod tests {
         // scan forward, queue the hidden tokens, and surface the error
         // because no lexical token is reachable.
         let mut cursor = make_cursor("% hidden\n\"oops");
-        let err = cursor.peek_lexical().unwrap_err();
+        let err = cursor.peek_lexical().expect_err("lex error expected");
         assert_eq!(err.kind, ErrorKind::NoClosingQuotation);
 
         // Drain the queued hidden tokens before the error re-emerges.
-        let a = cursor.bump().unwrap().unwrap();
-        let b = cursor.bump().unwrap().unwrap();
+        let a = cursor
+            .bump()
+            .expect("no lex error")
+            .expect("token available");
+        let b = cursor
+            .bump()
+            .expect("no lex error")
+            .expect("token available");
         assert_eq!(a.kind(), TokenKind::Comment);
         assert_eq!(b.kind(), TokenKind::Whitespace);
 
         // Now bump re-hits the error.
-        let err = cursor.bump().unwrap_err();
+        let err = cursor.bump().expect_err("lex error expected");
         assert_eq!(err.kind, ErrorKind::NoClosingQuotation);
     }
 }

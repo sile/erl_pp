@@ -832,7 +832,15 @@ mod tests {
         let (mut cursor, result) = parse("foo() -> ok.");
         assert!(matches!(result, Ok(None)));
         // Cursor should be at the very start (unchanged).
-        assert_eq!(cursor.peek().unwrap().unwrap().start().offset(), 0);
+        assert_eq!(
+            cursor
+                .peek()
+                .expect("no lex error")
+                .expect("token available")
+                .start()
+                .offset(),
+            0
+        );
     }
 
     #[test]
@@ -840,7 +848,14 @@ mod tests {
         let (mut cursor, result) = parse("-module(m).");
         assert!(matches!(result, Ok(None)));
         // The very first token in the stream is still `-`.
-        assert_eq!(cursor.bump().unwrap().unwrap().text("-module(m)."), "-");
+        assert_eq!(
+            cursor
+                .bump()
+                .expect("no lex error")
+                .expect("token available")
+                .text("-module(m)."),
+            "-"
+        );
     }
 
     #[test]
@@ -851,7 +866,7 @@ mod tests {
         // and `module` should still be visible when we walk the
         // cursor from scratch.
         let mut kinds = Vec::new();
-        while let Some(t) = cursor.bump().unwrap() {
+        while let Some(t) = cursor.bump().expect("no lex error") {
             kinds.push(t.kind());
         }
         assert!(kinds.contains(&TokenKind::Comment));
@@ -1032,7 +1047,9 @@ mod tests {
         let store = SourceStore::new();
         let id = store.append(Source::new("main.erl", "-endif."));
         let mut cursor = Cursor::new(id, store.get(id));
-        let d = parse_directive(&mut cursor).unwrap().unwrap();
+        let d = parse_directive(&mut cursor)
+            .expect("parse should not error")
+            .expect("parse should recognise a directive");
         assert_eq!(d.span().source_id, id);
     }
 

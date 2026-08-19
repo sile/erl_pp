@@ -463,9 +463,18 @@ mod tests {
     #[test]
     fn complete_is_idempotent() {
         let mut pp = make("");
-        assert!(matches!(pp.step().unwrap(), Event::Complete));
-        assert!(matches!(pp.step().unwrap(), Event::Complete));
-        assert!(matches!(pp.step().unwrap(), Event::Complete));
+        assert!(matches!(
+            pp.step().expect("no protocol error"),
+            Event::Complete
+        ));
+        assert!(matches!(
+            pp.step().expect("no protocol error"),
+            Event::Complete
+        ));
+        assert!(matches!(
+            pp.step().expect("no protocol error"),
+            Event::Complete
+        ));
     }
 
     #[test]
@@ -473,7 +482,7 @@ mod tests {
         let mut pp = make("foo bar");
         let mut streamed = Vec::new();
         loop {
-            match pp.step().unwrap() {
+            match pp.step().expect("no protocol error") {
                 Event::Token(ppt) => streamed.push(ppt),
                 Event::Complete => break,
                 other => panic!("unexpected event: {other:?}"),
@@ -496,7 +505,7 @@ mod tests {
         let mut pp = make("-module(m).");
         let mut kinds = Vec::new();
         loop {
-            match pp.step().unwrap() {
+            match pp.step().expect("no protocol error") {
                 Event::Token(ppt) => kinds.push(ppt.token().kind()),
                 Event::Complete => break,
                 Event::Directive(_) => panic!("should not recognise -module"),
@@ -516,10 +525,10 @@ mod tests {
     #[test]
     fn recognised_directive_becomes_event() {
         let mut pp = make("-endif.");
-        let first = pp.step().unwrap();
+        let first = pp.step().expect("no protocol error");
         assert!(matches!(first, Event::Directive(Directive::Endif(_))));
         // Directive tokens are consumed by the parser, not streamed.
-        let complete = pp.step().unwrap();
+        let complete = pp.step().expect("no protocol error");
         assert!(matches!(complete, Event::Complete));
     }
 
@@ -528,7 +537,7 @@ mod tests {
         let mut pp = make("foo.-endif.bar.");
         let mut description = Vec::new();
         loop {
-            match pp.step().unwrap() {
+            match pp.step().expect("no protocol error") {
                 Event::Token(ppt) => description.push(format!("token:{}", ppt.text())),
                 Event::Directive(Directive::Endif(_)) => description.push("directive:endif".into()),
                 Event::Complete => {
@@ -541,7 +550,7 @@ mod tests {
         assert!(description.iter().any(|s| s == "token:foo"));
         assert!(description.iter().any(|s| s == "token:bar"));
         assert!(description.iter().any(|s| s == "directive:endif"));
-        assert!(description.last().unwrap() == "complete");
+        assert!(description.last().expect("at least one description") == "complete");
     }
 
     #[test]
@@ -550,7 +559,7 @@ mod tests {
         // resume position skips past that single character and the
         // trailing `unterminated` then scans as a plain atom.
         let mut pp = make("\"unterminated");
-        let resume_position = match pp.step().unwrap() {
+        let resume_position = match pp.step().expect("no protocol error") {
             Event::PreprocessError(PreprocessError::Lexical {
                 resume_position, ..
             }) => resume_position,
@@ -559,18 +568,21 @@ mod tests {
         // status reflects the awaiting state.
         assert!(matches!(pp.status(), Status::AwaitingLexicalResume));
         // step while awaiting should fail with ProtocolError.
-        assert_eq!(pp.step().unwrap_err(), ProtocolError::StepWhilePending);
+        assert_eq!(
+            pp.step().expect_err("protocol error expected"),
+            ProtocolError::StepWhilePending
+        );
         // Resume with the suggested position; scanning continues past
         // the bad character.
-        pp.resume_lexical(resume_position).unwrap();
+        pp.resume_lexical(resume_position).expect("resume accepted");
         assert!(matches!(pp.status(), Status::Scanning));
         // The remaining `unterminated` scans as an atom, then EOF.
-        let after = pp.step().unwrap();
+        let after = pp.step().expect("no protocol error");
         assert!(
             matches!(after, Event::Token(_)),
             "expected token event after resume, got {after:?}"
         );
-        let last = pp.step().unwrap();
+        let last = pp.step().expect("no protocol error");
         assert!(matches!(last, Event::Complete));
     }
 
@@ -578,7 +590,8 @@ mod tests {
     fn resume_without_pending_is_protocol_error() {
         let mut pp = make("foo");
         assert_eq!(
-            pp.resume_lexical(Position::new()).unwrap_err(),
+            pp.resume_lexical(Position::new())
+                .expect_err("protocol error expected"),
             ProtocolError::UnexpectedResponse
         );
     }
@@ -588,15 +601,16 @@ mod tests {
         // First response transitions the machine back to Scanning, so
         // a second resume_lexical is treated as UnexpectedResponse.
         let mut pp = make("\"oops");
-        let resume_position = match pp.step().unwrap() {
+        let resume_position = match pp.step().expect("no protocol error") {
             Event::PreprocessError(PreprocessError::Lexical {
                 resume_position, ..
             }) => resume_position,
             other => panic!("expected PreprocessError::Lexical, got {other:?}"),
         };
-        pp.resume_lexical(resume_position).unwrap();
+        pp.resume_lexical(resume_position).expect("resume accepted");
         assert_eq!(
-            pp.resume_lexical(resume_position).unwrap_err(),
+            pp.resume_lexical(resume_position)
+                .expect_err("protocol error expected"),
             ProtocolError::UnexpectedResponse
         );
     }
@@ -606,7 +620,7 @@ mod tests {
         // Take the first token from pp, then fork. pp and fork share
         // the SourceStore but their cursors advance independently.
         let mut pp = make("foo bar");
-        let first = pp.step().unwrap();
+        let first = pp.step().expect("no protocol error");
         assert!(matches!(first, Event::Token(_)));
 
         let mut fork = pp.clone();
@@ -625,7 +639,7 @@ mod tests {
     fn collect_token_texts(pp: &mut Preprocessor) -> Vec<String> {
         let mut out = Vec::new();
         loop {
-            match pp.step().unwrap() {
+            match pp.step().expect("no protocol error") {
                 Event::Token(ppt) => out.push(ppt.text().to_string()),
                 Event::Complete => break,
                 other => panic!("unexpected event: {other:?}"),
@@ -638,7 +652,7 @@ mod tests {
     fn define_directive_updates_macro_table_before_event() {
         let mut pp = make("-define(FOO, 1).");
         assert!(pp.macros().is_empty());
-        let event = pp.step().unwrap();
+        let event = pp.step().expect("no protocol error");
         assert!(matches!(event, Event::Directive(Directive::Define(_))));
         // State-then-event contract: when the caller observes the
         // event, the macro table already contains the definition.
@@ -651,7 +665,7 @@ mod tests {
         let mut pp = make("-define(FOO, 1).\n-define(FOO(A), A).\n-undef(FOO).");
         // Drain define/undef; the table should end empty.
         loop {
-            match pp.step().unwrap() {
+            match pp.step().expect("no protocol error") {
                 Event::Directive(Directive::Define(_)) => {}
                 Event::Directive(Directive::Undef(_)) => {
                     // At the moment we observe the Undef event, all
@@ -677,7 +691,7 @@ mod tests {
     #[test]
     fn duplicate_parameter_surfaces_as_preprocess_error() {
         let mut pp = make("-define(BAD(A, A), A).");
-        let event = pp.step().unwrap();
+        let event = pp.step().expect("no protocol error");
         assert!(matches!(
             event,
             Event::PreprocessError(PreprocessError::MacroDefinition { .. })
@@ -689,19 +703,22 @@ mod tests {
     #[test]
     fn define_initial_registers_before_step() {
         let mut pp = make("");
-        pp.define_initial("-define(FOO, 1).").unwrap();
-        pp.define_initial("-define(BAR(A), A).").unwrap();
+        pp.define_initial("-define(FOO, 1).")
+            .expect("valid define text");
+        pp.define_initial("-define(BAR(A), A).")
+            .expect("valid define text");
         assert_eq!(pp.macros().len(), 2);
         assert!(pp.macros().get_constant("FOO").is_some());
         assert!(pp.macros().get_function("BAR", 1).is_some());
-        let event = pp.step().unwrap();
+        let event = pp.step().expect("no protocol error");
         assert!(matches!(event, Event::Complete));
     }
 
     #[test]
     fn define_initial_uses_predefined_origin() {
         let mut pp = make("");
-        pp.define_initial("-define(FOO, 1).").unwrap();
+        pp.define_initial("-define(FOO, 1).")
+            .expect("valid define text");
         let def = pp.macros().get_constant("FOO").expect("defined");
         assert!(matches!(def.origin, Origin::Predefined(_)));
     }
@@ -710,21 +727,25 @@ mod tests {
     fn define_initial_rejects_non_define_text() {
         let mut pp = make("");
         // A recognised but non-define directive is rejected.
-        let err = pp.define_initial("-endif.").unwrap_err();
+        let err = pp
+            .define_initial("-endif.")
+            .expect_err("preprocess error expected");
         assert!(matches!(err, PreprocessError::Parse { .. }));
     }
 
     #[test]
     fn clone_isolates_macro_table_updates() {
         let mut original = make("-define(FOO, 1).");
-        original.step().unwrap();
+        original.step().expect("no protocol error");
         assert!(original.macros().get_constant("FOO").is_some());
 
         // Clone before original scans further.
         let mut clone = original.clone();
         // Add another define into the clone by feeding it a fresh
         // source through define_initial.
-        clone.define_initial("-define(BAR, 2).").unwrap();
+        clone
+            .define_initial("-define(BAR, 2).")
+            .expect("valid define text");
 
         assert!(clone.macros().get_constant("BAR").is_some());
         assert!(original.macros().get_constant("BAR").is_none());

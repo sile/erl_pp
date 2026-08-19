@@ -215,9 +215,10 @@ fn round_trip_balanced_body_parses_successfully() -> TestResult {
         let mut body = String::new();
         node.render(&mut body);
 
-        let n_tokens = parse_define_body(&body)
-            .map_err(|e| format!("valid body `{body}` failed to parse: {e:?}"))
-            .unwrap();
+        let n_tokens = match parse_define_body(&body) {
+            Ok(n) => n,
+            Err(e) => panic!("valid body `{body}` failed to parse: {e:?}"),
+        };
 
         assert!(n_tokens > 0, "empty replacement for body `{body}`");
         if depth == 0 {
@@ -259,9 +260,9 @@ fn injected_close_paren_still_parses() -> TestResult {
             return Ok(());
         }
 
-        parse_define_body(&body)
-            .map_err(|e| format!("body with injected `)` failed to parse `{body}`: {e:?}"))
-            .unwrap();
+        if let Err(e) = parse_define_body(&body) {
+            panic!("body with injected `)` failed to parse `{body}`: {e:?}");
+        }
         saw_injected.set(saw_injected.get() + 1);
         Ok(())
     })?;
@@ -302,9 +303,9 @@ fn adversarial_tail_only_outer_close_paren_dot_terminates() -> TestResult {
             }
         }
 
-        parse_define_body(&body)
-            .map_err(|e| format!("adversarial tail body `{body}` failed to parse: {e:?}"))
-            .unwrap();
+        if let Err(e) = parse_define_body(&body) {
+            panic!("adversarial tail body `{body}` failed to parse: {e:?}");
+        }
         saw_tail.set(saw_tail.get() + 1);
         Ok(())
     })?;
