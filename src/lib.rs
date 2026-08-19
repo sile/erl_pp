@@ -29,6 +29,7 @@ pub use crate::origin::Origin;
 pub use crate::preprocessed_token::PreprocessedToken;
 pub use crate::preprocessor::{Preprocessor, Status};
 pub use crate::source::{Source, SourceId, SourceSpan, SourceStore};
+pub use crate::source_string::SourceString;
 
 mod cursor;
 mod directive;
@@ -39,3 +40,4 @@ mod origin;
 mod preprocessed_token;
 mod preprocessor;
 mod source;
+mod source_string;

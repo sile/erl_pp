@@ -19,6 +19,7 @@
 use erl_tokenize::{ErrorKind, Position, TokenKind};
 
 use crate::source::SourceSpan;
+use crate::source_string::SourceString;
 
 // ---------------------------------------------------------------------------
 // crate-internal errors (produced by the cursor and the directive parser)
@@ -132,10 +133,9 @@ pub enum PreprocessError {
 pub enum MacroDefinitionErrorKind {
     /// The parameter list repeats the same name.
     DuplicateParameter {
-        /// The repeated parameter name.
-        name: String,
-        /// Span of the offending later occurrence.
-        span: SourceSpan,
+        /// The repeated parameter (name span points at the later
+        /// occurrence, not the original).
+        name: SourceString,
     },
 }
 

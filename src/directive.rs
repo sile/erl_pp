@@ -24,6 +24,7 @@ use erl_tokenize::{Keyword, Position, Symbol, Token, TokenKind, TokenValue};
 use crate::cursor::Cursor;
 use crate::error::{ParseError, ParseFailure};
 use crate::source::{SourceId, SourceSpan};
+use crate::source_string::SourceString;
 
 /// A parsed preprocessor directive.
 ///
@@ -88,18 +89,18 @@ pub struct IncludeDirective {
     /// by later work). Consumers that pass the value on to a
     /// resolver can hand it over as-is.
     //
-    // Stored as a decoded `String` rather than `Vec<Token>` because
-    // `-include("foo" ".hrl")` collapses one or more adjacent string
-    // literals into a single logical path with no single owning
+    // Stored as a decoded [`SourceString`] rather than `Vec<Token>`
+    // because `-include("foo" ".hrl")` collapses one or more adjacent
+    // string literals into a single logical path with no single owning
     // token, and every consumer wants the final decoded value.
     // Directives whose payload is consumed as raw tokens downstream
     // (e.g. `DefineDirective::replacement`, the diagnostic arg
     // lists) do keep `Vec<Token>`.
-    pub path: String,
-    /// Span covering all path string literal tokens (from the first
-    /// literal's start to the last literal's end, possibly across
-    /// intervening hidden tokens).
-    pub path_span: SourceSpan,
+    ///
+    /// The [`SourceString`] span covers all path string literal tokens
+    /// (from the first literal's start to the last literal's end,
+    /// possibly across intervening hidden tokens).
+    pub path: SourceString,
 }
 
 /// Data of an `-include_lib(...)` directive.
@@ -119,10 +120,8 @@ pub struct IncludeLibDirective {
     /// utility added by later work).
     //
     // See `IncludeDirective::path` for the rationale behind storing a
-    // decoded `String` rather than `Vec<Token>`.
-    pub path: String,
-    /// Span covering all path string literal tokens.
-    pub path_span: SourceSpan,
+    // decoded [`SourceString`] rather than `Vec<Token>`.
+    pub path: SourceString,
 }
 
 /// Data of a `-define(...)` directive.
@@ -131,9 +130,7 @@ pub struct DefineDirective {
     /// Span covering the whole directive.
     pub span: SourceSpan,
     /// Decoded macro name.
-    pub name: String,
-    /// Span of the macro name token.
-    pub name_span: SourceSpan,
+    pub name: SourceString,
     /// Macro parameters. `None` is a constant-like macro
     /// (`-define(FOO, 1).`). `Some(vec![])` is an arity-0 function-like
     /// macro (`-define(FOO(), 1).`).
@@ -149,9 +146,7 @@ pub struct DefineDirective {
 #[derive(Debug, Clone)]
 pub struct Param {
     /// Decoded parameter name (typically a variable identifier).
-    pub name: String,
-    /// Span of the parameter token.
-    pub span: SourceSpan,
+    pub name: SourceString,
 }
 
 /// Data of an `-undef(...)` directive.
@@ -160,9 +155,7 @@ pub struct UndefDirective {
     /// Span covering the whole directive.
     pub span: SourceSpan,
     /// Decoded macro name.
-    pub name: String,
-    /// Span of the macro name token.
-    pub name_span: SourceSpan,
+    pub name: SourceString,
 }
 
 /// Data of an `-ifdef(...)` directive.
@@ -171,9 +164,7 @@ pub struct IfdefDirective {
     /// Span covering the whole directive.
     pub span: SourceSpan,
     /// Decoded macro name.
-    pub name: String,
-    /// Span of the macro name token.
-    pub name_span: SourceSpan,
+    pub name: SourceString,
 }
 
 /// Data of an `-ifndef(...)` directive.
@@ -182,9 +173,7 @@ pub struct IfndefDirective {
     /// Span covering the whole directive.
     pub span: SourceSpan,
     /// Decoded macro name.
-    pub name: String,
-    /// Span of the macro name token.
-    pub name_span: SourceSpan,
+    pub name: SourceString,
 }
 
 /// Data of an `-else.` directive.
@@ -358,12 +347,11 @@ fn parse_include(
     start_pos: Position,
     directive_start: SourceSpan,
 ) -> Result<Directive, ParseError> {
-    let (path, path_span) = parse_paren_string_path(cursor, source_id, &directive_start)?;
+    let path = parse_paren_string_path(cursor, source_id, &directive_start)?;
     let dot = expect_symbol(cursor, Symbol::Dot, source_id, &directive_start)?;
     Ok(Directive::Include(IncludeDirective {
         span: SourceSpan::new(source_id, start_pos, dot.end()),
         path,
-        path_span,
     }))
 }
 
@@ -373,12 +361,11 @@ fn parse_include_lib(
     start_pos: Position,
     directive_start: SourceSpan,
 ) -> Result<Directive, ParseError> {
-    let (path, path_span) = parse_paren_string_path(cursor, source_id, &directive_start)?;
+    let path = parse_paren_string_path(cursor, source_id, &directive_start)?;
     let dot = expect_symbol(cursor, Symbol::Dot, source_id, &directive_start)?;
     Ok(Directive::IncludeLib(IncludeLibDirective {
         span: SourceSpan::new(source_id, start_pos, dot.end()),
         path,
-        path_span,
     }))
 }
 
@@ -389,19 +376,16 @@ fn parse_define(
     directive_start: SourceSpan,
 ) -> Result<Directive, ParseError> {
     expect_symbol(cursor, Symbol::OpenParen, source_id, &directive_start)?;
-    let (name, name_span) = parse_identifier(cursor, source_id, &directive_start, "macro name")?;
+    let name = parse_identifier(cursor, source_id, &directive_start, "macro name")?;
 
     let params = if peek_is_symbol(cursor, Symbol::OpenParen, &directive_start)? {
         expect_symbol(cursor, Symbol::OpenParen, source_id, &directive_start)?;
         let mut params = Vec::new();
         if !peek_is_symbol(cursor, Symbol::CloseParen, &directive_start)? {
             loop {
-                let (pname, pspan) =
+                let pname =
                     parse_identifier(cursor, source_id, &directive_start, "parameter name")?;
-                params.push(Param {
-                    name: pname,
-                    span: pspan,
-                });
+                params.push(Param { name: pname });
                 if peek_is_symbol(cursor, Symbol::Comma, &directive_start)? {
                     expect_symbol(cursor, Symbol::Comma, source_id, &directive_start)?;
                     continue;
@@ -424,7 +408,6 @@ fn parse_define(
     Ok(Directive::Define(DefineDirective {
         span: SourceSpan::new(source_id, start_pos, dot.end()),
         name,
-        name_span,
         params,
         replacement,
         replacement_span,
@@ -446,27 +429,15 @@ fn parse_name_only(
     kind: NameOnlyKind,
 ) -> Result<Directive, ParseError> {
     expect_symbol(cursor, Symbol::OpenParen, source_id, &directive_start)?;
-    let (name, name_span) = parse_identifier(cursor, source_id, &directive_start, "macro name")?;
+    let name = parse_identifier(cursor, source_id, &directive_start, "macro name")?;
     expect_symbol(cursor, Symbol::CloseParen, source_id, &directive_start)?;
     let dot = expect_symbol(cursor, Symbol::Dot, source_id, &directive_start)?;
 
     let span = SourceSpan::new(source_id, start_pos, dot.end());
     Ok(match kind {
-        NameOnlyKind::Undef => Directive::Undef(UndefDirective {
-            span,
-            name,
-            name_span,
-        }),
-        NameOnlyKind::Ifdef => Directive::Ifdef(IfdefDirective {
-            span,
-            name,
-            name_span,
-        }),
-        NameOnlyKind::Ifndef => Directive::Ifndef(IfndefDirective {
-            span,
-            name,
-            name_span,
-        }),
+        NameOnlyKind::Undef => Directive::Undef(UndefDirective { span, name }),
+        NameOnlyKind::Ifdef => Directive::Ifdef(IfdefDirective { span, name }),
+        NameOnlyKind::Ifndef => Directive::Ifndef(IfndefDirective { span, name }),
     })
 }
 
@@ -536,7 +507,7 @@ fn parse_paren_string_path(
     cursor: &mut Cursor,
     source_id: SourceId,
     directive_start: &SourceSpan,
-) -> Result<(String, SourceSpan), ParseError> {
+) -> Result<SourceString, ParseError> {
     expect_symbol(cursor, Symbol::OpenParen, source_id, directive_start)?;
 
     let first = expect_lexical(cursor, directive_start, "string literal")?;
@@ -560,7 +531,10 @@ fn parse_paren_string_path(
     }
 
     expect_symbol(cursor, Symbol::CloseParen, source_id, directive_start)?;
-    Ok((path, SourceSpan::new(source_id, path_start, path_end)))
+    Ok(SourceString::new(
+        path,
+        SourceSpan::new(source_id, path_start, path_end),
+    ))
 }
 
 fn decode_string_literal<'a>(
@@ -602,7 +576,7 @@ fn parse_identifier(
     source_id: SourceId,
     directive_start: &SourceSpan,
     expected: &str,
-) -> Result<(String, SourceSpan), ParseError> {
+) -> Result<SourceString, ParseError> {
     let token = expect_lexical(cursor, directive_start, expected)?;
     let name = match token.value(cursor.source_text()) {
         TokenValue::Atom(cow) => cow.into_owned(),
@@ -619,7 +593,10 @@ fn parse_identifier(
         }
     };
     consume_through(cursor, token, directive_start)?;
-    Ok((name, SourceSpan::new(source_id, token.start(), token.end())))
+    Ok(SourceString::new(
+        name,
+        SourceSpan::new(source_id, token.start(), token.end()),
+    ))
 }
 
 /// Collects every token (including hidden ones) up to but not
@@ -867,7 +844,7 @@ mod tests {
         let Directive::Include(inc) = d else {
             panic!("expected Include");
         };
-        assert_eq!(inc.path, "foo.hrl");
+        assert_eq!(inc.path.as_str(), "foo.hrl");
         assert_eq!(inc.span.start.offset(), 0);
         assert_eq!(inc.span.end.offset(), r#"-include("foo.hrl")."#.len());
     }
@@ -878,7 +855,7 @@ mod tests {
         let Directive::IncludeLib(inc) = d else {
             panic!("expected IncludeLib");
         };
-        assert_eq!(inc.path, "kernel/include/file.hrl");
+        assert_eq!(inc.path.as_str(), "kernel/include/file.hrl");
     }
 
     #[test]
@@ -887,7 +864,7 @@ mod tests {
         let Directive::Include(inc) = d else {
             panic!("expected Include");
         };
-        assert_eq!(inc.path, "foo.hrl");
+        assert_eq!(inc.path.as_str(), "foo.hrl");
     }
 
     #[test]
@@ -896,7 +873,7 @@ mod tests {
         let Directive::Include(inc) = d else {
             panic!("expected Include");
         };
-        assert_eq!(inc.path, "abc.hrl");
+        assert_eq!(inc.path.as_str(), "abc.hrl");
     }
 
     #[test]
@@ -908,7 +885,7 @@ mod tests {
         let Directive::Include(inc) = d else {
             panic!("expected Include");
         };
-        assert_eq!(inc.path, "foo.hrl");
+        assert_eq!(inc.path.as_str(), "foo.hrl");
     }
 
     #[test]
@@ -917,7 +894,7 @@ mod tests {
         let Directive::Define(def) = d else {
             panic!("expected Define");
         };
-        assert_eq!(def.name, "FOO");
+        assert_eq!(def.name.as_str(), "FOO");
         assert!(def.params.is_none());
         assert!(!def.replacement.is_empty());
     }
@@ -928,7 +905,7 @@ mod tests {
         let Directive::Define(def) = d else {
             panic!("expected Define");
         };
-        assert_eq!(def.name, "FOO");
+        assert_eq!(def.name.as_str(), "FOO");
         assert_eq!(def.params.as_deref().map(<[Param]>::len), Some(0));
     }
 
@@ -938,7 +915,7 @@ mod tests {
         let Directive::Define(def) = d else {
             panic!("expected Define");
         };
-        assert_eq!(def.name, "FOO");
+        assert_eq!(def.name.as_str(), "FOO");
         let params = def.params.expect("function-like");
         let names: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(names, ["A", "B", "C"]);
@@ -950,7 +927,7 @@ mod tests {
         let Directive::Define(def) = d else {
             panic!("expected Define");
         };
-        assert_eq!(def.name, "FOO");
+        assert_eq!(def.name.as_str(), "FOO");
         assert!(def.replacement_span.is_none());
     }
 
@@ -960,16 +937,16 @@ mod tests {
         let Directive::Undef(u) = d else {
             panic!("expected Undef");
         };
-        assert_eq!(u.name, "FOO");
+        assert_eq!(u.name.as_str(), "FOO");
     }
 
     #[test]
     fn ifdef_ifndef_directives() {
         let d = parse_ok("-ifdef(FOO).");
-        assert!(matches!(d, Directive::Ifdef(ref x) if x.name == "FOO"));
+        assert!(matches!(d, Directive::Ifdef(ref x) if x.name.as_str() == "FOO"));
 
         let d = parse_ok("-ifndef(FOO).");
-        assert!(matches!(d, Directive::Ifndef(ref x) if x.name == "FOO"));
+        assert!(matches!(d, Directive::Ifndef(ref x) if x.name.as_str() == "FOO"));
     }
 
     #[test]

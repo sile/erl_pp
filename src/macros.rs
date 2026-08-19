@@ -25,6 +25,7 @@ use crate::error::{MacroDefinitionErrorKind, PreprocessError};
 use crate::origin::Origin;
 use crate::preprocessed_token::PreprocessedToken;
 use crate::source::{Source, SourceId, SourceSpan};
+use crate::source_string::SourceString;
 
 /// Identifier of a macro entry in a [`MacroTable`].
 ///
@@ -109,10 +110,10 @@ impl MacroDefinition {
     ) -> Result<Self, PreprocessError> {
         let (params, arity) = match &directive.params {
             Some(params) => {
-                if let Some((name, span)) = first_duplicate_param(params) {
+                if let Some(name) = first_duplicate_param(params) {
                     return Err(PreprocessError::MacroDefinition {
                         span: directive.span,
-                        kind: MacroDefinitionErrorKind::DuplicateParameter { name, span },
+                        kind: MacroDefinitionErrorKind::DuplicateParameter { name },
                     });
                 }
                 (params.clone(), Some(params.len()))
@@ -120,7 +121,7 @@ impl MacroDefinition {
             None => (Vec::new(), None),
         };
         let key = MacroKey {
-            name: directive.name.clone(),
+            name: directive.name.value.clone(),
             arity,
         };
         let replacement = directive
@@ -133,7 +134,7 @@ impl MacroDefinition {
             params,
             replacement,
             directive_span: directive.span,
-            name_span: directive.name_span,
+            name_span: directive.name.span,
             origin,
         })
     }
@@ -148,11 +149,11 @@ fn build_source_token(
     PreprocessedToken::new(token, Arc::clone(source), source_id, origin.clone())
 }
 
-fn first_duplicate_param(params: &[Param]) -> Option<(String, SourceSpan)> {
+fn first_duplicate_param(params: &[Param]) -> Option<SourceString> {
     let mut seen = HashMap::<&str, ()>::new();
     for p in params {
         if seen.insert(p.name.as_str(), ()).is_some() {
-            return Some((p.name.clone(), p.span));
+            return Some(p.name.clone());
         }
     }
     None
@@ -291,9 +292,9 @@ mod tests {
         let def = definition("-define(BAR(A, B, C), A).");
         assert_eq!(def.key, MacroKey::function("BAR", 3));
         assert_eq!(def.params.len(), 3);
-        assert_eq!(def.params[0].name, "A");
-        assert_eq!(def.params[1].name, "B");
-        assert_eq!(def.params[2].name, "C");
+        assert_eq!(def.params[0].name.as_str(), "A");
+        assert_eq!(def.params[1].name.as_str(), "B");
+        assert_eq!(def.params[2].name.as_str(), "C");
     }
 
     #[test]
@@ -311,9 +312,9 @@ mod tests {
             .expect_err("duplicate should fail");
         match err {
             PreprocessError::MacroDefinition {
-                kind: MacroDefinitionErrorKind::DuplicateParameter { name, .. },
+                kind: MacroDefinitionErrorKind::DuplicateParameter { name },
                 ..
-            } => assert_eq!(name, "A"),
+            } => assert_eq!(name.as_str(), "A"),
             other => panic!("unexpected error: {other:?}"),
         }
     }

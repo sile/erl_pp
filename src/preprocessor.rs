@@ -365,7 +365,7 @@ impl Preprocessor {
                 Ok(())
             }
             Directive::Undef(u) => {
-                self.macros.remove_all_by_name(&u.name);
+                self.macros.remove_all_by_name(u.name.as_str());
                 Ok(())
             }
             _ => Ok(()),
