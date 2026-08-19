@@ -63,9 +63,9 @@ impl MacroKey {
 
 /// A macro definition, ready to be looked up and expanded.
 ///
-/// Built from a parsed [`DefineDirective`] via
-/// [`MacroDefinition::from_directive`], which also validates the
-/// parameter list.
+/// Built by the preprocessor from a parsed [`DefineDirective`] with
+/// the parameter list validated (duplicate parameter names are
+/// rejected as [`PreprocessError::MacroDefinition`]).
 ///
 /// The replacement is kept as [`PreprocessedToken`]s so that later
 /// expansion can hand a caller tokens whose text, span, and origin are
