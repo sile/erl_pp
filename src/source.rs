@@ -20,7 +20,6 @@ use erl_tokenize::Position;
 pub struct SourceId(NonZeroU32);
 
 impl SourceId {
-    #[allow(dead_code, reason = "constructed by SourceStore::append")]
     fn from_index(index: usize) -> Self {
         let one_based = u32::try_from(index)
             .ok()
@@ -101,7 +100,6 @@ impl SourceStore {
     }
 
     /// Appends a source and returns its identifier.
-    #[allow(dead_code, reason = "invoked by preprocessor internals to be added")]
     pub(crate) fn append(&self, source: Source) -> SourceId {
         let mut sources = self.sources.write().expect("SourceStore lock was poisoned");
         let index = sources.len();
@@ -114,7 +112,6 @@ impl SourceStore {
     /// The display name should mark the source as synthesized so that
     /// callers can distinguish it from real files
     /// (e.g. `"<synth:?FILE at main.erl:3>"`).
-    #[allow(dead_code, reason = "invoked by macro expansion internals to be added")]
     pub(crate) fn append_pseudo<N, T>(&self, display_name: N, text: T) -> SourceId
     where
         N: Into<Arc<str>>,

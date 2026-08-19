@@ -19,7 +19,7 @@
 
 use std::borrow::Cow;
 
-use erl_tokenize::{Keyword, Position, Symbol, Token, TokenKind, TokenValue};
+use erl_tokenize::{Position, Symbol, Token, TokenKind, TokenValue};
 
 use crate::cursor::Cursor;
 use crate::error::{ParseError, ParseFailure};
@@ -245,7 +245,6 @@ const KNOWN_DIRECTIVES: &[&str] = &[
 ///   seen `-` and a recognised name) but the structure did not match.
 ///   The cursor position is undefined; the caller should not continue
 ///   parsing this form.
-#[allow(dead_code, reason = "invoked by preprocessor internals to be added")]
 pub(crate) fn parse_directive(cursor: &mut Cursor) -> Result<Option<Directive>, ParseError> {
     let entry = cursor.checkpoint();
 
@@ -796,13 +795,6 @@ fn directive_name_text<'a>(token: Token, source: &'a str) -> Option<Cow<'a, str>
         _ => None,
     }
 }
-
-// Silence unused-import warnings when no tests exercise a particular
-// path. `Position` is used at the top of `parse_directive` via a
-// helper; `Keyword` is imported for completeness of the name-decoding
-// path even if only Atom-named directives appear in the tests.
-#[allow(dead_code)]
-fn _touch_imports(_: Position, _: Keyword) {}
 
 #[cfg(test)]
 mod tests {

@@ -90,10 +90,10 @@ enum State {
     /// [`Preprocessor::resume_lexical`] to continue.
     AwaitingLexicalResume,
     /// Placeholder for future include response handling.
-    #[allow(dead_code, reason = "constructed by later include work")]
+    #[expect(dead_code, reason = "constructed by later include work")]
     AwaitingIncludeResolution,
     /// Placeholder for future conditional response handling.
-    #[allow(dead_code, reason = "constructed by later conditional work")]
+    #[expect(dead_code, reason = "constructed by later conditional work")]
     AwaitingConditionalDecision,
     /// The input has been fully processed.
     Completed,

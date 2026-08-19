@@ -61,7 +61,6 @@ pub(crate) struct Checkpoint {
 
 impl Cursor {
     /// Creates a new cursor positioned at the start of `source`.
-    #[allow(dead_code, reason = "invoked by preprocessor internals to be added")]
     pub(crate) fn new(source_id: SourceId, source: Arc<Source>) -> Self {
         Self {
             source_id,
@@ -73,7 +72,6 @@ impl Cursor {
     }
 
     /// Returns the identifier of the source the cursor walks.
-    #[allow(dead_code, reason = "consulted by preprocessor internals to be added")]
     pub(crate) fn source_id(&self) -> SourceId {
         self.source_id
     }
@@ -83,13 +81,11 @@ impl Cursor {
     /// Callers pass this string to [`erl_tokenize::Token::text`] or
     /// [`erl_tokenize::Token::value`] to decode a token that this
     /// cursor produced.
-    #[allow(dead_code, reason = "consulted by preprocessor internals to be added")]
     pub(crate) fn source_text(&self) -> &str {
         self.source.text()
     }
 
     /// Returns a shared handle to the source the cursor walks.
-    #[allow(dead_code, reason = "consulted by preprocessor internals to be added")]
     pub(crate) fn source(&self) -> &Arc<Source> {
         &self.source
     }
@@ -98,7 +94,13 @@ impl Cursor {
     /// [`resume`](Self::resume) call after emitting a
     /// [`LexicalError`]. The position is the resume point suggested by
     /// `erl_tokenize` (`Error`'s `resume_position`).
-    #[allow(dead_code, reason = "consulted by preprocessor internals to be added")]
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "consulted only by tests today; kept for future callers"
+        )
+    )]
     pub(crate) fn pending_resume(&self) -> Option<Position> {
         self.pending_resume
     }
@@ -110,7 +112,6 @@ impl Cursor {
     /// [`pending_resume`](Self::pending_resume) (the resume point
     /// suggested by `erl_tokenize`, which is guaranteed to be strictly
     /// after the failing scan).
-    #[allow(dead_code, reason = "invoked by preprocessor internals to be added")]
     pub(crate) fn resume(&mut self, position: Position) {
         self.position = position;
         self.pending_resume = None;
@@ -118,7 +119,6 @@ impl Cursor {
 
     /// Returns `true` when the cursor has consumed the whole source
     /// and no scanning error is pending.
-    #[allow(dead_code, reason = "consulted by preprocessor internals to be added")]
     pub(crate) fn is_at_eof(&self) -> bool {
         self.lookahead.is_empty()
             && self.pending_resume.is_none()
@@ -131,7 +131,6 @@ impl Cursor {
     /// Returns `None` at end of source, `Some(Err(_))` when the scan
     /// fails. Multiple calls with no intervening [`bump`](Self::bump)
     /// return the same token.
-    #[allow(dead_code, reason = "invoked by preprocessor internals to be added")]
     pub(crate) fn peek(&mut self) -> Option<Result<Token, LexicalError>> {
         match self.ensure_lookahead(1) {
             Ok(true) => Some(Ok(self.lookahead[0])),
@@ -149,7 +148,6 @@ impl Cursor {
     ///
     /// Returns `None` when no lexical token remains, `Some(Err(_))`
     /// when scanning fails before one is found.
-    #[allow(dead_code, reason = "invoked by preprocessor internals to be added")]
     pub(crate) fn peek_lexical(&mut self) -> Option<Result<Token, LexicalError>> {
         let mut i = 0;
         loop {
@@ -169,7 +167,6 @@ impl Cursor {
     ///
     /// Returns `None` at end of source, `Some(Err(_))` when the scan
     /// fails.
-    #[allow(dead_code, reason = "invoked by preprocessor internals to be added")]
     pub(crate) fn bump(&mut self) -> Option<Result<Token, LexicalError>> {
         match self.ensure_lookahead(1) {
             Ok(true) => Some(Ok(self
@@ -185,7 +182,6 @@ impl Cursor {
     /// with [`restore`](Self::restore).
     ///
     /// Multiple checkpoints can be taken and restored in LIFO order.
-    #[allow(dead_code, reason = "invoked by preprocessor internals to be added")]
     pub(crate) fn checkpoint(&self) -> Checkpoint {
         Checkpoint {
             position: self.position,
@@ -195,7 +191,6 @@ impl Cursor {
     }
 
     /// Rewinds the cursor to the state saved in `checkpoint`.
-    #[allow(dead_code, reason = "invoked by preprocessor internals to be added")]
     pub(crate) fn restore(&mut self, checkpoint: Checkpoint) {
         self.position = checkpoint.position;
         self.lookahead = checkpoint.lookahead;

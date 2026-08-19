@@ -33,7 +33,6 @@ use crate::source_string::SourceString;
 /// kept in a pending-resume state; the outer state machine chooses to
 /// stop or to resume the cursor at the suggested (or any later)
 /// position.
-#[allow(dead_code, reason = "consumed by preprocessor internals to be added")]
 #[derive(Debug, Clone)]
 pub(crate) struct LexicalError {
     /// Span at which the failing scan started. `span.end` matches
@@ -55,7 +54,6 @@ pub(crate) struct LexicalError {
 /// short description of what was expected, and how parsing actually
 /// failed (an unexpected token, an unexpected end of source, or a
 /// lexical error surfaced by the cursor).
-#[allow(dead_code, reason = "consumed by preprocessor internals to be added")]
 #[derive(Debug, Clone)]
 pub(crate) struct ParseError {
     /// Span covering the directive's opening `-`.
@@ -67,7 +65,6 @@ pub(crate) struct ParseError {
 }
 
 /// The concrete failure that caused a [`ParseError`].
-#[allow(dead_code, reason = "consumed by preprocessor internals to be added")]
 #[derive(Debug, Clone)]
 pub(crate) enum ParseFailure {
     /// An unexpected token was found.
