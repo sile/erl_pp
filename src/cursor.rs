@@ -128,14 +128,15 @@ impl Cursor {
     /// Returns the next token, including hidden tokens (comments and
     /// whitespace), without advancing the cursor.
     ///
-    /// Returns `None` at end of source, `Some(Err(_))` when the scan
-    /// fails. Multiple calls with no intervening [`bump`](Self::bump)
-    /// return the same token.
-    pub(crate) fn peek(&mut self) -> Option<Result<Token, LexicalError>> {
+    /// `Ok(Some(token))` yields the next token, `Ok(None)` marks a
+    /// clean end-of-source, and `Err(_)` surfaces a real tokenizer
+    /// failure. Multiple calls with no intervening
+    /// [`bump`](Self::bump) return the same token.
+    pub(crate) fn peek(&mut self) -> Result<Option<Token>, LexicalError> {
         match self.ensure_lookahead(1) {
-            Ok(true) => Some(Ok(self.lookahead[0])),
-            Ok(false) => None,
-            Err(e) => Some(Err(e)),
+            Ok(true) => Ok(Some(self.lookahead[0])),
+            Ok(false) => Ok(None),
+            Err(e) => Err(e),
         }
     }
 
@@ -144,20 +145,19 @@ impl Cursor {
     ///
     /// Hidden tokens scanned along the way are queued internally so
     /// that the next [`bump`](Self::bump) calls yield them in the
-    /// original order before the lexical token.
-    ///
-    /// Returns `None` when no lexical token remains, `Some(Err(_))`
-    /// when scanning fails before one is found.
-    pub(crate) fn peek_lexical(&mut self) -> Option<Result<Token, LexicalError>> {
+    /// original order before the lexical token. `Ok(None)` when no
+    /// lexical token remains, `Err(_)` when a scan failure surfaces
+    /// before one is found.
+    pub(crate) fn peek_lexical(&mut self) -> Result<Option<Token>, LexicalError> {
         let mut i = 0;
         loop {
             match self.ensure_lookahead(i + 1) {
                 Ok(true) => {}
-                Ok(false) => return None,
-                Err(e) => return Some(Err(e)),
+                Ok(false) => return Ok(None),
+                Err(e) => return Err(e),
             }
             if self.lookahead[i].kind().is_lexical() {
-                return Some(Ok(self.lookahead[i]));
+                return Ok(Some(self.lookahead[i]));
             }
             i += 1;
         }
@@ -165,16 +165,17 @@ impl Cursor {
 
     /// Consumes and returns the next token, including hidden tokens.
     ///
-    /// Returns `None` at end of source, `Some(Err(_))` when the scan
-    /// fails.
-    pub(crate) fn bump(&mut self) -> Option<Result<Token, LexicalError>> {
+    /// `Ok(Some(token))` yields the token, `Ok(None)` marks a clean
+    /// end-of-source, and `Err(_)` surfaces a real tokenizer failure.
+    pub(crate) fn bump(&mut self) -> Result<Option<Token>, LexicalError> {
         match self.ensure_lookahead(1) {
-            Ok(true) => Some(Ok(self
-                .lookahead
-                .pop_front()
-                .expect("ensure_lookahead(1) guarantees a queued token"))),
-            Ok(false) => None,
-            Err(e) => Some(Err(e)),
+            Ok(true) => Ok(Some(
+                self.lookahead
+                    .pop_front()
+                    .expect("ensure_lookahead(1) guarantees a queued token"),
+            )),
+            Ok(false) => Ok(None),
+            Err(e) => Err(e),
         }
     }
 
@@ -246,16 +247,16 @@ mod tests {
     fn empty_source_reports_eof() {
         let mut cursor = make_cursor("");
         assert!(cursor.is_at_eof());
-        assert!(cursor.peek().is_none());
-        assert!(cursor.bump().is_none());
+        assert!(cursor.peek().unwrap().is_none());
+        assert!(cursor.bump().unwrap().is_none());
     }
 
     #[test]
     fn bump_yields_tokens_in_source_order() {
         let mut cursor = make_cursor("foo bar");
         let mut kinds = Vec::new();
-        while let Some(token) = cursor.bump() {
-            kinds.push(token.expect("no lexical errors").kind());
+        while let Some(token) = cursor.bump().expect("no lexical errors") {
+            kinds.push(token.kind());
         }
         assert_eq!(
             kinds,
@@ -313,7 +314,7 @@ mod tests {
         assert_eq!(after_restore.kind(), TokenKind::Whitespace);
 
         // Continue scanning to the end.
-        while cursor.bump().is_some() {}
+        while cursor.bump().unwrap().is_some() {}
         assert!(cursor.is_at_eof());
     }
 
@@ -340,7 +341,7 @@ mod tests {
         // Unterminated string literal triggers a NoClosingQuotation
         // error.
         let mut cursor = make_cursor("\"oops");
-        let err = cursor.bump().unwrap().unwrap_err();
+        let err = cursor.bump().unwrap_err();
         assert_eq!(err.kind, ErrorKind::NoClosingQuotation);
         assert_eq!(err.span.source_id, cursor.source_id());
         assert!(err.span.start.offset() < err.span.end.offset());
@@ -351,7 +352,7 @@ mod tests {
     #[test]
     fn resume_advances_past_lexical_error() {
         let mut cursor = make_cursor("\"oops\nfoo");
-        let err = cursor.bump().unwrap().unwrap_err();
+        let err = cursor.bump().unwrap_err();
         assert!(cursor.pending_resume().is_some());
 
         cursor.resume(err.resume_position);
@@ -359,8 +360,8 @@ mod tests {
 
         // After resume, the cursor should read the remaining tokens.
         let mut kinds = Vec::new();
-        while let Some(token) = cursor.bump() {
-            kinds.push(token.expect("recovered stream has no errors").kind());
+        while let Some(token) = cursor.bump().expect("recovered stream has no errors") {
+            kinds.push(token.kind());
         }
         assert!(kinds.contains(&TokenKind::Atom));
         assert!(cursor.is_at_eof());
@@ -369,8 +370,8 @@ mod tests {
     #[test]
     fn calling_bump_without_resume_re_emits_the_same_error() {
         let mut cursor = make_cursor("\"oops");
-        let first = cursor.bump().unwrap().unwrap_err();
-        let second = cursor.bump().unwrap().unwrap_err();
+        let first = cursor.bump().unwrap_err();
+        let second = cursor.bump().unwrap_err();
         assert_eq!(first.span, second.span);
         assert_eq!(first.resume_position, second.resume_position);
     }
@@ -381,10 +382,8 @@ mod tests {
         // scan forward, queue the hidden tokens, and surface the error
         // because no lexical token is reachable.
         let mut cursor = make_cursor("% hidden\n\"oops");
-        let peeked = cursor
-            .peek_lexical()
-            .expect("scan reached the error before EOF");
-        assert!(peeked.is_err());
+        let err = cursor.peek_lexical().unwrap_err();
+        assert_eq!(err.kind, ErrorKind::NoClosingQuotation);
 
         // Drain the queued hidden tokens before the error re-emerges.
         let a = cursor.bump().unwrap().unwrap();
@@ -393,7 +392,7 @@ mod tests {
         assert_eq!(b.kind(), TokenKind::Whitespace);
 
         // Now bump re-hits the error.
-        let err = cursor.bump().unwrap().unwrap_err();
+        let err = cursor.bump().unwrap_err();
         assert_eq!(err.kind, ErrorKind::NoClosingQuotation);
     }
 }

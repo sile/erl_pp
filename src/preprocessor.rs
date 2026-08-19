@@ -327,7 +327,7 @@ impl Preprocessor {
             }
 
             match self.cursor.bump() {
-                Some(Ok(token)) => {
+                Ok(Some(token)) => {
                     self.update_form_boundary_after_bump(token);
                     let ppt = PreprocessedToken::new(
                         token,
@@ -337,8 +337,8 @@ impl Preprocessor {
                     );
                     return Event::Token(ppt);
                 }
-                Some(Err(lex_err)) => return self.emit_lexical_error(lex_err),
-                None => continue,
+                Ok(None) => continue,
+                Err(lex_err) => return self.emit_lexical_error(lex_err),
             }
         }
     }
