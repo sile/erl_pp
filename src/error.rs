@@ -11,53 +11,18 @@
 //!   response, calling the wrong response method, and so on). It is
 //!   returned as `Err` from `step` and from the response methods.
 //!
-//! [`LexicalError`] is emitted only from [`crate::Source::from_text`]
-//! (and, internally, from the pseudo-source scan path used by later
-//! macro-expansion work) when the crate scans text on the caller's
-//! behalf. Callers that supply pre-scanned tokens through
-//! [`crate::Source::new`] never see it.
+//! Tokenization is the caller's responsibility; lexical failures are
+//! surfaced by [`erl_tokenize::scan_token`] at the point the caller
+//! scans the source and never reach this module.
 //!
 //! The internal [`ParseError`] emitted by the directive parser stays
 //! `pub(crate)`; it is turned into [`PreprocessError`] by a `From`
 //! conversion when it crosses the public API boundary.
 
-use std::sync::Arc;
-
-use erl_tokenize::{ErrorKind, Position, TokenKind};
+use erl_tokenize::TokenKind;
 
 use crate::source::SourceSpan;
 use crate::source_string::SourceString;
-
-// ---------------------------------------------------------------------------
-// public lexical error (produced by Source::from_text / SourceStore::append_pseudo)
-
-/// Lexical error surfaced when the crate tokenizes text on the caller's
-/// behalf.
-///
-/// The only public entry point that scans text is
-/// [`crate::Source::from_text`]; callers that supply pre-scanned
-/// tokens through [`crate::Source::new`] never receive this error.
-///
-/// Carries the display name of the offending source, the position at
-/// which the failing scan started, the tokenizer error kind, and the
-/// resume position suggested by [`erl_tokenize::Error`] (strictly
-/// after the failing scan, useful if the caller wants to resume
-/// tokenization instead of aborting the whole source).
-#[derive(Debug, Clone)]
-pub struct LexicalError {
-    /// Display name of the source that failed to tokenize (as passed
-    /// to [`crate::Source::from_text`]).
-    pub display_name: Arc<str>,
-    /// Position at which the failing scan started.
-    pub position: Position,
-    /// Kind of the tokenizer error.
-    pub kind: ErrorKind,
-    /// Position at which tokenization could be resumed without
-    /// looping. This is [`erl_tokenize::Error`]'s `resume_position`
-    /// unchanged; the tokenizer guarantees it is strictly after the
-    /// failing scan.
-    pub resume_position: Position,
-}
 
 // ---------------------------------------------------------------------------
 // crate-internal parse error (produced by the directive parser)

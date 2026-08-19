@@ -10,11 +10,10 @@
 //! state without advancing it.
 //!
 //! The preprocessor consumes pre-scanned [`Source`] token streams;
-//! tokenization is the caller's responsibility (use
-//! [`Source::from_text`] as a convenience or hand in a token stream
-//! through [`Source::new`]). Lexical errors surface only when the
-//! caller constructs a [`Source`], never through
-//! [`Preprocessor::step`].
+//! tokenization is the caller's responsibility (scan with
+//! [`erl_tokenize::scan_token`] and hand the resulting tokens to
+//! [`Source::new`]). Lexical errors surface only when the caller
+//! scans, never through [`Preprocessor::step`].
 //!
 //! The preprocessor does not retain scanned tokens; each
 //! [`crate::Event::Token`] carries a self-contained
@@ -378,11 +377,11 @@ mod tests {
     use crate::error::PreprocessError;
 
     fn make(text: &str) -> Preprocessor {
-        Preprocessor::new(Source::from_text("main.erl", text).expect("valid tokens"))
+        Preprocessor::new(Source::from_text("main.erl", text))
     }
 
     fn define_source(text: &str) -> Source {
-        Source::from_text("<initial macro>", text).expect("valid define tokens")
+        Source::from_text("<initial macro>", text)
     }
 
     fn drain(pp: &mut Preprocessor) -> Vec<Event> {

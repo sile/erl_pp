@@ -58,7 +58,7 @@ mod tests {
 
     fn dummy_span() -> SourceSpan {
         let store = SourceStore::new();
-        let id = store.append(Source::from_text("m.erl", "foo").expect("valid tokens"));
+        let id = store.append(Source::from_text("m.erl", "foo"));
         SourceSpan::new(id, Position::new(), Position::new())
     }
 

@@ -6,9 +6,8 @@
 //! lookahead and snapshot-based rollback.
 //!
 //! Tokenization is not this module's job. The tokens are produced up
-//! front by [`crate::Source::from_text`] (or supplied by the caller
-//! through [`crate::Source::new`]); the cursor merely indexes into
-//! that stored token slice.
+//! front by the caller and handed to [`crate::Source::new`]; the
+//! cursor merely indexes into that stored token slice.
 //!
 //! Multi-source concerns like `-include` are the state machine's job;
 //! the state machine builds a new [`Cursor`] for each entered source
@@ -146,7 +145,7 @@ mod tests {
 
     fn make_cursor(text: &str) -> Cursor {
         let store = SourceStore::new();
-        let id = store.append(Source::from_text("main.erl", text).expect("valid tokens"));
+        let id = store.append(Source::from_text("main.erl", text));
         Cursor::new(id, store.get(id))
     }
 

@@ -21,7 +21,7 @@ pub use crate::directive::{
     WarningDirective,
 };
 pub use crate::error::{
-    LexicalError, MacroDefinitionErrorKind, PreprocessError, PreprocessParseFailure, ProtocolError,
+    MacroDefinitionErrorKind, PreprocessError, PreprocessParseFailure, ProtocolError,
 };
 pub use crate::event::{BranchBoundary, ConditionalRequest, Diagnostic, Event, IncludeRequest};
 pub use crate::macros::{MacroDefinition, MacroKey, MacroTable};
