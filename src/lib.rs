@@ -15,22 +15,22 @@
 #![warn(missing_docs)]
 #![forbid(unsafe_code)]
 
-pub use crate::action::{Action, BranchBoundary, ConditionalRequest, Diagnostic, IncludeRequest};
 pub use crate::directive::{
     DefineDirective, Directive, ElseDirective, EndifDirective, ErrorDirective, IfdefDirective,
     IfndefDirective, IncludeDirective, IncludeLibDirective, Param, UndefDirective,
     WarningDirective,
 };
 pub use crate::error::{PreprocessError, PreprocessParseFailure, ProtocolError};
+pub use crate::event::{BranchBoundary, ConditionalRequest, Diagnostic, Event, IncludeRequest};
 pub use crate::origin::Origin;
 pub use crate::preprocessed_token::PreprocessedToken;
 pub use crate::preprocessor::{Preprocessor, Status};
 pub use crate::source::{Source, SourceId, SourceSpan, SourceStore};
 
-mod action;
 mod cursor;
 mod directive;
 mod error;
+mod event;
 mod origin;
 mod preprocessed_token;
 mod preprocessor;

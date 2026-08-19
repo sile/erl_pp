@@ -1,25 +1,26 @@
-//! Actions produced by the preprocessor state machine.
+//! Events produced by the preprocessor state machine.
 //!
-//! [`crate::Preprocessor::next_action`] returns one [`Action`] at a
-//! time. Callers consume the action and — when the action leaves the
-//! machine awaiting a response — invoke the matching response method
-//! before calling `next_action` again. [`crate::Preprocessor::status`]
-//! reports which response (if any) the machine is currently awaiting.
+//! Each call to [`crate::Preprocessor::step`] advances the machine by
+//! one transition and returns one [`Event`] describing what happened.
+//! When the event leaves the machine awaiting a response, the caller
+//! invokes the matching response method before calling `step` again.
+//! [`crate::Preprocessor::status`] reports which response (if any) the
+//! machine is currently awaiting.
 
 use crate::directive::Directive;
 use crate::error::PreprocessError;
 use crate::preprocessed_token::PreprocessedToken;
 
-/// One-shot output of [`crate::Preprocessor::next_action`].
+/// One-shot output of [`crate::Preprocessor::step`].
 ///
-/// The state machine advances by exactly one action per call. Some
-/// variants leave the machine in an awaiting state; while the machine
-/// is awaiting a response, the caller must invoke the corresponding
-/// response method before `next_action` will return another action.
-/// Inspect [`crate::Preprocessor::status`] to see which response is
-/// expected.
+/// Each `step` call advances the state machine and returns exactly one
+/// event. Some variants leave the machine in an awaiting state; while
+/// the machine is awaiting a response, the caller must invoke the
+/// corresponding response method before `step` will return another
+/// event. Inspect [`crate::Preprocessor::status`] to see which
+/// response is expected.
 #[derive(Debug, Clone)]
-pub enum Action {
+pub enum Event {
     /// A token was scanned from the input.
     ///
     /// The bundled [`PreprocessedToken`] carries the token itself, the
@@ -32,22 +33,25 @@ pub enum Action {
     /// A preprocessor directive was observed.
     ///
     /// The directive tokens are consumed from the source; they are
-    /// not streamed as [`Action::Token`]. Downstream effects (macro
+    /// not streamed as [`Event::Token`]. Downstream effects (macro
     /// table updates, include resolution, conditional selection,
     /// diagnostic emission) are the caller's or later work's
     /// responsibility.
     Directive(Directive),
 
-    /// The preprocessor needs the caller to resolve an include.
+    /// The preprocessor is awaiting an include resolution from the
+    /// caller.
     ///
-    /// Payload is filled in by later work on include resolution.
-    IncludeRequest(IncludeRequest),
+    /// Payload struct name is preserved for now; details are filled
+    /// in by later work on include resolution.
+    AwaitingInclude(IncludeRequest),
 
-    /// The preprocessor needs the caller to select a conditional
-    /// branch.
+    /// The preprocessor is awaiting a conditional-branch decision
+    /// from the caller.
     ///
-    /// Payload is filled in by later work on conditional branching.
-    ConditionalRequest(ConditionalRequest),
+    /// Payload struct name is preserved for now; details are filled
+    /// in by later work on conditional branching.
+    AwaitingConditional(ConditionalRequest),
 
     /// The preprocessor is crossing a conditional branch boundary
     /// (`-else` / `-endif`).
@@ -70,33 +74,32 @@ pub enum Action {
 
     /// The whole input has been processed.
     ///
-    /// Subsequent `next_action` calls return `Complete` without side
-    /// effects.
+    /// Subsequent `step` calls return `Complete` without side effects.
     Complete,
 }
 
-/// Data of an [`Action::IncludeRequest`].
+/// Data of an [`Event::AwaitingInclude`].
 ///
 /// Payload details (directive kind, decoded path, span, origin, etc.)
 /// are filled in by later work on include resolution.
 #[derive(Debug, Clone)]
 pub struct IncludeRequest {}
 
-/// Data of an [`Action::ConditionalRequest`].
+/// Data of an [`Event::AwaitingConditional`].
 ///
 /// Payload details are filled in by later work on conditional
 /// branching.
 #[derive(Debug, Clone)]
 pub struct ConditionalRequest {}
 
-/// Data of an [`Action::BranchBoundary`].
+/// Data of an [`Event::BranchBoundary`].
 ///
 /// Payload details are filled in by later work on conditional
 /// branching.
 #[derive(Debug, Clone)]
 pub struct BranchBoundary {}
 
-/// Data of an [`Action::Diagnostic`].
+/// Data of an [`Event::Diagnostic`].
 ///
 /// Payload details are filled in by later work on diagnostic
 /// directives.

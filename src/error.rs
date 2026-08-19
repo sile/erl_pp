@@ -3,14 +3,13 @@
 //! The crate exposes two public error types:
 //!
 //! - [`PreprocessError`] wraps every input-derived failure the
-//!   preprocessor can surface as an action (lexical, parse, and later
+//!   preprocessor can surface as an event (lexical, parse, and later
 //!   macro/include/conditional variants). It is the payload of
-//!   `Action::PreprocessError`.
+//!   `Event::PreprocessError`.
 //! - [`ProtocolError`] describes caller mistakes when driving the
-//!   state machine (calling `next_action` while the machine is
-//!   awaiting a response, calling the wrong response method, and so
-//!   on). It is returned as `Err` from `next_action` and from the
-//!   response methods.
+//!   state machine (calling `step` while the machine is awaiting a
+//!   response, calling the wrong response method, and so on). It is
+//!   returned as `Err` from `step` and from the response methods.
 //!
 //! The internal [`LexicalError`] emitted by the source cursor and the
 //! internal [`ParseError`] emitted by the directive parser stay
@@ -89,7 +88,7 @@ pub(crate) enum ParseFailure {
 // public errors
 
 /// An input-derived error that the preprocessor surfaced through the
-/// action stream.
+/// event stream.
 ///
 /// Every variant carries the source span at which the failure was
 /// located, alongside variant-specific details.
@@ -170,7 +169,7 @@ impl From<ParseError> for PreprocessError {
 }
 
 /// Caller-driven-mistake error returned from response methods and from
-/// `next_action` when the caller uses the state machine's protocol
+/// `step` when the caller uses the state machine's protocol
 /// incorrectly.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProtocolError {
@@ -181,7 +180,6 @@ pub enum ProtocolError {
     /// machine is awaiting (e.g. `resume_lexical` while awaiting an
     /// include resolution).
     WrongResponseKind,
-    /// `next_action` was called while the machine is awaiting a
-    /// response.
-    NextActionWhilePending,
+    /// `step` was called while the machine is awaiting a response.
+    StepWhilePending,
 }

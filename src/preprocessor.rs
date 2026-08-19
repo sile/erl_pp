@@ -2,16 +2,16 @@
 //!
 //! [`Preprocessor`] owns a [`Cursor`], a shared [`SourceStore`], and a
 //! small state variable that tracks whether the machine is currently
-//! awaiting a response. Callers drive the machine one action at a time
-//! with [`Preprocessor::next_action`] and, when the machine surfaces
-//! an action that leaves it awaiting (a lexical recovery point today;
+//! awaiting a response. Callers drive the machine one step at a time
+//! with [`Preprocessor::step`] and, when the returned event leaves
+//! the machine awaiting a response (a lexical recovery point today;
 //! include and conditional responses in later work), respond through
-//! one of the response methods before calling `next_action` again.
+//! one of the response methods before calling `step` again.
 //! [`Preprocessor::status`] reports the current state without
 //! advancing it.
 //!
 //! The preprocessor does not retain scanned tokens; each
-//! [`crate::Action::Token`] carries a self-contained
+//! [`crate::Event::Token`] carries a self-contained
 //! [`PreprocessedToken`] and the caller keeps whatever accumulator
 //! they need.
 //!
@@ -22,10 +22,10 @@ use std::sync::Arc;
 
 use erl_tokenize::{Position, Symbol, Token, TokenKind};
 
-use crate::action::Action;
 use crate::cursor::Cursor;
 use crate::directive::parse_directive;
 use crate::error::{LexicalError, ParseFailure, ProtocolError};
+use crate::event::Event;
 use crate::origin::Origin;
 use crate::preprocessed_token::PreprocessedToken;
 use crate::source::{Source, SourceStore};
@@ -35,18 +35,18 @@ use crate::source::{Source, SourceStore};
 /// # Overview
 ///
 /// 1. Create with [`Preprocessor::new`] and an initial [`Source`].
-/// 2. Call [`next_action`](Self::next_action) repeatedly; every call
-///    returns exactly one [`Action`].
-/// 3. When an action leaves the machine awaiting a response, invoke
-///    the matching response method (currently
+/// 2. Call [`step`](Self::step) repeatedly; every call advances the
+///    machine by one transition and returns exactly one [`Event`].
+/// 3. When the returned event leaves the machine awaiting a response,
+///    invoke the matching response method (currently
 ///    [`resume_lexical`](Self::resume_lexical)) before calling
-///    `next_action` again. Use [`status`](Self::status) to inspect
-///    what response, if any, is expected.
-/// 4. When [`Action::Complete`] is returned, later `next_action`
-///    calls keep returning `Action::Complete`.
+///    `step` again. Use [`status`](Self::status) to inspect what
+///    response, if any, is expected.
+/// 4. When [`Event::Complete`] is returned, later `step` calls keep
+///    returning `Event::Complete`.
 ///
 /// The preprocessor does not retain scanned tokens; each
-/// [`Action::Token`] carries a self-contained [`PreprocessedToken`]
+/// [`Event::Token`] carries a self-contained [`PreprocessedToken`]
 /// and the caller keeps whatever accumulator they need.
 ///
 /// The preprocessor implements [`Clone`] so that state machine forks
@@ -76,7 +76,7 @@ pub struct Preprocessor {
 /// State-machine state.
 #[derive(Debug, Clone)]
 enum State {
-    /// Default state: `next_action` runs the scan loop.
+    /// Default state: `step` runs the scan loop.
     Scanning,
     /// A lexical error was surfaced; caller must call
     /// [`Preprocessor::resume_lexical`] to continue.
@@ -94,14 +94,14 @@ enum State {
 /// Public view of the preprocessor's state.
 ///
 /// Returned by [`Preprocessor::status`]. Payload for awaiting variants
-/// is deliberately empty: the payload of the last action already
+/// is deliberately empty: the payload of the last event already
 /// carries the information the caller needs to respond (e.g.
 /// [`crate::PreprocessError::Lexical`] carries the resume
 /// position).
 #[derive(Debug, Clone)]
 pub enum Status {
     /// The machine is ready to advance; call
-    /// [`Preprocessor::next_action`] for the next event.
+    /// [`Preprocessor::step`] for the next event.
     Scanning,
     /// The machine paused after a lexical error and expects
     /// [`Preprocessor::resume_lexical`] before it can advance again.
@@ -112,8 +112,8 @@ pub enum Status {
     /// The machine paused waiting for a conditional-branch decision.
     /// Reserved for future work; not produced in this release.
     AwaitingConditionalDecision,
-    /// All input has been consumed; further `next_action` calls
-    /// return [`Action::Complete`].
+    /// All input has been consumed; further `step` calls
+    /// return [`Event::Complete`].
     Completed,
 }
 
@@ -155,17 +155,17 @@ impl Preprocessor {
         }
     }
 
-    /// Advances the state machine and returns one [`Action`].
+    /// Advances the state machine and returns one [`Event`].
     ///
-    /// Returns `Err(ProtocolError::NextActionWhilePending)` when the
+    /// Returns `Err(ProtocolError::StepWhilePending)` when the
     /// machine is awaiting a response; the caller must respond before
     /// calling this method again.
-    pub fn next_action(&mut self) -> Result<Action, ProtocolError> {
+    pub fn step(&mut self) -> Result<Event, ProtocolError> {
         match self.state {
             State::AwaitingLexicalResume
             | State::AwaitingIncludeResolution
-            | State::AwaitingConditionalDecision => Err(ProtocolError::NextActionWhilePending),
-            State::Completed => Ok(Action::Complete),
+            | State::AwaitingConditionalDecision => Err(ProtocolError::StepWhilePending),
+            State::Completed => Ok(Event::Complete),
             State::Scanning => Ok(self.step_scan()),
         }
     }
@@ -174,7 +174,7 @@ impl Preprocessor {
     ///
     /// `at_position` is typically the `resume_position` carried on
     /// the [`crate::PreprocessError::Lexical`] variant of the most
-    /// recent [`Action::PreprocessError`], but any position strictly
+    /// recent [`Event::PreprocessError`], but any position strictly
     /// after the failing scan is accepted.
     pub fn resume_lexical(&mut self, at_position: Position) -> Result<(), ProtocolError> {
         match self.state {
@@ -190,10 +190,10 @@ impl Preprocessor {
         }
     }
 
-    /// Runs the scan loop until it can produce one action.
+    /// Runs the scan loop until it can produce one event.
     ///
     /// See the module rustdoc for the loop contract.
-    fn step_scan(&mut self) -> Action {
+    fn step_scan(&mut self) -> Event {
         loop {
             if self.cursor.is_at_eof() {
                 if let Some(parent) = self.include_stack.pop() {
@@ -201,7 +201,7 @@ impl Preprocessor {
                     continue;
                 }
                 self.state = State::Completed;
-                return Action::Complete;
+                return Event::Complete;
             }
 
             if self.at_form_boundary {
@@ -211,7 +211,7 @@ impl Preprocessor {
                         // including the terminating `.`, so we are at
                         // a new form boundary.
                         self.at_form_boundary = true;
-                        return Action::Directive(directive);
+                        return Event::Directive(directive);
                     }
                     Ok(None) => {
                         // Cursor was restored to entry; consume the
@@ -231,7 +231,7 @@ impl Preprocessor {
                         if let ParseFailure::Lexical(boxed_lex) = pe.actual {
                             return self.emit_lexical_error(*boxed_lex);
                         }
-                        return Action::PreprocessError(pe.into());
+                        return Event::PreprocessError(pe.into());
                     }
                 }
             }
@@ -245,7 +245,7 @@ impl Preprocessor {
                         self.cursor.source_id(),
                         Origin::Source,
                     );
-                    return Action::Token(ppt);
+                    return Event::Token(ppt);
                 }
                 Some(Err(lex_err)) => return self.emit_lexical_error(lex_err),
                 None => continue,
@@ -254,15 +254,15 @@ impl Preprocessor {
     }
 
     /// Marks the machine as awaiting a lexical resume and returns
-    /// the action that surfaces the error to the caller.
+    /// the event that surfaces the error to the caller.
     ///
     /// Called from both the direct scan path and the parse-directive
     /// path so that a lexical failure recovered inside the directive
     /// parser reaches the caller with the same resume protocol as a
     /// bare scan failure.
-    fn emit_lexical_error(&mut self, lex_err: LexicalError) -> Action {
+    fn emit_lexical_error(&mut self, lex_err: LexicalError) -> Event {
         self.state = State::AwaitingLexicalResume;
-        Action::PreprocessError(lex_err.into())
+        Event::PreprocessError(lex_err.into())
     }
 
     fn update_form_boundary_after_bump(&mut self, token: Token) {
@@ -314,34 +314,34 @@ mod tests {
         Preprocessor::new(Source::new("main.erl", text))
     }
 
-    fn drain(pp: &mut Preprocessor) -> Vec<Action> {
-        let mut actions = Vec::new();
+    fn drain(pp: &mut Preprocessor) -> Vec<Event> {
+        let mut events = Vec::new();
         loop {
-            let action = pp.next_action().expect("no protocol errors");
-            let is_complete = matches!(action, Action::Complete);
-            actions.push(action);
+            let event = pp.step().expect("no protocol errors");
+            let is_complete = matches!(event, Event::Complete);
+            events.push(event);
             if is_complete {
                 break;
             }
         }
-        actions
+        events
     }
 
     #[test]
     fn empty_source_returns_complete() {
         let mut pp = make("");
-        let actions = drain(&mut pp);
-        assert_eq!(actions.len(), 1);
-        assert!(matches!(actions[0], Action::Complete));
+        let events = drain(&mut pp);
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0], Event::Complete));
         assert!(matches!(pp.status(), Status::Completed));
     }
 
     #[test]
     fn complete_is_idempotent() {
         let mut pp = make("");
-        assert!(matches!(pp.next_action().unwrap(), Action::Complete));
-        assert!(matches!(pp.next_action().unwrap(), Action::Complete));
-        assert!(matches!(pp.next_action().unwrap(), Action::Complete));
+        assert!(matches!(pp.step().unwrap(), Event::Complete));
+        assert!(matches!(pp.step().unwrap(), Event::Complete));
+        assert!(matches!(pp.step().unwrap(), Event::Complete));
     }
 
     #[test]
@@ -349,10 +349,10 @@ mod tests {
         let mut pp = make("foo bar");
         let mut streamed = Vec::new();
         loop {
-            match pp.next_action().unwrap() {
-                Action::Token(ppt) => streamed.push(ppt),
-                Action::Complete => break,
-                other => panic!("unexpected action: {other:?}"),
+            match pp.step().unwrap() {
+                Event::Token(ppt) => streamed.push(ppt),
+                Event::Complete => break,
+                other => panic!("unexpected event: {other:?}"),
             }
         }
         // foo, whitespace, bar
@@ -372,11 +372,11 @@ mod tests {
         let mut pp = make("-module(m).");
         let mut kinds = Vec::new();
         loop {
-            match pp.next_action().unwrap() {
-                Action::Token(ppt) => kinds.push(ppt.token().kind()),
-                Action::Complete => break,
-                Action::Directive(_) => panic!("should not recognise -module"),
-                other => panic!("unexpected action: {other:?}"),
+            match pp.step().unwrap() {
+                Event::Token(ppt) => kinds.push(ppt.token().kind()),
+                Event::Complete => break,
+                Event::Directive(_) => panic!("should not recognise -module"),
+                other => panic!("unexpected event: {other:?}"),
             }
         }
         assert!(!kinds.is_empty());
@@ -390,13 +390,13 @@ mod tests {
     }
 
     #[test]
-    fn recognised_directive_becomes_action() {
+    fn recognised_directive_becomes_event() {
         let mut pp = make("-endif.");
-        let first = pp.next_action().unwrap();
-        assert!(matches!(first, Action::Directive(Directive::Endif(_))));
+        let first = pp.step().unwrap();
+        assert!(matches!(first, Event::Directive(Directive::Endif(_))));
         // Directive tokens are consumed by the parser, not streamed.
-        let complete = pp.next_action().unwrap();
-        assert!(matches!(complete, Action::Complete));
+        let complete = pp.step().unwrap();
+        assert!(matches!(complete, Event::Complete));
     }
 
     #[test]
@@ -404,16 +404,14 @@ mod tests {
         let mut pp = make("foo.-endif.bar.");
         let mut description = Vec::new();
         loop {
-            match pp.next_action().unwrap() {
-                Action::Token(ppt) => description.push(format!("token:{}", ppt.text())),
-                Action::Directive(Directive::Endif(_)) => {
-                    description.push("directive:endif".into())
-                }
-                Action::Complete => {
+            match pp.step().unwrap() {
+                Event::Token(ppt) => description.push(format!("token:{}", ppt.text())),
+                Event::Directive(Directive::Endif(_)) => description.push("directive:endif".into()),
+                Event::Complete => {
                     description.push("complete".into());
                     break;
                 }
-                other => panic!("unexpected action: {other:?}"),
+                other => panic!("unexpected event: {other:?}"),
             }
         }
         assert!(description.iter().any(|s| s == "token:foo"));
@@ -428,31 +426,28 @@ mod tests {
         // resume position skips past that single character and the
         // trailing `unterminated` then scans as a plain atom.
         let mut pp = make("\"unterminated");
-        let resume_position = match pp.next_action().unwrap() {
-            Action::PreprocessError(PreprocessError::Lexical {
+        let resume_position = match pp.step().unwrap() {
+            Event::PreprocessError(PreprocessError::Lexical {
                 resume_position, ..
             }) => resume_position,
             other => panic!("expected PreprocessError::Lexical, got {other:?}"),
         };
         // status reflects the awaiting state.
         assert!(matches!(pp.status(), Status::AwaitingLexicalResume));
-        // next_action while awaiting should fail with ProtocolError.
-        assert_eq!(
-            pp.next_action().unwrap_err(),
-            ProtocolError::NextActionWhilePending
-        );
+        // step while awaiting should fail with ProtocolError.
+        assert_eq!(pp.step().unwrap_err(), ProtocolError::StepWhilePending);
         // Resume with the suggested position; scanning continues past
         // the bad character.
         pp.resume_lexical(resume_position).unwrap();
         assert!(matches!(pp.status(), Status::Scanning));
         // The remaining `unterminated` scans as an atom, then EOF.
-        let after = pp.next_action().unwrap();
+        let after = pp.step().unwrap();
         assert!(
-            matches!(after, Action::Token(_)),
-            "expected token action after resume, got {after:?}"
+            matches!(after, Event::Token(_)),
+            "expected token event after resume, got {after:?}"
         );
-        let last = pp.next_action().unwrap();
-        assert!(matches!(last, Action::Complete));
+        let last = pp.step().unwrap();
+        assert!(matches!(last, Event::Complete));
     }
 
     #[test]
@@ -469,8 +464,8 @@ mod tests {
         // First response transitions the machine back to Scanning, so
         // a second resume_lexical is treated as UnexpectedResponse.
         let mut pp = make("\"oops");
-        let resume_position = match pp.next_action().unwrap() {
-            Action::PreprocessError(PreprocessError::Lexical {
+        let resume_position = match pp.step().unwrap() {
+            Event::PreprocessError(PreprocessError::Lexical {
                 resume_position, ..
             }) => resume_position,
             other => panic!("expected PreprocessError::Lexical, got {other:?}"),
@@ -487,8 +482,8 @@ mod tests {
         // Take the first token from pp, then fork. pp and fork share
         // the SourceStore but their cursors advance independently.
         let mut pp = make("foo bar");
-        let first = pp.next_action().unwrap();
-        assert!(matches!(first, Action::Token(_)));
+        let first = pp.step().unwrap();
+        assert!(matches!(first, Event::Token(_)));
 
         let mut fork = pp.clone();
         assert!(Arc::ptr_eq(pp.sources(), fork.sources()));
@@ -506,10 +501,10 @@ mod tests {
     fn collect_token_texts(pp: &mut Preprocessor) -> Vec<String> {
         let mut out = Vec::new();
         loop {
-            match pp.next_action().unwrap() {
-                Action::Token(ppt) => out.push(ppt.text().to_string()),
-                Action::Complete => break,
-                other => panic!("unexpected action: {other:?}"),
+            match pp.step().unwrap() {
+                Event::Token(ppt) => out.push(ppt.text().to_string()),
+                Event::Complete => break,
+                other => panic!("unexpected event: {other:?}"),
             }
         }
         out

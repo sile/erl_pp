@@ -2,7 +2,7 @@
 //!
 //! Each [`PreprocessedToken`] carries the raw [`Token`] together with
 //! the [`Arc<Source>`] it was scanned from, its [`SourceId`], and its
-//! [`crate::Origin`]. It is the payload of [`crate::Action::Token`],
+//! [`crate::Origin`]. It is the payload of [`crate::Event::Token`],
 //! so a caller receives everything needed to inspect the token in one
 //! value.
 //!
@@ -36,7 +36,7 @@ impl PreprocessedToken {
     ///
     /// This is `pub(crate)` because only preprocessor internals build
     /// these; external callers observe them as the payload of
-    /// [`crate::Action::Token`].
+    /// [`crate::Event::Token`].
     pub(crate) fn new(
         token: Token,
         source: Arc<Source>,
