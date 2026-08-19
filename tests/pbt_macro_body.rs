@@ -179,7 +179,8 @@ fn inject_close_paren(ctx: &mut TestCaseContext, node: &mut Node) {
 
 fn parse_define_body(body: &str) -> Result<usize, DriveError> {
     let text = format!("-define(FOO, {body}).\n");
-    let mut pp = Preprocessor::new(Source::new("prop.erl", text));
+    let source = Source::from_text("prop.erl", text).map_err(DriveError::Lexical)?;
+    let mut pp = Preprocessor::new(source);
     match pp.step().map_err(DriveError::Protocol)? {
         Event::Directive(erl_pp::Directive::Define(def)) => Ok(def.replacement.len()),
         Event::PreprocessError(err) => Err(DriveError::Preprocess(Box::new(err))),
@@ -191,6 +192,7 @@ fn parse_define_body(body: &str) -> Result<usize, DriveError> {
 #[expect(dead_code, reason = "fields surface through Debug in failure messages")]
 enum DriveError {
     Preprocess(Box<PreprocessError>),
+    Lexical(erl_pp::LexicalError),
     Protocol(erl_pp::ProtocolError),
     UnexpectedEvent(String),
 }

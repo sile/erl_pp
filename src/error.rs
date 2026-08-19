@@ -3,7 +3,7 @@
 //! The crate exposes two public error types:
 //!
 //! - [`PreprocessError`] wraps every input-derived failure the
-//!   preprocessor can surface as an event (lexical, parse, and later
+//!   preprocessor can surface as an event (parse and later
 //!   macro/include/conditional variants). It is the payload of
 //!   `Event::PreprocessError`.
 //! - [`ProtocolError`] describes caller mistakes when driving the
@@ -11,10 +11,17 @@
 //!   response, calling the wrong response method, and so on). It is
 //!   returned as `Err` from `step` and from the response methods.
 //!
-//! The internal [`LexicalError`] emitted by the source cursor and the
-//! internal [`ParseError`] emitted by the directive parser stay
-//! `pub(crate)`; they are turned into [`PreprocessError`] by `From`
-//! conversions when they cross the public API boundary.
+//! [`LexicalError`] is emitted only from [`crate::Source::from_text`]
+//! (and, internally, from the pseudo-source scan path used by later
+//! macro-expansion work) when the crate scans text on the caller's
+//! behalf. Callers that supply pre-scanned tokens through
+//! [`crate::Source::new`] never see it.
+//!
+//! The internal [`ParseError`] emitted by the directive parser stays
+//! `pub(crate)`; it is turned into [`PreprocessError`] by a `From`
+//! conversion when it crosses the public API boundary.
+
+use std::sync::Arc;
 
 use erl_tokenize::{ErrorKind, Position, TokenKind};
 
@@ -22,29 +29,38 @@ use crate::source::SourceSpan;
 use crate::source_string::SourceString;
 
 // ---------------------------------------------------------------------------
-// crate-internal errors (produced by the cursor and the directive parser)
+// public lexical error (produced by Source::from_text / SourceStore::append_pseudo)
 
-/// Lexical error emitted by the source cursor when
-/// `erl_tokenize::scan_token` fails.
+/// Lexical error surfaced when the crate tokenizes text on the caller's
+/// behalf.
 ///
-/// Carries the source span at which the failing scan started, the
-/// error kind, and the resume position suggested by
-/// [`erl_tokenize::Error`]. After emitting this error the cursor is
-/// kept in a pending-resume state; the outer state machine chooses to
-/// stop or to resume the cursor at the suggested (or any later)
-/// position.
+/// The only public entry point that scans text is
+/// [`crate::Source::from_text`]; callers that supply pre-scanned
+/// tokens through [`crate::Source::new`] never receive this error.
+///
+/// Carries the display name of the offending source, the position at
+/// which the failing scan started, the tokenizer error kind, and the
+/// resume position suggested by [`erl_tokenize::Error`] (strictly
+/// after the failing scan, useful if the caller wants to resume
+/// tokenization instead of aborting the whole source).
 #[derive(Debug, Clone)]
-pub(crate) struct LexicalError {
-    /// Span at which the failing scan started. `span.end` matches
-    /// [`resume_position`](Self::resume_position).
-    pub span: SourceSpan,
+pub struct LexicalError {
+    /// Display name of the source that failed to tokenize (as passed
+    /// to [`crate::Source::from_text`]).
+    pub display_name: Arc<str>,
+    /// Position at which the failing scan started.
+    pub position: Position,
     /// Kind of the tokenizer error.
     pub kind: ErrorKind,
-    /// Position the cursor can be resumed at without looping. This is
-    /// `erl_tokenize::Error`'s `resume_position` unchanged; the
-    /// tokenizer guarantees it is strictly after the failing scan.
+    /// Position at which tokenization could be resumed without
+    /// looping. This is [`erl_tokenize::Error`]'s `resume_position`
+    /// unchanged; the tokenizer guarantees it is strictly after the
+    /// failing scan.
     pub resume_position: Position,
 }
+
+// ---------------------------------------------------------------------------
+// crate-internal parse error (produced by the directive parser)
 
 /// Error emitted by the directive parser after it has committed to a
 /// known directive but its structure does not match.
@@ -52,8 +68,7 @@ pub(crate) struct LexicalError {
 /// Carries the span of the directive's opening `-` so the outer
 /// preprocessor can point at the malformed directive as a whole, a
 /// short description of what was expected, and how parsing actually
-/// failed (an unexpected token, an unexpected end of source, or a
-/// lexical error surfaced by the cursor).
+/// failed (an unexpected token or an unexpected end of source).
 #[derive(Debug, Clone)]
 pub(crate) struct ParseError {
     /// Span covering the directive's opening `-`.
@@ -76,10 +91,6 @@ pub(crate) enum ParseFailure {
     },
     /// The source ended before the directive was complete.
     UnexpectedEof,
-    /// The cursor surfaced a lexical error while parsing the directive.
-    ///
-    /// Boxed to keep the enclosing [`ParseError`] small.
-    Lexical(Box<LexicalError>),
 }
 
 // ---------------------------------------------------------------------------
@@ -96,15 +107,6 @@ pub(crate) enum ParseFailure {
 /// come online.
 #[derive(Debug, Clone)]
 pub enum PreprocessError {
-    /// The tokenizer failed to scan a token.
-    Lexical {
-        /// Span at which the failing scan started.
-        span: SourceSpan,
-        /// Underlying tokenizer error kind.
-        error_kind: ErrorKind,
-        /// Position the cursor can be resumed at.
-        resume_position: Position,
-    },
     /// The directive parser committed to a known directive but its
     /// structure did not match.
     Parse {
@@ -138,10 +140,6 @@ pub enum MacroDefinitionErrorKind {
 
 /// The concrete failure the parser hit. Used as the `actual` field
 /// of [`PreprocessError::Parse`].
-///
-/// Lexical failures that surface inside directive parsing are routed
-/// to [`PreprocessError::Lexical`] by the state machine, so this enum
-/// only covers structural mismatches.
 #[derive(Debug, Clone)]
 pub enum PreprocessParseFailure {
     /// An unexpected token was found.
@@ -155,16 +153,6 @@ pub enum PreprocessParseFailure {
     UnexpectedEof,
 }
 
-impl From<LexicalError> for PreprocessError {
-    fn from(e: LexicalError) -> Self {
-        PreprocessError::Lexical {
-            span: e.span,
-            error_kind: e.kind,
-            resume_position: e.resume_position,
-        }
-    }
-}
-
 impl From<ParseError> for PreprocessError {
     fn from(e: ParseError) -> Self {
         let actual = match e.actual {
@@ -172,10 +160,6 @@ impl From<ParseError> for PreprocessError {
                 PreprocessParseFailure::UnexpectedToken { span, kind }
             }
             ParseFailure::UnexpectedEof => PreprocessParseFailure::UnexpectedEof,
-            ParseFailure::Lexical(_) => unreachable!(
-                "lexical failures inside directive parsing are routed to \
-                 PreprocessError::Lexical by the state machine before conversion",
-            ),
         };
         PreprocessError::Parse {
             directive_start: e.directive_start,
@@ -194,8 +178,7 @@ pub enum ProtocolError {
     /// awaiting any response.
     UnexpectedResponse,
     /// A response method was called that does not match what the
-    /// machine is awaiting (e.g. `resume_lexical` while awaiting an
-    /// include resolution).
+    /// machine is awaiting.
     WrongResponseKind,
     /// `step` was called while the machine is awaiting a response.
     StepWhilePending,

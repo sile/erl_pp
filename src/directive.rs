@@ -252,10 +252,7 @@ pub(crate) fn parse_directive(cursor: &mut Cursor) -> Result<Option<Directive>, 
     // hidden or empty) is not an error here — parse_directive just
     // reports "not a directive" and the caller falls back to the raw
     // bump path.
-    let hyphen = match cursor
-        .peek_lexical()
-        .map_err(|e| lex_to_parse_error(e, None))?
-    {
+    let hyphen = match cursor.peek_lexical() {
         Some(t) if is_symbol(t, Symbol::Hyphen) => t,
         _ => return Ok(None),
     };
@@ -266,10 +263,7 @@ pub(crate) fn parse_directive(cursor: &mut Cursor) -> Result<Option<Directive>, 
     consume_through(cursor, hyphen, &directive_start)?;
 
     // Next lexical must be an atom or a keyword whose text is a known directive name.
-    let name_tok = match cursor
-        .peek_lexical()
-        .map_err(|e| lex_to_parse_error(e, Some(&directive_start)))?
-    {
+    let name_tok = match cursor.peek_lexical() {
         Some(t) => t,
         None => {
             cursor.restore(entry);
@@ -386,15 +380,15 @@ fn parse_define(
     expect_symbol(cursor, Symbol::OpenParen, source_id, &directive_start)?;
     let name = parse_identifier(cursor, source_id, &directive_start, "macro name")?;
 
-    let params = if peek_is_symbol(cursor, Symbol::OpenParen, &directive_start)? {
+    let params = if peek_is_symbol(cursor, Symbol::OpenParen) {
         expect_symbol(cursor, Symbol::OpenParen, source_id, &directive_start)?;
         let mut params = Vec::new();
-        if !peek_is_symbol(cursor, Symbol::CloseParen, &directive_start)? {
+        if !peek_is_symbol(cursor, Symbol::CloseParen) {
             loop {
                 let pname =
                     parse_identifier(cursor, source_id, &directive_start, "parameter name")?;
                 params.push(Param { name: pname });
-                if peek_is_symbol(cursor, Symbol::Comma, &directive_start)? {
+                if peek_is_symbol(cursor, Symbol::Comma) {
                     expect_symbol(cursor, Symbol::Comma, source_id, &directive_start)?;
                     continue;
                 }
@@ -527,10 +521,7 @@ fn parse_paren_string_path(
     let path_start = first.start();
     let mut path_end = first.end();
 
-    while let Some(next) = cursor
-        .peek_lexical()
-        .map_err(|e| lex_to_parse_error(e, Some(directive_start)))?
-    {
+    while let Some(next) = cursor.peek_lexical() {
         if next.kind() != TokenKind::String {
             break;
         }
@@ -664,9 +655,7 @@ fn next_lexical_is_dot_after_close_paren(
     let checkpoint = cursor.checkpoint();
     bump_ok(cursor, directive_start, "`)`")?; // consume the `)`
     let result = matches!(
-        cursor
-            .peek_lexical()
-            .map_err(|e| lex_to_parse_error(e, Some(directive_start)))?,
+        cursor.peek_lexical(),
         Some(t) if t.kind() == TokenKind::Symbol(Symbol::Dot)
     );
     cursor.restore(checkpoint);
@@ -685,7 +674,6 @@ fn peek_lexical_ok(
 ) -> Result<Token, ParseError> {
     cursor
         .peek_lexical()
-        .map_err(|e| lex_to_parse_error(e, Some(directive_start)))?
         .ok_or_else(|| eof_parse_error(directive_start, expected))
 }
 
@@ -698,7 +686,6 @@ fn cursor_peek_ok(
 ) -> Result<Token, ParseError> {
     cursor
         .peek()
-        .map_err(|e| lex_to_parse_error(e, Some(directive_start)))?
         .ok_or_else(|| eof_parse_error(directive_start, expected))
 }
 
@@ -710,7 +697,6 @@ fn bump_ok(
 ) -> Result<Token, ParseError> {
     cursor
         .bump()
-        .map_err(|e| lex_to_parse_error(e, Some(directive_start)))?
         .ok_or_else(|| eof_parse_error(directive_start, expected))
 }
 
@@ -722,32 +708,15 @@ fn eof_parse_error(directive_start: &SourceSpan, expected: &str) -> ParseError {
     }
 }
 
-fn lex_to_parse_error(
-    err: crate::error::LexicalError,
-    directive_start: Option<&SourceSpan>,
-) -> ParseError {
-    let start = directive_start.copied().unwrap_or(err.span);
-    ParseError {
-        directive_start: start,
-        expected: "well-formed token".to_owned(),
-        actual: ParseFailure::Lexical(Box::new(err)),
-    }
-}
-
 fn is_symbol(token: Token, sym: Symbol) -> bool {
     matches!(token.kind(), TokenKind::Symbol(s) if s == sym)
 }
 
-fn peek_is_symbol(
-    cursor: &mut Cursor,
-    sym: Symbol,
-    directive_start: &SourceSpan,
-) -> Result<bool, ParseError> {
-    Ok(cursor
+fn peek_is_symbol(cursor: &mut Cursor, sym: Symbol) -> bool {
+    cursor
         .peek_lexical()
-        .map_err(|e| lex_to_parse_error(e, Some(directive_start)))?
         .map(|t| is_symbol(t, sym))
-        .unwrap_or(false))
+        .unwrap_or(false)
 }
 
 fn expect_symbol(
@@ -814,7 +783,7 @@ mod tests {
 
     fn parse(text: &str) -> (Cursor, Result<Option<Directive>, ParseError>) {
         let store = SourceStore::new();
-        let id = store.append(Source::new("main.erl", text));
+        let id = store.append(Source::from_text("main.erl", text).expect("valid tokens"));
         let mut cursor = Cursor::new(id, store.get(id));
         let result = parse_directive(&mut cursor);
         (cursor, result)
@@ -829,18 +798,10 @@ mod tests {
 
     #[test]
     fn non_directive_returns_none() {
-        let (mut cursor, result) = parse("foo() -> ok.");
+        let (cursor, result) = parse("foo() -> ok.");
         assert!(matches!(result, Ok(None)));
         // Cursor should be at the very start (unchanged).
-        assert_eq!(
-            cursor
-                .peek()
-                .expect("no lex error")
-                .expect("token available")
-                .start()
-                .offset(),
-            0
-        );
+        assert_eq!(cursor.peek().expect("token available").start().offset(), 0);
     }
 
     #[test]
@@ -849,11 +810,7 @@ mod tests {
         assert!(matches!(result, Ok(None)));
         // The very first token in the stream is still `-`.
         assert_eq!(
-            cursor
-                .bump()
-                .expect("no lex error")
-                .expect("token available")
-                .text("-module(m)."),
+            cursor.bump().expect("token available").text("-module(m)."),
             "-"
         );
     }
@@ -866,7 +823,7 @@ mod tests {
         // and `module` should still be visible when we walk the
         // cursor from scratch.
         let mut kinds = Vec::new();
-        while let Some(t) = cursor.bump().expect("no lex error") {
+        while let Some(t) = cursor.bump() {
             kinds.push(t.kind());
         }
         assert!(kinds.contains(&TokenKind::Comment));
@@ -1045,7 +1002,7 @@ mod tests {
     #[test]
     fn source_id_on_span_matches_cursor() {
         let store = SourceStore::new();
-        let id = store.append(Source::new("main.erl", "-endif."));
+        let id = store.append(Source::from_text("main.erl", "-endif.").expect("valid tokens"));
         let mut cursor = Cursor::new(id, store.get(id));
         let d = parse_directive(&mut cursor)
             .expect("parse should not error")
