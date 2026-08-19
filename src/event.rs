@@ -33,10 +33,16 @@ pub enum Event {
     /// A preprocessor directive was observed.
     ///
     /// The directive tokens are consumed from the source; they are
-    /// not streamed as [`Event::Token`]. Downstream effects (macro
-    /// table updates, include resolution, conditional selection,
-    /// diagnostic emission) are the caller's or later work's
-    /// responsibility.
+    /// not streamed as [`Event::Token`].
+    ///
+    /// State effects that the preprocessor owns internally
+    /// (`-define` / `-undef` updates to the macro table) are applied
+    /// **before** the event is emitted, so a caller matching
+    /// `Event::Directive` observes the post-update macro table via
+    /// [`crate::Preprocessor::macros`]. Effects that require a
+    /// response from the caller (include resolution, conditional
+    /// selection, diagnostic emission) still return through their own
+    /// dedicated events in later work.
     Directive(Directive),
 
     /// The preprocessor is awaiting an include resolution from the

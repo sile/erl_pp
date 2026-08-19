@@ -17,15 +17,21 @@
 //!
 //! This module intentionally does no I/O and holds no runtime, path,
 //! or logging dependency.
+#![expect(
+    clippy::result_large_err,
+    reason = "PreprocessError deliberately carries structured spans; \
+              boxing every Result would add allocation overhead on every define"
+)]
 
 use std::sync::Arc;
 
 use erl_tokenize::{Position, Symbol, Token, TokenKind};
 
 use crate::cursor::Cursor;
-use crate::directive::parse_directive;
-use crate::error::{LexicalError, ParseFailure, ProtocolError};
+use crate::directive::{Directive, parse_directive};
+use crate::error::{LexicalError, ParseFailure, PreprocessError, ProtocolError};
 use crate::event::Event;
+use crate::macros::{MacroDefinition, MacroTable};
 use crate::origin::Origin;
 use crate::preprocessed_token::PreprocessedToken;
 use crate::source::{Source, SourceStore};
@@ -60,6 +66,8 @@ pub struct Preprocessor {
     /// Placeholder for future include support; not populated in this
     /// release.
     include_stack: Vec<Cursor>,
+    /// Macro table updated on `-define` / `-undef`.
+    macros: MacroTable,
     /// State-machine state.
     state: State,
     /// `true` when the cursor stands at a form boundary and the next
@@ -131,6 +139,7 @@ impl Preprocessor {
             sources,
             cursor,
             include_stack: Vec::new(),
+            macros: MacroTable::new(),
             state: State::Scanning,
             at_form_boundary: true,
         }
@@ -139,6 +148,80 @@ impl Preprocessor {
     /// Returns a shared handle to the underlying source store.
     pub fn sources(&self) -> &Arc<SourceStore> {
         &self.sources
+    }
+
+    /// Returns a read-only view of the macro table.
+    ///
+    /// Entries are added by `-define(...)` directives and removed by
+    /// `-undef(...)` directives observed on the current source, and by
+    /// [`Preprocessor::define_initial`]. Once a directive is applied
+    /// the table update is visible from this method before the
+    /// caller receives the matching [`Event::Directive`] — the
+    /// state-then-event ordering is fixed (see [`step`](Self::step)).
+    pub fn macros(&self) -> &MacroTable {
+        &self.macros
+    }
+
+    /// Registers an initial macro from a full `-define(...)` directive
+    /// text.
+    ///
+    /// The text is scanned in a fresh pseudo source appended to the
+    /// preprocessor's [`SourceStore`]; no direct `SourceStore` mutation
+    /// is exposed to the caller. Typically called before the first
+    /// [`step`](Self::step). When called mid-stream it simply adds a
+    /// definition to the current macro table.
+    ///
+    /// Returns `Err(PreprocessError::Parse)` when the text does not
+    /// parse as a `-define(...).` directive, or the underlying
+    /// [`PreprocessError`] when the definition itself is invalid
+    /// (duplicate parameter, etc.).
+    pub fn define_initial(
+        &mut self,
+        directive_text: impl AsRef<str>,
+    ) -> Result<(), PreprocessError> {
+        let text = directive_text.as_ref();
+        let source_id = self
+            .sources
+            .append_pseudo("<initial macro>", text.to_owned());
+        let source = self.sources.get(source_id);
+        let mut cursor = Cursor::new(source_id, Arc::clone(&source));
+        let parsed = match parse_directive(&mut cursor) {
+            Ok(Some(d)) => d,
+            Ok(None) => {
+                return Err(PreprocessError::Parse {
+                    directive_start: crate::source::SourceSpan::new(
+                        source_id,
+                        Position::new(),
+                        Position::new(),
+                    ),
+                    expected: "-define directive".to_owned(),
+                    actual: crate::error::PreprocessParseFailure::UnexpectedEof,
+                });
+            }
+            Err(pe) => {
+                if let ParseFailure::Lexical(boxed) = pe.actual {
+                    return Err(PreprocessError::from(*boxed));
+                }
+                return Err(pe.into());
+            }
+        };
+        let define = match parsed {
+            Directive::Define(d) => d,
+            other => {
+                return Err(PreprocessError::Parse {
+                    directive_start: directive_span_of(&other),
+                    expected: "-define directive".to_owned(),
+                    actual: crate::error::PreprocessParseFailure::UnexpectedToken {
+                        span: directive_span_of(&other),
+                        kind: erl_tokenize::TokenKind::Symbol(Symbol::Hyphen),
+                    },
+                });
+            }
+        };
+        let origin = Origin::Predefined(Arc::new(Origin::Source));
+        let def = MacroDefinition::from_directive(&define, source, source_id, origin)?;
+        self.macros.insert(def);
+        Ok(())
     }
 
     /// Reports the current state of the state machine.
@@ -211,6 +294,13 @@ impl Preprocessor {
                         // including the terminating `.`, so we are at
                         // a new form boundary.
                         self.at_form_boundary = true;
+                        // Apply state effects (macro table updates)
+                        // BEFORE emitting the event so the caller
+                        // observes the post-update table state when
+                        // matching Event::Directive.
+                        if let Err(e) = self.apply_directive_effects(&directive) {
+                            return Event::PreprocessError(e);
+                        }
                         return Event::Directive(directive);
                     }
                     Ok(None) => {
@@ -265,6 +355,23 @@ impl Preprocessor {
         Event::PreprocessError(lex_err.into())
     }
 
+    fn apply_directive_effects(&mut self, directive: &Directive) -> Result<(), PreprocessError> {
+        match directive {
+            Directive::Define(d) => {
+                let source = Arc::clone(self.cursor.source());
+                let source_id = self.cursor.source_id();
+                let def = MacroDefinition::from_directive(d, source, source_id, Origin::Source)?;
+                self.macros.insert(def);
+                Ok(())
+            }
+            Directive::Undef(u) => {
+                self.macros.remove_all_by_name(&u.name);
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
     fn update_form_boundary_after_bump(&mut self, token: Token) {
         // A lexical `.` symbol ends the current form; the next
         // scan step should attempt directive recognition. Any
@@ -286,6 +393,7 @@ impl Clone for Preprocessor {
             sources: Arc::clone(&self.sources),
             cursor: self.cursor.clone(),
             include_stack: self.include_stack.clone(),
+            macros: self.macros.clone(),
             state: self.state.clone(),
             at_form_boundary: self.at_form_boundary,
         }
@@ -297,9 +405,25 @@ impl std::fmt::Debug for Preprocessor {
         f.debug_struct("Preprocessor")
             .field("sources_len", &self.sources.len())
             .field("include_stack_depth", &self.include_stack.len())
+            .field("macros_len", &self.macros.len())
             .field("state", &self.state)
             .field("at_form_boundary", &self.at_form_boundary)
             .finish()
+    }
+}
+
+fn directive_span_of(directive: &Directive) -> crate::source::SourceSpan {
+    match directive {
+        Directive::Include(d) => d.span,
+        Directive::IncludeLib(d) => d.span,
+        Directive::Define(d) => d.span,
+        Directive::Undef(d) => d.span,
+        Directive::Ifdef(d) => d.span,
+        Directive::Ifndef(d) => d.span,
+        Directive::Else(d) => d.span,
+        Directive::Endif(d) => d.span,
+        Directive::Error(d) => d.span,
+        Directive::Warning(d) => d.span,
     }
 }
 
@@ -508,5 +632,101 @@ mod tests {
             }
         }
         out
+    }
+
+    #[test]
+    fn define_directive_updates_macro_table_before_event() {
+        let mut pp = make("-define(FOO, 1).");
+        assert!(pp.macros().is_empty());
+        let event = pp.step().unwrap();
+        assert!(matches!(event, Event::Directive(Directive::Define(_))));
+        // State-then-event contract: when the caller observes the
+        // event, the macro table already contains the definition.
+        assert!(pp.macros().get_constant("FOO").is_some());
+        assert_eq!(pp.macros().len(), 1);
+    }
+
+    #[test]
+    fn undef_directive_removes_macros_before_event() {
+        let mut pp = make("-define(FOO, 1).\n-define(FOO(A), A).\n-undef(FOO).");
+        // Drain define/undef; the table should end empty.
+        loop {
+            match pp.step().unwrap() {
+                Event::Directive(Directive::Define(_)) => {}
+                Event::Directive(Directive::Undef(_)) => {
+                    // At the moment we observe the Undef event, all
+                    // FOO entries are already gone.
+                    assert!(pp.macros().is_empty());
+                }
+                Event::Complete => break,
+                other => panic!("unexpected event: {other:?}"),
+            }
+        }
+        assert!(pp.macros().is_empty());
+    }
+
+    #[test]
+    fn constant_like_and_arity_0_coexist_in_table() {
+        let mut pp = make("-define(FOO, 1).\n-define(FOO(), 2).");
+        drain(&mut pp);
+        assert!(pp.macros().get_constant("FOO").is_some());
+        assert!(pp.macros().get_function("FOO", 0).is_some());
+        assert_eq!(pp.macros().len(), 2);
+    }
+
+    #[test]
+    fn duplicate_parameter_surfaces_as_preprocess_error() {
+        let mut pp = make("-define(BAD(A, A), A).");
+        let event = pp.step().unwrap();
+        assert!(matches!(
+            event,
+            Event::PreprocessError(PreprocessError::MacroDefinition { .. })
+        ));
+        // The failing definition is not added to the table.
+        assert!(pp.macros().is_empty());
+    }
+
+    #[test]
+    fn define_initial_registers_before_step() {
+        let mut pp = make("");
+        pp.define_initial("-define(FOO, 1).").unwrap();
+        pp.define_initial("-define(BAR(A), A).").unwrap();
+        assert_eq!(pp.macros().len(), 2);
+        assert!(pp.macros().get_constant("FOO").is_some());
+        assert!(pp.macros().get_function("BAR", 1).is_some());
+        let event = pp.step().unwrap();
+        assert!(matches!(event, Event::Complete));
+    }
+
+    #[test]
+    fn define_initial_uses_predefined_origin() {
+        let mut pp = make("");
+        pp.define_initial("-define(FOO, 1).").unwrap();
+        let def = pp.macros().get_constant("FOO").expect("defined");
+        assert!(matches!(def.origin, Origin::Predefined(_)));
+    }
+
+    #[test]
+    fn define_initial_rejects_non_define_text() {
+        let mut pp = make("");
+        // A recognised but non-define directive is rejected.
+        let err = pp.define_initial("-endif.").unwrap_err();
+        assert!(matches!(err, PreprocessError::Parse { .. }));
+    }
+
+    #[test]
+    fn clone_isolates_macro_table_updates() {
+        let mut original = make("-define(FOO, 1).");
+        original.step().unwrap();
+        assert!(original.macros().get_constant("FOO").is_some());
+
+        // Clone before original scans further.
+        let mut clone = original.clone();
+        // Add another define into the clone by feeding it a fresh
+        // source through define_initial.
+        clone.define_initial("-define(BAR, 2).").unwrap();
+
+        assert!(clone.macros().get_constant("BAR").is_some());
+        assert!(original.macros().get_constant("BAR").is_none());
     }
 }
