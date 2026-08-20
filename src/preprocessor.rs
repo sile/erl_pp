@@ -395,146 +395,199 @@ impl Preprocessor {
     ///
     /// See the module rustdoc for the loop contract.
     fn step_scan(&mut self) -> Event {
+        type Step = fn(&mut Preprocessor) -> StepAction;
+        const STEPS: [Step; 6] = [
+            Preprocessor::try_rescan_queue_head,
+            Preprocessor::drain_expansion_queue,
+            Preprocessor::handle_cursor_eof,
+            Preprocessor::try_parse_directive_at_boundary,
+            Preprocessor::try_scan_macro_call,
+            Preprocessor::bump_cursor,
+        ];
         loop {
-            // Rescan `?NAME` at the head of the expansion queue so
-            // that macros produced by a prior expansion are expanded
-            // themselves before their tokens surface.
-            if matches!(
-                self.expansion_queue.front(),
-                Some(ppt) if is_symbol(*ppt.token(), Symbol::Question)
-            ) {
-                match self.try_rescan_queue_call() {
-                    MacroCallOutcome::Fire(event) => return *event,
-                    MacroCallOutcome::Enqueued => continue,
-                    MacroCallOutcome::NotACall => {
-                        // The `?` is not the start of a macro call —
-                        // emit it and any following queued tokens
-                        // normally by falling through to the drain.
-                    }
+            for step in STEPS {
+                match step(self) {
+                    StepAction::Emit(event) => return *event,
+                    StepAction::Retry => break,
+                    StepAction::Fall => continue,
                 }
-            }
-            // Drain any pending macro-expansion tokens.
-            if let Some(ppt) = self.expansion_queue.pop_front() {
-                let token = *ppt.token();
-                self.update_form_boundary_after_bump(token);
-                return Event::Token(ppt);
-            }
-
-            if self.cursor.is_at_eof() {
-                if let Some((parent_cursor, parent_origin)) = self.include_stack.pop() {
-                    self.cursor = parent_cursor;
-                    self.current_origin = parent_origin;
-                    // Coming back to the parent source lands on the
-                    // token right after the include directive, which
-                    // is always a form boundary.
-                    self.at_form_boundary = true;
-                    continue;
-                }
-                self.state = State::Completed;
-                return Event::Complete;
-            }
-
-            if self.at_form_boundary {
-                match parse_directive(&mut self.cursor) {
-                    Ok(Some(directive)) => {
-                        // The parser consumed the whole directive
-                        // including the terminating `.`, so we are at
-                        // a new form boundary.
-                        self.at_form_boundary = true;
-                        // `-include` / `-include_lib` are folded into
-                        // Event::AwaitingInclude — we do not emit an
-                        // Event::Directive for them, matching how
-                        // Event::AwaitingMacroExpansion swallows the
-                        // observation event.
-                        match directive {
-                            Directive::Include(d) => {
-                                let parent_origin = Arc::clone(&self.current_origin);
-                                let request = crate::event::IncludeRequest {
-                                    kind: IncludeKind::Include,
-                                    path: d.path.clone(),
-                                    directive_span: d.span,
-                                    parent_origin: Arc::clone(&parent_origin),
-                                };
-                                self.state = State::AwaitingIncludeResolution(PendingInclude {
-                                    parent_origin,
-                                    directive_span: d.span,
-                                    kind: IncludeKind::Include,
-                                });
-                                return Event::AwaitingInclude(request);
-                            }
-                            Directive::IncludeLib(d) => {
-                                let parent_origin = Arc::clone(&self.current_origin);
-                                let request = crate::event::IncludeRequest {
-                                    kind: IncludeKind::IncludeLib,
-                                    path: d.path.clone(),
-                                    directive_span: d.span,
-                                    parent_origin: Arc::clone(&parent_origin),
-                                };
-                                self.state = State::AwaitingIncludeResolution(PendingInclude {
-                                    parent_origin,
-                                    directive_span: d.span,
-                                    kind: IncludeKind::IncludeLib,
-                                });
-                                return Event::AwaitingInclude(request);
-                            }
-                            _ => {}
-                        }
-                        // Apply state effects (macro table updates)
-                        // BEFORE emitting the event so the caller
-                        // observes the post-update table state when
-                        // matching Event::Directive.
-                        if let Err(e) = self.apply_directive_effects(&directive) {
-                            return Event::PreprocessError(e);
-                        }
-                        return Event::Directive(directive);
-                    }
-                    Ok(None) => {
-                        // Cursor restored to entry. Fall through — if
-                        // the next token is `?` and a macro call
-                        // expands to nothing lexical, we want to stay
-                        // at form boundary so the *following* form can
-                        // still be recognized as a directive.
-                        // `update_form_boundary_after_bump` on the
-                        // eventual bump path will drop the flag once a
-                        // non-`.` lexical token is emitted.
-                    }
-                    Err(pe) => {
-                        self.at_form_boundary = false;
-                        return Event::PreprocessError(pe.into());
-                    }
-                }
-            }
-
-            // Check for a macro call at the cursor before doing the
-            // normal bump. try_recognize_macro_call consumes the call
-            // when it matches, either queuing an expansion or emitting
-            // an AwaitingMacroExpansion event; when it does not match,
-            // it leaves the cursor untouched.
-            if matches!(
-                self.cursor.peek(),
-                Some(t) if is_symbol(t, Symbol::Question)
-            ) {
-                match self.try_recognize_macro_call() {
-                    MacroCallOutcome::Fire(event) => return *event,
-                    MacroCallOutcome::Enqueued => continue,
-                    MacroCallOutcome::NotACall => {}
-                }
-            }
-
-            match self.cursor.bump() {
-                Some(token) => {
-                    self.update_form_boundary_after_bump(token);
-                    let ppt = PreprocessedToken::new(
-                        token,
-                        Arc::clone(self.cursor.source()),
-                        self.cursor.source_id(),
-                        (*self.current_origin).clone(),
-                    );
-                    return Event::Token(ppt);
-                }
-                None => continue,
             }
         }
+    }
+
+    /// Step 1: rescan a `?NAME` sitting at the head of the expansion
+    /// queue, so a macro that appeared in an earlier expansion body
+    /// itself expands before its tokens surface.
+    fn try_rescan_queue_head(&mut self) -> StepAction {
+        let head_is_question = matches!(
+            self.expansion_queue.front(),
+            Some(ppt) if is_symbol(*ppt.token(), Symbol::Question)
+        );
+        if !head_is_question {
+            return StepAction::Fall;
+        }
+        match self.try_rescan_queue_call() {
+            MacroCallOutcome::Fire(event) => StepAction::Emit(event),
+            MacroCallOutcome::Enqueued => StepAction::Retry,
+            // The `?` is not the start of a macro call — emit it and
+            // any following queued tokens normally by falling through
+            // to the drain.
+            MacroCallOutcome::NotACall => StepAction::Fall,
+        }
+    }
+
+    /// Step 2: drain any pending macro-expansion tokens.
+    fn drain_expansion_queue(&mut self) -> StepAction {
+        let Some(ppt) = self.expansion_queue.pop_front() else {
+            return StepAction::Fall;
+        };
+        let token = *ppt.token();
+        self.update_form_boundary_after_bump(token);
+        StepAction::Emit(Box::new(Event::Token(ppt)))
+    }
+
+    /// Step 3: at cursor EOF, pop back to the parent source (nested
+    /// include) or complete the whole run.
+    fn handle_cursor_eof(&mut self) -> StepAction {
+        if !self.cursor.is_at_eof() {
+            return StepAction::Fall;
+        }
+        if let Some((parent_cursor, parent_origin)) = self.include_stack.pop() {
+            self.cursor = parent_cursor;
+            self.current_origin = parent_origin;
+            // Coming back to the parent source lands on the token
+            // right after the include directive, which is always a
+            // form boundary.
+            self.at_form_boundary = true;
+            return StepAction::Retry;
+        }
+        self.state = State::Completed;
+        StepAction::Emit(Box::new(Event::Complete))
+    }
+
+    /// Step 4: at a form boundary, attempt to parse and dispatch a
+    /// directive.
+    fn try_parse_directive_at_boundary(&mut self) -> StepAction {
+        if !self.at_form_boundary {
+            return StepAction::Fall;
+        }
+        match parse_directive(&mut self.cursor) {
+            Ok(Some(directive)) => self.dispatch_directive(directive),
+            Ok(None) => {
+                // Cursor restored to entry. Fall through — if the next
+                // token is `?` and a macro call expands to nothing
+                // lexical, we want to stay at form boundary so the
+                // *following* form can still be recognized as a
+                // directive. `update_form_boundary_after_bump` on the
+                // eventual bump path will drop the flag once a
+                // non-`.` lexical token is emitted.
+                StepAction::Fall
+            }
+            Err(pe) => {
+                self.at_form_boundary = false;
+                StepAction::Emit(Box::new(Event::PreprocessError(pe.into())))
+            }
+        }
+    }
+
+    /// Dispatches a successfully parsed directive: `-include` /
+    /// `-include_lib` are folded into `Event::AwaitingInclude`, other
+    /// directives run their state effects and surface as
+    /// `Event::Directive`.
+    fn dispatch_directive(&mut self, directive: Directive) -> StepAction {
+        // The parser consumed the whole directive including the
+        // terminating `.`, so we are at a new form boundary.
+        self.at_form_boundary = true;
+        // `-include` / `-include_lib` are folded into
+        // Event::AwaitingInclude — we do not emit an Event::Directive
+        // for them, matching how Event::AwaitingMacroExpansion
+        // swallows the observation event.
+        match directive {
+            Directive::Include(d) => {
+                return StepAction::Emit(Box::new(self.fire_awaiting_include(
+                    IncludeKind::Include,
+                    d.path.clone(),
+                    d.span,
+                )));
+            }
+            Directive::IncludeLib(d) => {
+                return StepAction::Emit(Box::new(self.fire_awaiting_include(
+                    IncludeKind::IncludeLib,
+                    d.path.clone(),
+                    d.span,
+                )));
+            }
+            _ => {}
+        }
+        // Apply state effects (macro table updates) BEFORE emitting
+        // the event so the caller observes the post-update table
+        // state when matching Event::Directive.
+        if let Err(e) = self.apply_directive_effects(&directive) {
+            return StepAction::Emit(Box::new(Event::PreprocessError(e)));
+        }
+        StepAction::Emit(Box::new(Event::Directive(directive)))
+    }
+
+    /// Fires an `Event::AwaitingInclude` and moves the state machine
+    /// into `AwaitingIncludeResolution` with a matching pending
+    /// payload.
+    fn fire_awaiting_include(
+        &mut self,
+        kind: IncludeKind,
+        path: SourceString,
+        directive_span: SourceSpan,
+    ) -> Event {
+        let parent_origin = Arc::clone(&self.current_origin);
+        let request = crate::event::IncludeRequest {
+            kind,
+            path,
+            directive_span,
+            parent_origin: Arc::clone(&parent_origin),
+        };
+        self.state = State::AwaitingIncludeResolution(PendingInclude {
+            parent_origin,
+            directive_span,
+            kind,
+        });
+        Event::AwaitingInclude(request)
+    }
+
+    /// Step 5: recognize a `?NAME` macro call at the cursor before
+    /// the normal bump. `try_recognize_macro_call` consumes the call
+    /// when it matches, either queuing an expansion or emitting an
+    /// AwaitingMacroExpansion event; when it does not match, it
+    /// leaves the cursor untouched.
+    fn try_scan_macro_call(&mut self) -> StepAction {
+        let peek_is_question = matches!(
+            self.cursor.peek(),
+            Some(t) if is_symbol(t, Symbol::Question)
+        );
+        if !peek_is_question {
+            return StepAction::Fall;
+        }
+        match self.try_recognize_macro_call() {
+            MacroCallOutcome::Fire(event) => StepAction::Emit(event),
+            MacroCallOutcome::Enqueued => StepAction::Retry,
+            MacroCallOutcome::NotACall => StepAction::Fall,
+        }
+    }
+
+    /// Step 6: consume the next source token and emit it as
+    /// `Event::Token`. Returns `Retry` when the cursor produced
+    /// nothing (EOF sneaked in during expansion) so the outer loop
+    /// revisits Step 3.
+    fn bump_cursor(&mut self) -> StepAction {
+        let Some(token) = self.cursor.bump() else {
+            return StepAction::Retry;
+        };
+        self.update_form_boundary_after_bump(token);
+        let ppt = PreprocessedToken::new(
+            token,
+            Arc::clone(self.cursor.source()),
+            self.cursor.source_id(),
+            (*self.current_origin).clone(),
+        );
+        StepAction::Emit(Box::new(Event::Token(ppt)))
     }
 
     /// Attempts to recognize a `?NAME` macro call at the cursor.
@@ -1032,6 +1085,27 @@ impl Clone for Preprocessor {
             expansion_queue: self.expansion_queue.clone(),
         }
     }
+}
+
+/// Result of one step in the `step_scan` orchestrator loop.
+///
+/// Each step in the scan loop looks at a single concern (queue
+/// rescan, queue drain, cursor EOF, directive parse, macro-call
+/// recognition, cursor bump) and reports one of three actions back
+/// to the loop: emit an event to the caller, restart the loop
+/// because state was mutated but no event is ready yet, or fall
+/// through so the next concern gets a turn.
+enum StepAction {
+    /// Return this event from `step_scan` to the caller. Boxed
+    /// because `Event` is the largest branch of the enum, mirroring
+    /// `MacroCallOutcome::Fire`.
+    Emit(Box<Event>),
+    /// State changed but no event is ready; the loop should restart
+    /// from the first step.
+    Retry,
+    /// This step did nothing; the loop should proceed to the next
+    /// step.
+    Fall,
 }
 
 /// Outcome of one macro-call recognition attempt inside the scan loop.
