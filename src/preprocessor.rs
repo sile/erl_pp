@@ -371,11 +371,14 @@ impl Preprocessor {
                         return Event::Directive(directive);
                     }
                     Ok(None) => {
-                        // Cursor was restored to entry; consume the
-                        // form-boundary flag so the loop moves on to
-                        // the regular bump path.
-                        self.at_form_boundary = false;
-                        continue;
+                        // Cursor restored to entry. Fall through — if
+                        // the next token is `?` and a macro call
+                        // expands to nothing lexical, we want to stay
+                        // at form boundary so the *following* form can
+                        // still be recognized as a directive.
+                        // `update_form_boundary_after_bump` on the
+                        // eventual bump path will drop the flag once a
+                        // non-`.` lexical token is emitted.
                     }
                     Err(pe) => {
                         self.at_form_boundary = false;
