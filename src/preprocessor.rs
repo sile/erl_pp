@@ -321,8 +321,24 @@ impl Preprocessor {
     /// See the module rustdoc for the loop contract.
     fn step_scan(&mut self) -> Event {
         loop {
-            // Drain any pending macro-expansion tokens first so that
-            // expansions surface in order before further scanning.
+            // Rescan `?NAME` at the head of the expansion queue so
+            // that macros produced by a prior expansion are expanded
+            // themselves before their tokens surface.
+            if matches!(
+                self.expansion_queue.front(),
+                Some(ppt) if is_symbol(*ppt.token(), Symbol::Question)
+            ) {
+                match self.try_rescan_queue_call() {
+                    MacroCallOutcome::Fire(event) => return *event,
+                    MacroCallOutcome::Enqueued => continue,
+                    MacroCallOutcome::NotACall => {
+                        // The `?` is not the start of a macro call —
+                        // emit it and any following queued tokens
+                        // normally by falling through to the drain.
+                    }
+                }
+            }
+            // Drain any pending macro-expansion tokens.
             if let Some(ppt) = self.expansion_queue.pop_front() {
                 let token = *ppt.token();
                 self.update_form_boundary_after_bump(token);
@@ -465,7 +481,14 @@ impl Preprocessor {
         if !is_function_like {
             // Constant-like call.
             let call_site = SourceSpan::new(source_id, question_tok.start(), name_tok.end());
-            return self.finish_recognized_call(name_text, name_ss, None, call_site, Vec::new());
+            return self.finish_recognized_call(
+                name_text,
+                name_ss,
+                None,
+                call_site,
+                Vec::new(),
+                Arc::new(Origin::Source),
+            );
         }
 
         // Function-like call: consume through the opening `(` and
@@ -496,14 +519,25 @@ impl Preprocessor {
         };
         let call_site = SourceSpan::new(source_id, question_tok.start(), parsed.close_end);
         let arity = Some(parsed.arguments.len());
-        self.finish_recognized_call(name_text, name_ss, arity, call_site, parsed.arguments)
+        self.finish_recognized_call(
+            name_text,
+            name_ss,
+            arity,
+            call_site,
+            parsed.arguments,
+            Arc::new(Origin::Source),
+        )
     }
 
-    /// Common tail of [`Preprocessor::try_recognize_macro_call`].
+    /// Common tail of the macro-call recognition paths.
     ///
-    /// Either enqueues a MacroTable hit (constant-like only in this
-    /// phase) or fires an [`Event::AwaitingMacroExpansion`] for the
-    /// caller.
+    /// Either prepends a MacroTable hit's replacement to the
+    /// expansion queue (constant-like only in this phase) or fires an
+    /// [`Event::AwaitingMacroExpansion`] for the caller.
+    ///
+    /// `parent_origin` is the origin at the call site itself; it
+    /// hangs under the newly minted [`Origin::MacroBody`] or
+    /// [`Origin::CallerExpansion`] for every emitted token.
     fn finish_recognized_call(
         &mut self,
         name_text: String,
@@ -511,14 +545,20 @@ impl Preprocessor {
         arity: Option<usize>,
         call_site: SourceSpan,
         arguments: Vec<Vec<PreprocessedToken>>,
+        parent_origin: Arc<Origin>,
     ) -> MacroCallOutcome {
         // Function-like table hits are handled in the next phase; for
         // now they fall through to the caller-driven expansion event.
         if arity.is_none()
             && let Some(def) = self.macros.get_constant(&name_text)
         {
-            let parent_origin = Arc::new(Origin::Source);
             let definition_span = def.directive_span;
+            // Build the replacement token stream and prepend it to the
+            // expansion queue so subsequent step_scan iterations —
+            // including the rescan check at the queue head — see the
+            // new tokens first.
+            let mut expanded: VecDeque<PreprocessedToken> =
+                VecDeque::with_capacity(def.replacement.len());
             for replacement in &def.replacement {
                 let origin = Origin::MacroBody {
                     parent: Arc::clone(&parent_origin),
@@ -528,13 +568,13 @@ impl Preprocessor {
                 let token = *replacement.token();
                 let source = Arc::clone(replacement.source());
                 let source_id = replacement.source_span().source_id;
-                self.expansion_queue
-                    .push_back(PreprocessedToken::new(token, source, source_id, origin));
+                expanded.push_back(PreprocessedToken::new(token, source, source_id, origin));
             }
+            expanded.append(&mut self.expansion_queue);
+            self.expansion_queue = expanded;
             return MacroCallOutcome::Enqueued;
         }
 
-        let parent_origin = Arc::new(Origin::Source);
         let request = MacroExpansionRequest {
             name: name_ss.clone(),
             arity,
@@ -547,6 +587,110 @@ impl Preprocessor {
             parent_origin,
         });
         MacroCallOutcome::Fire(Box::new(Event::AwaitingMacroExpansion(request)))
+    }
+
+    /// Attempts to rescan a `?NAME` macro call whose `?` sits at the
+    /// head of the expansion queue.
+    ///
+    /// This handles the constant-like shape only (matching the
+    /// current phase). Function-like calls surfacing from a prior
+    /// expansion are treated as `NotACall` for now and the `?` is
+    /// emitted as a regular token.
+    fn try_rescan_queue_call(&mut self) -> MacroCallOutcome {
+        // Locate the next lexical token after the leading `?`,
+        // skipping any hidden tokens in the queue.
+        let name_idx = {
+            let mut i = 1;
+            loop {
+                let Some(ppt) = self.expansion_queue.get(i) else {
+                    return MacroCallOutcome::NotACall;
+                };
+                if ppt.token().kind().is_lexical() {
+                    break i;
+                }
+                i += 1;
+            }
+        };
+        let name_ppt = self.expansion_queue[name_idx].clone();
+        let name_tok = *name_ppt.token();
+        // `??` is stringification, handled elsewhere.
+        if is_symbol(name_tok, Symbol::Question) {
+            return MacroCallOutcome::NotACall;
+        }
+        if !matches!(name_tok.kind(), TokenKind::Atom | TokenKind::Variable) {
+            return MacroCallOutcome::NotACall;
+        }
+        // If the next lexical after the name is `(`, this is a
+        // function-like call; deferred to a later phase.
+        let after_name_idx = {
+            let mut i = name_idx + 1;
+            let mut found = None;
+            while let Some(ppt) = self.expansion_queue.get(i) {
+                if ppt.token().kind().is_lexical() {
+                    found = Some(*ppt.token());
+                    break;
+                }
+                i += 1;
+            }
+            found
+        };
+        let cursor_next_lexical = if after_name_idx.is_none() {
+            self.cursor.peek_lexical()
+        } else {
+            None
+        };
+        let following_lexical = after_name_idx.or(cursor_next_lexical);
+        if matches!(following_lexical, Some(t) if is_symbol(t, Symbol::OpenParen)) {
+            return MacroCallOutcome::NotACall;
+        }
+
+        // Consume the `?`, any hidden tokens, and the name token from
+        // the queue.
+        let question_ppt = self
+            .expansion_queue
+            .pop_front()
+            .expect("caller verified `?` was at the head");
+        let name_start = name_tok.start();
+        loop {
+            let popped = self
+                .expansion_queue
+                .pop_front()
+                .expect("name token is still queued");
+            if popped.token().start() == name_start {
+                break;
+            }
+        }
+
+        let source_text = name_ppt.source().text();
+        let name_text = match name_tok.value(source_text) {
+            TokenValue::Atom(cow) => cow.into_owned(),
+            TokenValue::Variable(name) => name.to_owned(),
+            _ => {
+                // Should not happen given the kind check; if it does,
+                // re-emit `?` as a regular token by pushing it back.
+                self.expansion_queue.push_front(name_ppt);
+                self.expansion_queue.push_front(question_ppt);
+                return MacroCallOutcome::NotACall;
+            }
+        };
+        let question_span = question_ppt.source_span();
+        let call_site =
+            SourceSpan::new(question_span.source_id, question_span.start, name_tok.end());
+        let name_span = SourceSpan::new(
+            name_ppt.source_span().source_id,
+            name_tok.start(),
+            name_tok.end(),
+        );
+        let name_ss = SourceString::new(name_text.clone(), name_span);
+        let parent_origin = Arc::new(question_ppt.origin().clone());
+        self.finish_recognized_call(
+            name_text,
+            name_ss,
+            None,
+            call_site,
+            Vec::new(),
+            parent_origin,
+        )
     }
 
     fn apply_directive_effects(&mut self, directive: &Directive) -> Result<(), PreprocessError> {
@@ -1315,6 +1459,99 @@ mod tests {
             .expect_err("preprocess error expected");
         assert!(matches!(err, PreprocessError::Parse { .. }));
     }
+
+    // ---- Phase 7: rescan --------------------------------------------
+
+    #[test]
+    fn rescan_expands_nested_constant_macro_body() {
+        // ?FOO expands to the tokens of `?BAR`, which must then be
+        // rescanned and expanded to `1`.
+        let mut pp = make("-define(BAR, 1).\n-define(FOO, ?BAR).\n?FOO.");
+        let mut texts = Vec::new();
+        loop {
+            match pp.step().expect("no protocol errors") {
+                Event::Token(ppt) if ppt.token().kind().is_lexical() => {
+                    texts.push(ppt.text().to_owned());
+                }
+                Event::Token(_) => {}
+                Event::Directive(_) => {}
+                Event::Complete => break,
+                other => panic!("unexpected event: {other:?}"),
+            }
+        }
+        assert_eq!(texts, ["1", "."]);
+    }
+
+    #[test]
+    fn rescan_preserves_parent_origin_in_chain() {
+        // The rescanned `?BAR` token's origin should chain back
+        // through the outer ?FOO expansion.
+        let mut pp = make("-define(BAR, 1).\n-define(FOO, ?BAR).\n?FOO.");
+        loop {
+            match pp.step().expect("no protocol errors") {
+                Event::Token(ppt) if ppt.text() == "1" => {
+                    let Origin::MacroBody { parent, .. } = ppt.origin() else {
+                        panic!("expected MacroBody, got {:?}", ppt.origin());
+                    };
+                    // Parent is the `?BAR` token's origin, which was
+                    // itself a MacroBody from the ?FOO expansion.
+                    assert!(matches!(**parent, Origin::MacroBody { .. }));
+                    return;
+                }
+                Event::Complete => panic!("expected token `1` before Complete"),
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
+    fn rescan_undefined_inner_fires_event() {
+        // ?FOO expands to `?UNKNOWN`; because UNKNOWN is not in the
+        // table, the rescan should surface Event::AwaitingMacroExpansion.
+        let mut pp = make("-define(FOO, ?UNKNOWN).\n?FOO.");
+        loop {
+            match pp.step().expect("no protocol errors") {
+                Event::AwaitingMacroExpansion(req) => {
+                    assert_eq!(req.name.as_str(), "UNKNOWN");
+                    return;
+                }
+                Event::Directive(_) | Event::Token(_) => {}
+                other => panic!("unexpected event: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn rescan_caller_response_tokens_are_rescanned() {
+        // Caller responds to ?FOO with tokens containing ?BAR. Since
+        // BAR is defined, the rescan should expand it internally.
+        let mut pp = make("-define(BAR, 1).\n?FOO.");
+        loop {
+            match pp.step().expect("no protocol error") {
+                Event::AwaitingMacroExpansion(req) => {
+                    assert_eq!(req.name.as_str(), "FOO");
+                    break;
+                }
+                Event::Directive(_) | Event::Token(_) => {}
+                other => panic!("unexpected event before AwaitingMacroExpansion: {other:?}"),
+            }
+        }
+        let response = Source::from_text("<synth:FOO>", "?BAR");
+        pp.resume_macro_expansion(response).expect("resume ok");
+        loop {
+            match pp.step().expect("no protocol error") {
+                Event::Token(t) if t.token().kind().is_lexical() => {
+                    assert_eq!(t.text(), "1");
+                    return;
+                }
+                Event::Token(_) => {}
+                Event::Complete => panic!("expected `1` token before Complete"),
+                other => panic!("unexpected event: {other:?}"),
+            }
+        }
+    }
+
+    // ---- End of Phase 7 tests ---------------------------------------
 
     #[test]
     fn clone_isolates_macro_table_updates() {
