@@ -34,6 +34,8 @@ pub use crate::preprocessor::{Preprocessor, Status};
 pub use crate::source::{Source, SourceId, SourceSpan, SourceStore};
 pub use crate::source_string::SourceString;
 
+pub mod docs;
+
 mod cursor;
 mod directive;
 mod error;
