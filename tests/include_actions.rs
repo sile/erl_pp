@@ -254,7 +254,9 @@ a_after."#,
 #[test]
 fn resume_include_in_scanning_is_unexpected_response() {
     let mut pp = make("just_a_token.");
-    let err = pp.resume_include(build_source("x.hrl", "x.")).unwrap_err();
+    let err = pp
+        .resume_include(build_source("x.hrl", "x."))
+        .expect_err("resume_include in Scanning should fail");
     assert!(matches!(err, ProtocolError::UnexpectedResponse));
     // State was not consumed — still Scanning.
     assert!(matches!(pp.status(), Status::Scanning));
@@ -267,7 +269,9 @@ fn resume_include_while_awaiting_macro_is_wrong_response_kind() {
     let mut pp = make("?UNKNOWN.");
     let event = step(&mut pp);
     assert!(matches!(event, Event::AwaitingMacroExpansion(_)));
-    let err = pp.resume_include(build_source("x.hrl", "x.")).unwrap_err();
+    let err = pp
+        .resume_include(build_source("x.hrl", "x."))
+        .expect_err("resume_include while awaiting macro should fail");
     assert!(matches!(err, ProtocolError::WrongResponseKind));
     // Macro pending state was not consumed.
     assert!(matches!(pp.status(), Status::AwaitingMacroExpansion));
@@ -335,7 +339,8 @@ fn include_eof_is_not_top_level_complete() {
 parent_tail."#,
     );
     let _ = step(&mut pp);
-    pp.resume_include(build_source("h.hrl", "inc.")).unwrap();
+    pp.resume_include(build_source("h.hrl", "inc."))
+        .expect("resume ok");
     let mut seen_parent_tail = false;
     loop {
         match step(&mut pp) {
