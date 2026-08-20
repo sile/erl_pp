@@ -532,12 +532,13 @@ impl Preprocessor {
     /// Common tail of the macro-call recognition paths.
     ///
     /// Either prepends a MacroTable hit's replacement to the
-    /// expansion queue (constant-like only in this phase) or fires an
-    /// [`Event::AwaitingMacroExpansion`] for the caller.
+    /// expansion queue (constant-like or arity-matching function-like)
+    /// or fires an [`Event::AwaitingMacroExpansion`] for the caller.
     ///
     /// `parent_origin` is the origin at the call site itself; it
-    /// hangs under the newly minted [`Origin::MacroBody`] or
-    /// [`Origin::CallerExpansion`] for every emitted token.
+    /// hangs under the newly minted [`Origin::MacroBody`],
+    /// [`Origin::MacroArgument`], or [`Origin::CallerExpansion`] for
+    /// every emitted token.
     fn finish_recognized_call(
         &mut self,
         name_text: String,
@@ -547,32 +548,21 @@ impl Preprocessor {
         arguments: Vec<Vec<PreprocessedToken>>,
         parent_origin: Arc<Origin>,
     ) -> MacroCallOutcome {
-        // Function-like table hits are handled in the next phase; for
-        // now they fall through to the caller-driven expansion event.
-        if arity.is_none()
-            && let Some(def) = self.macros.get_constant(&name_text)
-        {
-            let definition_span = def.directive_span;
-            // Build the replacement token stream and prepend it to the
-            // expansion queue so subsequent step_scan iterations —
-            // including the rescan check at the queue head — see the
-            // new tokens first.
-            let mut expanded: VecDeque<PreprocessedToken> =
-                VecDeque::with_capacity(def.replacement.len());
-            for replacement in &def.replacement {
-                let origin = Origin::MacroBody {
-                    parent: Arc::clone(&parent_origin),
-                    call_site,
-                    definition_span,
-                };
-                let token = *replacement.token();
-                let source = Arc::clone(replacement.source());
-                let source_id = replacement.source_span().source_id;
-                expanded.push_back(PreprocessedToken::new(token, source, source_id, origin));
+        match arity {
+            None => {
+                if let Some(def) = self.macros.get_constant(&name_text) {
+                    let expanded = expand_constant_like(def, call_site, &parent_origin);
+                    self.prepend_to_queue(expanded);
+                    return MacroCallOutcome::Enqueued;
+                }
             }
-            expanded.append(&mut self.expansion_queue);
-            self.expansion_queue = expanded;
-            return MacroCallOutcome::Enqueued;
+            Some(n) => {
+                if let Some(def) = self.macros.get_function(&name_text, n) {
+                    let expanded = expand_function_like(def, &arguments, call_site, &parent_origin);
+                    self.prepend_to_queue(expanded);
+                    return MacroCallOutcome::Enqueued;
+                }
+            }
         }
 
         let request = MacroExpansionRequest {
@@ -587,6 +577,13 @@ impl Preprocessor {
             parent_origin,
         });
         MacroCallOutcome::Fire(Box::new(Event::AwaitingMacroExpansion(request)))
+    }
+
+    /// Splices `tokens` in front of the current expansion queue so
+    /// they surface before anything scheduled by earlier expansions.
+    fn prepend_to_queue(&mut self, mut tokens: VecDeque<PreprocessedToken>) {
+        tokens.append(&mut self.expansion_queue);
+        self.expansion_queue = tokens;
     }
 
     /// Attempts to rescan a `?NAME` macro call whose `?` sits at the
@@ -757,6 +754,85 @@ enum MacroCallOutcome {
 
 fn is_symbol(token: Token, sym: Symbol) -> bool {
     matches!(token.kind(), TokenKind::Symbol(s) if s == sym)
+}
+
+/// Builds the expansion of a constant-like macro definition.
+///
+/// Every replacement token is re-emitted with a fresh
+/// [`Origin::MacroBody`] whose `call_site` points at the call and
+/// whose `definition_span` points at the `-define(...)` directive.
+fn expand_constant_like(
+    def: &MacroDefinition,
+    call_site: SourceSpan,
+    parent_origin: &Arc<Origin>,
+) -> VecDeque<PreprocessedToken> {
+    let definition_span = def.directive_span;
+    let mut out: VecDeque<PreprocessedToken> = VecDeque::with_capacity(def.replacement.len());
+    for replacement in &def.replacement {
+        let origin = Origin::MacroBody {
+            parent: Arc::clone(parent_origin),
+            call_site,
+            definition_span,
+        };
+        let token = *replacement.token();
+        let source = Arc::clone(replacement.source());
+        let source_id = replacement.source_span().source_id;
+        out.push_back(PreprocessedToken::new(token, source, source_id, origin));
+    }
+    out
+}
+
+/// Builds the expansion of a function-like macro definition, doing
+/// OTP-style parameter substitution: whenever a replacement token is
+/// a `Variable` whose text matches a formal parameter name, its
+/// occurrences are replaced with the tokens of the matching
+/// argument.
+///
+/// Replacement tokens keep their definition source and become
+/// [`Origin::MacroBody`]; argument tokens keep their argument source
+/// and become [`Origin::MacroArgument`] tagged with the parameter
+/// they were bound to.
+fn expand_function_like(
+    def: &MacroDefinition,
+    arguments: &[Vec<PreprocessedToken>],
+    call_site: SourceSpan,
+    parent_origin: &Arc<Origin>,
+) -> VecDeque<PreprocessedToken> {
+    let definition_span = def.directive_span;
+    let mut out: VecDeque<PreprocessedToken> = VecDeque::new();
+    for replacement in &def.replacement {
+        let token = *replacement.token();
+        if token.kind() == TokenKind::Variable {
+            let var_text = token.text(replacement.source().text());
+            if let Some(idx) = def.params.iter().position(|p| p.name.as_str() == var_text)
+                && idx < arguments.len()
+            {
+                let parameter = def.params[idx].name.clone();
+                for arg_tok in &arguments[idx] {
+                    let origin = Origin::MacroArgument {
+                        parent: Arc::clone(parent_origin),
+                        call_site,
+                        parameter: parameter.clone(),
+                        definition_span,
+                    };
+                    let token = *arg_tok.token();
+                    let source = Arc::clone(arg_tok.source());
+                    let source_id = arg_tok.source_span().source_id;
+                    out.push_back(PreprocessedToken::new(token, source, source_id, origin));
+                }
+                continue;
+            }
+        }
+        let origin = Origin::MacroBody {
+            parent: Arc::clone(parent_origin),
+            call_site,
+            definition_span,
+        };
+        let source = Arc::clone(replacement.source());
+        let source_id = replacement.source_span().source_id;
+        out.push_back(PreprocessedToken::new(token, source, source_id, origin));
+    }
+    out
 }
 
 /// Delimiter stack entry used while parsing macro-call arguments.
@@ -1552,6 +1628,117 @@ mod tests {
     }
 
     // ---- End of Phase 7 tests ---------------------------------------
+
+    // ---- Phase 8: function-like expansion ---------------------------
+
+    fn lexical_texts_from_source(pp: &mut Preprocessor) -> Vec<String> {
+        let mut out = Vec::new();
+        loop {
+            match pp.step().expect("no protocol errors") {
+                Event::Token(ppt) if ppt.token().kind().is_lexical() => {
+                    out.push(ppt.text().to_owned());
+                }
+                Event::Token(_) | Event::Directive(_) => {}
+                Event::Complete => break,
+                other => panic!("unexpected event: {other:?}"),
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn function_like_arity_zero_hit_expands_body() {
+        let mut pp = make("-define(FOO(), bar).\n?FOO().");
+        let texts = lexical_texts_from_source(&mut pp);
+        assert!(texts.contains(&"bar".to_owned()));
+        assert!(!texts.contains(&"?".to_owned()));
+    }
+
+    #[test]
+    fn function_like_single_arg_substitutes_parameter() {
+        let mut pp = make("-define(ID(X), X).\n?ID(42).");
+        let texts = lexical_texts_from_source(&mut pp);
+        assert!(texts.contains(&"42".to_owned()));
+    }
+
+    #[test]
+    fn function_like_multiple_args_substitute_by_position() {
+        let mut pp = make("-define(SWAP(A, B), [B, A]).\n?SWAP(1, 2).");
+        let texts = lexical_texts_from_source(&mut pp);
+        // Body is `[B, A]`; substituting A=1, B=2 yields `[2, 1]`.
+        let joined: Vec<_> = texts
+            .iter()
+            .filter(|t| ["1", "2", "["].contains(&t.as_str()))
+            .cloned()
+            .collect();
+        // Order: `[`, `2`, `1`
+        assert_eq!(joined, ["[", "2", "1"]);
+    }
+
+    #[test]
+    fn function_like_parameter_repeated_in_body() {
+        let mut pp = make("-define(DUP(A), (A, A)).\n?DUP(x).");
+        let texts = lexical_texts_from_source(&mut pp);
+        // Body `(A, A)` with A=x gives `(x, x)` — two `x` tokens.
+        let x_count = texts.iter().filter(|t| t.as_str() == "x").count();
+        assert_eq!(x_count, 2);
+    }
+
+    #[test]
+    fn function_like_argument_tokens_carry_macro_argument_origin() {
+        let mut pp = make("-define(ID(X), X).\n?ID(42).");
+        loop {
+            match pp.step().expect("no protocol errors") {
+                Event::Token(ppt) if ppt.text() == "42" => {
+                    let Origin::MacroArgument {
+                        parameter,
+                        call_site,
+                        ..
+                    } = ppt.origin()
+                    else {
+                        panic!("expected MacroArgument origin, got {:?}", ppt.origin());
+                    };
+                    assert_eq!(parameter.as_str(), "X");
+                    assert!(call_site.start.offset() < call_site.end.offset());
+                    return;
+                }
+                Event::Complete => panic!("expected `42` token"),
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
+    fn function_like_body_tokens_keep_macro_body_origin() {
+        let mut pp = make("-define(WRAP(X), [X]).\n?WRAP(42).");
+        loop {
+            match pp.step().expect("no protocol errors") {
+                Event::Token(ppt) if ppt.text() == "[" => {
+                    // `[` came from the definition body, not from an argument.
+                    assert!(matches!(ppt.origin(), Origin::MacroBody { .. }));
+                    return;
+                }
+                Event::Complete => panic!("expected `[` token"),
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
+    fn function_like_middle_empty_argument_yields_empty_expansion() {
+        // `?FOO(A,,B)` with `-define(FOO(A, X, B), (A + X + B))`:
+        // the middle argument is empty, so X substitutes to nothing.
+        let mut pp = make("-define(FOO(A, X, B), (A + X + B)).\n?FOO(1, , 2).");
+        let texts = lexical_texts_from_source(&mut pp);
+        // Expect at least the `1` and `2` tokens, with only two `+`
+        // between them (they end up adjacent).
+        let plus_count = texts.iter().filter(|t| t.as_str() == "+").count();
+        assert_eq!(plus_count, 2);
+        assert!(texts.contains(&"1".to_owned()));
+        assert!(texts.contains(&"2".to_owned()));
+    }
+
+    // ---- End of Phase 8 tests ---------------------------------------
 
     #[test]
     fn clone_isolates_macro_table_updates() {
