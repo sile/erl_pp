@@ -342,21 +342,21 @@ impl Preprocessor {
     /// Resumes the scan loop after an [`Event::AwaitingInclude`]
     /// event.
     ///
-    /// `source` is the caller-supplied include content:
-    /// * `Some(source)`: `source` is appended to the shared
-    ///   [`SourceStore`] and becomes the active cursor; the parent
-    ///   cursor and origin are pushed onto the include stack and
-    ///   restored on include EOF.
-    /// * `None`: the include is skipped; the parent source resumes at
-    ///   the token right after the directive. Diagnostics are the
-    ///   caller's responsibility.
+    /// `source` is the caller-supplied include content. It is
+    /// appended to the shared [`SourceStore`] and becomes the active
+    /// cursor; the parent cursor and origin are pushed onto the
+    /// include stack and restored on include EOF. Pass a token-free
+    /// [`Source`] to skip the include without processing any content
+    /// (same shape as [`Preprocessor::resume_macro_expansion`]); the
+    /// caller is responsible for surfacing any diagnostic in its own
+    /// error stream.
     ///
     /// Returns:
     /// * [`ProtocolError::UnexpectedResponse`] when the machine is
     ///   scanning or completed (no include is pending);
     /// * [`ProtocolError::WrongResponseKind`] when the machine is
     ///   awaiting a different response (macro expansion, conditional).
-    pub fn resume_include(&mut self, source: Option<Source>) -> Result<(), ProtocolError> {
+    pub fn resume_include(&mut self, source: Source) -> Result<(), ProtocolError> {
         match &self.state {
             State::AwaitingIncludeResolution(_) => {}
             State::AwaitingMacroExpansion(_) | State::AwaitingConditionalDecision => {
@@ -371,14 +371,10 @@ impl Preprocessor {
         else {
             unreachable!("state was checked immediately above");
         };
-        let Some(source) = source else {
-            // Skip: parent source resumes at the token right after the
-            // directive. The directive parser already consumed through
-            // the terminating `.`, so we are at a form boundary.
-            self.at_form_boundary = true;
-            return Ok(());
-        };
-        // Push parent cursor + origin, swap in the include cursor.
+        // Push parent cursor + origin, swap in the include cursor. A
+        // token-free source hits EOF on the next step_scan iteration
+        // and the parent is restored right away — no special-cased
+        // skip path.
         let source_id = self.sources.append(source);
         let source_arc = self.sources.get(source_id);
         let child_cursor = Cursor::new(source_id, source_arc);

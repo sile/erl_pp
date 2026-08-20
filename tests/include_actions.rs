@@ -3,7 +3,7 @@
 //!
 //! Covers the polished contract: kind + path payload, no source
 //! read before the response, parent-source resume after include EOF,
-//! nested include order, `Origin::Include` chain, `resume_include(None)`
+//! nested include order, `Origin::Include` chain, empty-`Source`
 //! skip, and protocol-error paths.
 
 use std::sync::Arc;
@@ -72,7 +72,7 @@ fn directive_span_points_at_parent_not_include() {
         panic!("expected AwaitingInclude");
     };
     let parent_id = request.directive_span.source_id;
-    pp.resume_include(Some(build_source("x.hrl", "inside.")))
+    pp.resume_include(build_source("x.hrl", "inside."))
         .expect("resume ok");
     let Event::Token(t) = step(&mut pp) else {
         panic!("expected token from include source");
@@ -81,17 +81,17 @@ fn directive_span_points_at_parent_not_include() {
 }
 
 // ---------------------------------------------------------------------
-// 4. resume_include(Some(source)) splices the include tokens before
+// 4. resume_include(source) splices the include tokens before
 //    the parent resumes.
 #[test]
-fn resume_include_some_splices_include_before_parent_resumes() {
+fn resume_include_splices_include_before_parent_resumes() {
     let mut pp = make(
         r#"-include("h.hrl").
 after."#,
     );
     let event = step(&mut pp);
     assert!(matches!(event, Event::AwaitingInclude(_)));
-    pp.resume_include(Some(build_source("h.hrl", "inside.")))
+    pp.resume_include(build_source("h.hrl", "inside."))
         .expect("resume ok");
     // Include source: `inside.`
     let e = step(&mut pp);
@@ -121,17 +121,19 @@ after."#,
 }
 
 // ---------------------------------------------------------------------
-// 5. resume_include(None) skips the include and jumps straight to the
-//    parent's next token.
+// 5. An empty include Source skips content and jumps straight to the
+//    parent's next token (same idiom as `resume_macro_expansion` with
+//    a token-free Source).
 #[test]
-fn resume_include_none_skips_and_resumes_parent() {
+fn resume_include_with_empty_source_skips_content() {
     let mut pp = make(
         r#"-include("h.hrl").
 after."#,
     );
     let event = step(&mut pp);
     assert!(matches!(event, Event::AwaitingInclude(_)));
-    pp.resume_include(None).expect("resume ok");
+    pp.resume_include(build_source("h.hrl", ""))
+        .expect("resume ok");
     // Parent source next lexical token should be `after`.
     let mut found_after = false;
     loop {
@@ -162,7 +164,7 @@ fn include_source_tokens_carry_origin_include_chain() {
     };
     let directive_span = request.directive_span;
     let expected_kind = request.kind;
-    pp.resume_include(Some(build_source("h.hrl", "inside.")))
+    pp.resume_include(build_source("h.hrl", "inside."))
         .expect("resume ok");
     let Event::Token(ppt) = step(&mut pp) else {
         panic!("expected Token from include");
@@ -191,7 +193,7 @@ fn macro_defined_in_include_visible_in_parent() {
     );
     let _ = step(&mut pp); // AwaitingInclude
     let include_src = build_source("h.hrl", "-define(FOO, 42).\n");
-    pp.resume_include(Some(include_src)).expect("resume ok");
+    pp.resume_include(include_src).expect("resume ok");
     // Drain include source; then parent's ?FOO should expand to 42.
     let mut saw_42 = false;
     loop {
@@ -220,17 +222,17 @@ parent_after."#,
         panic!("expected AwaitingInclude for a.hrl");
     };
     assert_eq!(req1.path.as_str(), "a.hrl");
-    pp.resume_include(Some(build_source(
+    pp.resume_include(build_source(
         "a.hrl",
         r#"-include("b.hrl").
 a_after."#,
-    )))
+    ))
     .expect("resume a");
     let Event::AwaitingInclude(req2) = step(&mut pp) else {
         panic!("expected AwaitingInclude for b.hrl");
     };
     assert_eq!(req2.path.as_str(), "b.hrl");
-    pp.resume_include(Some(build_source("b.hrl", "b_inside.")))
+    pp.resume_include(build_source("b.hrl", "b_inside."))
         .expect("resume b");
     // Now drain: expect b_inside, then a_after, then parent_after.
     let mut order = Vec::new();
@@ -252,9 +254,7 @@ a_after."#,
 #[test]
 fn resume_include_in_scanning_is_unexpected_response() {
     let mut pp = make("just_a_token.");
-    let err = pp
-        .resume_include(Some(build_source("x.hrl", "x.")))
-        .unwrap_err();
+    let err = pp.resume_include(build_source("x.hrl", "x.")).unwrap_err();
     assert!(matches!(err, ProtocolError::UnexpectedResponse));
     // State was not consumed — still Scanning.
     assert!(matches!(pp.status(), Status::Scanning));
@@ -267,9 +267,7 @@ fn resume_include_while_awaiting_macro_is_wrong_response_kind() {
     let mut pp = make("?UNKNOWN.");
     let event = step(&mut pp);
     assert!(matches!(event, Event::AwaitingMacroExpansion(_)));
-    let err = pp
-        .resume_include(Some(build_source("x.hrl", "x.")))
-        .unwrap_err();
+    let err = pp.resume_include(build_source("x.hrl", "x.")).unwrap_err();
     assert!(matches!(err, ProtocolError::WrongResponseKind));
     // Macro pending state was not consumed.
     assert!(matches!(pp.status(), Status::AwaitingMacroExpansion));
@@ -289,7 +287,7 @@ fn same_source_from_two_sites_gets_distinct_include_site() {
         panic!("expected first AwaitingInclude");
     };
     let site1 = req1.directive_span;
-    pp.resume_include(Some(build_source("h.hrl", "one.")))
+    pp.resume_include(build_source("h.hrl", "one."))
         .expect("resume 1");
     let Event::Token(t1) = step(&mut pp) else {
         panic!("expected token from first include");
@@ -307,7 +305,7 @@ fn same_source_from_two_sites_gets_distinct_include_site() {
             Event::AwaitingInclude(req2) => {
                 let site2 = req2.directive_span;
                 assert_ne!(site2, site1);
-                pp.resume_include(Some(build_source("h.hrl", "two.")))
+                pp.resume_include(build_source("h.hrl", "two."))
                     .expect("resume 2");
                 let Event::Token(t2) = step(&mut pp) else {
                     panic!("expected token from second include");
@@ -337,8 +335,7 @@ fn include_eof_is_not_top_level_complete() {
 parent_tail."#,
     );
     let _ = step(&mut pp);
-    pp.resume_include(Some(build_source("h.hrl", "inc.")))
-        .unwrap();
+    pp.resume_include(build_source("h.hrl", "inc.")).unwrap();
     let mut seen_parent_tail = false;
     loop {
         match step(&mut pp) {
@@ -361,7 +358,7 @@ fn request_parent_origin_matches_child_include_parent() {
         panic!("expected AwaitingInclude");
     };
     let request_parent = Arc::clone(&req.parent_origin);
-    pp.resume_include(Some(build_source("h.hrl", "x.")))
+    pp.resume_include(build_source("h.hrl", "x."))
         .expect("resume ok");
     let Event::Token(t) = step(&mut pp) else {
         panic!("expected token");
