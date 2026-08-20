@@ -37,8 +37,8 @@ use crate::cursor::Cursor;
 use crate::directive::{Directive, parse_directive};
 use crate::error::{ConditionalErrorKind, MacroCallErrorKind, PreprocessError, ProtocolError};
 use crate::event::{
-    Branch, BranchBoundary, BranchBoundaryKind, ConditionalKind, ConditionalRequest, Event,
-    IncludeKind, MacroExpansionRequest,
+    Branch, BranchBoundary, BranchBoundaryKind, ConditionalKind, ConditionalRequest, Diagnostic,
+    Event, IncludeKind, MacroExpansionRequest, Severity,
 };
 use crate::macros::{MacroDefinition, MacroKey, MacroTable};
 use crate::origin::{Origin, SourceInfoMacroKind};
@@ -649,7 +649,8 @@ impl Preprocessor {
         // `-include` / `-include_lib` are folded into
         // Event::AwaitingInclude — we do not emit an Event::Directive
         // for them, matching how Event::AwaitingMacroExpansion
-        // swallows the observation event.
+        // swallows the observation event. `-error` / `-warning` are
+        // folded into Event::Diagnostic for the same reason.
         match directive {
             Directive::Include(d) => {
                 return StepAction::Emit(Box::new(self.fire_awaiting_include(
@@ -663,6 +664,22 @@ impl Preprocessor {
                     IncludeKind::IncludeLib,
                     d.path.clone(),
                     d.span,
+                )));
+            }
+            Directive::Error(d) => {
+                return StepAction::Emit(Box::new(self.fire_diagnostic(
+                    Severity::Error,
+                    &d.arg_tokens,
+                    d.span,
+                    d.arg_span,
+                )));
+            }
+            Directive::Warning(d) => {
+                return StepAction::Emit(Box::new(self.fire_diagnostic(
+                    Severity::Warning,
+                    &d.arg_tokens,
+                    d.span,
+                    d.arg_span,
                 )));
             }
             _ => {}
@@ -709,6 +726,36 @@ impl Preprocessor {
             kind,
         });
         Event::AwaitingInclude(request)
+    }
+
+    fn fire_diagnostic(
+        &self,
+        severity: Severity,
+        arg_tokens: &[Token],
+        directive_span: SourceSpan,
+        arg_span: SourceSpan,
+    ) -> Event {
+        let parent_origin = Arc::clone(&self.current_origin);
+        let source_id = self.cursor.source_id();
+        let source_arc = Arc::clone(self.cursor.source());
+        let arguments = arg_tokens
+            .iter()
+            .map(|token| {
+                PreprocessedToken::new(
+                    *token,
+                    Arc::clone(&source_arc),
+                    source_id,
+                    (*parent_origin).clone(),
+                )
+            })
+            .collect();
+        Event::Diagnostic(Diagnostic {
+            severity,
+            arguments,
+            directive_span,
+            arg_span,
+            parent_origin,
+        })
     }
 
     /// Handles a `-else` directive: flips the top branch frame's
