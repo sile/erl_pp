@@ -6,6 +6,17 @@
 //! caller is free to use a different resolver, and this module can be
 //! ignored entirely by callers that only feed in-memory sources.
 //!
+//! # `include_lib` and `erl_libs`
+//!
+//! `-include_lib("myapp/include/hdr.hrl")` first tries the ordinary
+//! `include_paths` search. On failure, [`open_include`] walks each
+//! entry of `erl_libs` as if it were an `ERL_LIBS` directory,
+//! looking for `myapp` (exact match, preferred) or
+//! `myapp-<version>` (highest version wins). This mirrors OTP
+//! `code:lib_dir/1`; the caller assembles `erl_libs` from whatever
+//! is appropriate (the `ERL_LIBS` env var, a static config, or
+//! `code:lib_dir/1` invoked against a live Erlang runtime).
+//!
 //! # Compatibility
 //!
 //! Behavior mirrors OTP 29.0 as observed in:
@@ -14,14 +25,13 @@
 //!   `enter_file` / `enter_file2` / `expand_var`)
 //! - `lib/kernel/src/file.erl` (`path_open`)
 //! - `lib/compiler/src/compile.erl` (`do_parse_module`)
-//! - `lib/kernel/src/code_server.erl` (`code:lib_dir/1`) — supplied
-//!   by the caller through `app_lookup`
+//! - `lib/kernel/src/code_server.erl` (`code:lib_dir/1`) — driven by
+//!   the caller-provided `erl_libs` list
 //!
 //! The implementation is a snapshot pinned to OTP 29.0; later OTP
 //! versions that change the search rules will not be tracked here.
 //! To validate against OTP, feed the same directory layout to
-//! `epp:parse_file/2` and compare the accepted / rejected paths — see
-//! the module test suite for the expected trace shape.
+//! `epp:parse_file/2` and compare the accepted / rejected paths.
 //!
 //! # What this module does NOT do
 //!
@@ -30,10 +40,12 @@
 //! - Encoding conversion after read open
 //! - Async filesystem access
 //! - Virtual filesystem abstractions
-//! - Detecting the running Erlang VM's code path (the caller writes
-//!   `app_lookup`)
+//! - Detecting the running Erlang VM's code path (the caller
+//!   populates `erl_libs`)
 //! - Prepending the current source's directory (or `-I`) to
 //!   `include_paths` (the caller assembles the search list)
+//! - Parsing `myapp.app` (application resource files) — OTP
+//!   `code:lib_dir/1` also does not need them
 
 use std::env::VarError;
 use std::fs::File;
@@ -41,20 +53,6 @@ use std::io;
 use std::path::{Component, Path, PathBuf};
 
 use crate::event::{IncludeKind, IncludeRequest};
-
-/// Successful resolution of an include: the path that was opened and
-/// the file handle produced by the successful `File::open`.
-///
-/// The caller does not need to re-open the file. The path is not
-/// canonicalized — symlinks and `..` components are preserved
-/// verbatim from the search that succeeded.
-#[derive(Debug)]
-pub struct OpenedInclude {
-    /// Full path that resolved successfully (not canonicalized).
-    pub path: PathBuf,
-    /// Read-opened handle to `path`.
-    pub file: File,
-}
 
 /// Failure modes of [`open_include`].
 ///
@@ -67,13 +65,13 @@ pub enum OpenIncludeError {
     /// Ordinary include path search exhausted every candidate with
     /// `NotFound` / `NotADirectory`.
     NotFound,
-    /// `include_lib` requested an application whose lookup returned
-    /// `None`.
+    /// `include_lib` requested an application whose name was not
+    /// found in any of the given `erl_libs` directories.
     AppNotFound {
         /// Application name that could not be resolved.
         app: String,
     },
-    /// `include_lib` fell back to the application directory but the
+    /// `include_lib` found the application directory but the
     /// remaining path components failed to open with `NotFound` /
     /// `NotADirectory`.
     AppFileNotFound {
@@ -125,8 +123,8 @@ impl std::error::Error for OpenIncludeError {
 }
 
 /// Resolve an [`IncludeRequest`] against `include_paths` and, for
-/// `include_lib`, an `app_lookup` callback that maps an application
-/// name to its root directory.
+/// `include_lib`, `erl_libs` (a list of `ERL_LIBS`-style library
+/// directories). Returns the path that successfully opened.
 ///
 /// # Search algorithm (OTP 29.0)
 ///
@@ -144,33 +142,33 @@ impl std::error::Error for OpenIncludeError {
 /// 3. `absolute` and `volumerelative` paths are opened directly and
 ///    do not consult `include_paths`.
 /// 4. `relative` paths are tried against each entry of
-///    `include_paths` in order, using `File::open` to decide success.
-///    Only [`io::ErrorKind::NotFound`] and
+///    `include_paths` in order. Only [`io::ErrorKind::NotFound`] and
 ///    [`io::ErrorKind::NotADirectory`] advance to the next candidate.
 ///    - `include`: any other I/O error is returned immediately as
 ///      [`OpenIncludeError::Io`] (no fallback).
 ///    - `include_lib`: any failure (I/O errors included) proceeds to
 ///      the application fallback, matching OTP `scan_include_lib`.
 /// 5. `include_lib` fallback: the leading path component is treated
-///    as the application name and passed to `app_lookup`. On
-///    `Some(app_dir)`, `app_dir.join(tail)` is opened directly;
-///    `NotFound` / `NotADirectory` there yield
+///    as the application name. Each `erl_libs` directory is scanned
+///    for a child named `<app>` (exact match, preferred) or
+///    `<app>-<version>` (highest version wins, natural numeric
+///    comparison of dot-separated segments). The first `erl_libs`
+///    directory that contains a match determines the result; later
+///    entries are not consulted. `<matched>/tail` is then opened;
+///    `NotFound` / `NotADirectory` yield
 ///    [`OpenIncludeError::AppFileNotFound`], other I/O errors yield
-///    [`OpenIncludeError::Io`]. `None` yields
+///    [`OpenIncludeError::Io`]. No match in any `erl_libs` yields
 ///    [`OpenIncludeError::AppNotFound`].
 ///
 /// # Non-goals
 ///
 /// See the module docs for what this function deliberately does not
 /// do (canonicalization, cycle detection, encoding conversion, etc.).
-pub fn open_include<AppLookup>(
+pub fn open_include(
     request: &IncludeRequest,
     include_paths: &[PathBuf],
-    app_lookup: AppLookup,
-) -> Result<OpenedInclude, OpenIncludeError>
-where
-    AppLookup: Fn(&str) -> Option<PathBuf>,
-{
+    erl_libs: &[PathBuf],
+) -> Result<PathBuf, OpenIncludeError> {
     if let Some(rest) = request.path.as_str().strip_prefix('$') {
         let (name, _tail) = split_var_ident(rest);
         if !name.is_empty() {
@@ -184,7 +182,7 @@ where
             }
         }
     }
-    open_include_with_env(request, include_paths, app_lookup, |name| {
+    open_include_with_env(request, include_paths, erl_libs, |name| {
         std::env::var(name).ok()
     })
 }
@@ -193,14 +191,13 @@ where
 /// closure instead of reading the process environment. Kept
 /// crate-visible so unit tests can drive environment expansion
 /// without touching `std::env::set_var` (unsafe in Rust 2024).
-pub(crate) fn open_include_with_env<AppLookup, EnvLookup>(
+pub(crate) fn open_include_with_env<EnvLookup>(
     request: &IncludeRequest,
     include_paths: &[PathBuf],
-    app_lookup: AppLookup,
+    erl_libs: &[PathBuf],
     env_lookup: EnvLookup,
-) -> Result<OpenedInclude, OpenIncludeError>
+) -> Result<PathBuf, OpenIncludeError>
 where
-    AppLookup: Fn(&str) -> Option<PathBuf>,
     EnvLookup: Fn(&str) -> Option<String>,
 {
     let expanded = expand_var(request.path.as_str(), &env_lookup);
@@ -211,26 +208,23 @@ where
         PathType::Relative => match request.kind {
             IncludeKind::Include => {
                 match search_relative(&candidate, include_paths, /* fallback_on_io = */ false)? {
-                    Some(opened) => Ok(opened),
+                    Some(path) => Ok(path),
                     None => Err(OpenIncludeError::NotFound),
                 }
             }
             IncludeKind::IncludeLib => {
                 match search_relative(&candidate, include_paths, /* fallback_on_io = */ true)? {
-                    Some(opened) => Ok(opened),
-                    None => include_lib_fallback(&candidate, &app_lookup),
+                    Some(path) => Ok(path),
+                    None => include_lib_fallback(&candidate, erl_libs),
                 }
             }
         },
     }
 }
 
-fn open_direct(p: &Path) -> Result<OpenedInclude, OpenIncludeError> {
+fn open_direct(p: &Path) -> Result<PathBuf, OpenIncludeError> {
     match File::open(p) {
-        Ok(file) => Ok(OpenedInclude {
-            path: p.to_path_buf(),
-            file,
-        }),
+        Ok(_) => Ok(p.to_path_buf()),
         Err(e) => Err(classify_open_error(e, p)),
     }
 }
@@ -239,11 +233,11 @@ fn search_relative(
     candidate: &Path,
     include_paths: &[PathBuf],
     fallback_on_io: bool,
-) -> Result<Option<OpenedInclude>, OpenIncludeError> {
+) -> Result<Option<PathBuf>, OpenIncludeError> {
     for dir in include_paths {
         let full = dir.join(candidate);
         match File::open(&full) {
-            Ok(file) => return Ok(Some(OpenedInclude { path: full, file })),
+            Ok(_) => return Ok(Some(full)),
             Err(e) => match e.kind() {
                 io::ErrorKind::NotFound | io::ErrorKind::NotADirectory => continue,
                 _ => {
@@ -258,13 +252,10 @@ fn search_relative(
     Ok(None)
 }
 
-fn include_lib_fallback<AppLookup>(
+fn include_lib_fallback(
     candidate: &Path,
-    app_lookup: &AppLookup,
-) -> Result<OpenedInclude, OpenIncludeError>
-where
-    AppLookup: Fn(&str) -> Option<PathBuf>,
-{
+    erl_libs: &[PathBuf],
+) -> Result<PathBuf, OpenIncludeError> {
     let mut components = candidate.components();
     let head = match components.next() {
         Some(Component::Normal(s)) => match s.to_str() {
@@ -282,28 +273,76 @@ where
         }
     };
     let tail: PathBuf = components.collect();
-    match app_lookup(&head) {
-        None => Err(OpenIncludeError::AppNotFound { app: head }),
-        Some(app_dir) => {
-            let full = if tail.as_os_str().is_empty() {
-                app_dir
-            } else {
-                app_dir.join(&tail)
+
+    let Some(app_dir) = find_app_dir(&head, erl_libs) else {
+        return Err(OpenIncludeError::AppNotFound { app: head });
+    };
+    let full = if tail.as_os_str().is_empty() {
+        app_dir
+    } else {
+        app_dir.join(&tail)
+    };
+    match File::open(&full) {
+        Ok(_) => Ok(full),
+        Err(e) => match e.kind() {
+            io::ErrorKind::NotFound | io::ErrorKind::NotADirectory => {
+                Err(OpenIncludeError::AppFileNotFound { app: head, tail })
+            }
+            io::ErrorKind::InvalidInput => Err(OpenIncludeError::InvalidPath { path: full }),
+            _ => Err(OpenIncludeError::Io(e)),
+        },
+    }
+}
+
+/// Return the best directory under `erl_libs` for application `app`.
+///
+/// Scan order: `erl_libs` is walked from first to last, and the
+/// first entry that contains any match wins — later entries are not
+/// consulted (matches OTP `code:lib_dir/1`, which stops at the
+/// first code path hit). Within one lib dir, an exact-match child
+/// named `app` takes precedence; otherwise the child named
+/// `app-<version>` with the greatest version wins.
+///
+/// Version comparison splits on `.` and parses each segment as a
+/// `u64`. Non-numeric segments compare as `0`, which is enough for
+/// the standard `<major>.<minor>.<patch>` form OTP uses.
+fn find_app_dir(app: &str, erl_libs: &[PathBuf]) -> Option<PathBuf> {
+    for lib in erl_libs {
+        let Ok(entries) = std::fs::read_dir(lib) else {
+            continue;
+        };
+        let mut exact: Option<PathBuf> = None;
+        let mut best_versioned: Option<(Vec<u64>, PathBuf)> = None;
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let Some(name_str) = name.to_str() else {
+                continue;
             };
-            match File::open(&full) {
-                Ok(file) => Ok(OpenedInclude { path: full, file }),
-                Err(e) => match e.kind() {
-                    io::ErrorKind::NotFound | io::ErrorKind::NotADirectory => {
-                        Err(OpenIncludeError::AppFileNotFound { app: head, tail })
-                    }
-                    io::ErrorKind::InvalidInput => {
-                        Err(OpenIncludeError::InvalidPath { path: full })
-                    }
-                    _ => Err(OpenIncludeError::Io(e)),
-                },
+            if name_str == app {
+                exact = Some(entry.path());
+                continue;
+            }
+            if let Some(version) = name_str.strip_prefix(app).and_then(|s| s.strip_prefix('-')) {
+                let parsed = parse_version(version);
+                if best_versioned.as_ref().is_none_or(|(cur, _)| parsed > *cur) {
+                    best_versioned = Some((parsed, entry.path()));
+                }
             }
         }
+        if let Some(p) = exact {
+            return Some(p);
+        }
+        if let Some((_, p)) = best_versioned {
+            return Some(p);
+        }
     }
+    None
+}
+
+fn parse_version(s: &str) -> Vec<u64> {
+    s.split('.')
+        .map(|seg| seg.parse::<u64>().unwrap_or(0))
+        .collect()
 }
 
 fn classify_open_error(e: io::Error, path: &Path) -> OpenIncludeError {
@@ -399,6 +438,12 @@ mod tests {
             std::fs::write(&p, content).expect("write");
             p
         }
+
+        fn mkdir(&self, name: &str) -> PathBuf {
+            let p = self.path.join(name);
+            std::fs::create_dir_all(&p).expect("mkdir");
+            p
+        }
     }
 
     impl Drop for TempDir {
@@ -468,6 +513,21 @@ mod tests {
         assert_eq!(path_type(Path::new("foo")), PathType::Relative);
     }
 
+    // parse_version ---------------------------------------------------------
+
+    #[test]
+    fn parse_version_numeric_natural_ordering() {
+        assert!(parse_version("1.10") > parse_version("1.2"));
+        assert!(parse_version("2.0") > parse_version("1.99.99"));
+        assert!(parse_version("1.2.3") > parse_version("1.2"));
+    }
+
+    #[test]
+    fn parse_version_non_numeric_segments_treated_as_zero() {
+        // "1.rc1" -> [1, 0], comparable to [1, 0] equivalents
+        assert_eq!(parse_version("1.rc1"), vec![1u64, 0]);
+    }
+
     // absolute path directness ----------------------------------------------
 
     #[test]
@@ -475,9 +535,8 @@ mod tests {
         let tmp = TempDir::new("abs");
         let target = tmp.write("hdr.hrl", b"c");
         let req = dummy_request(IncludeKind::Include, target.to_str().unwrap());
-        let opened =
-            open_include_with_env(&req, &[], |_| None, |_| None).expect("resolve absolute");
-        assert_eq!(opened.path, target);
+        let path = open_include_with_env(&req, &[], &[], |_| None).expect("resolve absolute");
+        assert_eq!(path, target);
     }
 
     #[test]
@@ -485,7 +544,8 @@ mod tests {
         let tmp = TempDir::new("abs-missing");
         let missing = tmp.path.join("missing.hrl");
         let req = dummy_request(IncludeKind::Include, missing.to_str().unwrap());
-        let e = open_include_with_env(&req, &[], |_| None, |_| None).unwrap_err();
+        let e = open_include_with_env(&req, &[], &[], |_| None)
+            .expect_err("missing absolute path should not resolve");
         assert!(matches!(e, OpenIncludeError::NotFound));
     }
 
@@ -497,14 +557,10 @@ mod tests {
         let tmp2 = TempDir::new("rel2");
         let target = tmp2.write("hdr.hrl", b"c");
         let req = dummy_request(IncludeKind::Include, "hdr.hrl");
-        let opened = open_include_with_env(
-            &req,
-            &[tmp1.path.clone(), tmp2.path.clone()],
-            |_| None,
-            |_| None,
-        )
-        .expect("resolve relative");
-        assert_eq!(opened.path, target);
+        let path =
+            open_include_with_env(&req, &[tmp1.path.clone(), tmp2.path.clone()], &[], |_| None)
+                .expect("resolve relative");
+        assert_eq!(path, target);
     }
 
     #[test]
@@ -514,22 +570,18 @@ mod tests {
         let target = tmp1.write("hdr.hrl", b"c");
         let _shadow = tmp2.write("hdr.hrl", b"c");
         let req = dummy_request(IncludeKind::Include, "hdr.hrl");
-        let opened = open_include_with_env(
-            &req,
-            &[tmp1.path.clone(), tmp2.path.clone()],
-            |_| None,
-            |_| None,
-        )
-        .expect("resolve");
-        assert_eq!(opened.path, target);
+        let path =
+            open_include_with_env(&req, &[tmp1.path.clone(), tmp2.path.clone()], &[], |_| None)
+                .expect("resolve");
+        assert_eq!(path, target);
     }
 
     #[test]
     fn not_found_when_no_candidate_matches() {
         let tmp = TempDir::new("nf");
         let req = dummy_request(IncludeKind::Include, "missing.hrl");
-        let e = open_include_with_env(&req, std::slice::from_ref(&tmp.path), |_| None, |_| None)
-            .unwrap_err();
+        let e = open_include_with_env(&req, std::slice::from_ref(&tmp.path), &[], |_| None)
+            .expect_err("missing relative path should not resolve");
         assert!(matches!(e, OpenIncludeError::NotFound));
     }
 
@@ -540,14 +592,10 @@ mod tests {
         let tmp2 = TempDir::new("nad-dir");
         let target = tmp2.write("sub/hdr.hrl", b"c");
         let req = dummy_request(IncludeKind::Include, "sub/hdr.hrl");
-        let opened = open_include_with_env(
-            &req,
-            &[tmp1.path.clone(), tmp2.path.clone()],
-            |_| None,
-            |_| None,
-        )
-        .expect("resolve");
-        assert_eq!(opened.path, target);
+        let path =
+            open_include_with_env(&req, &[tmp1.path.clone(), tmp2.path.clone()], &[], |_| None)
+                .expect("resolve");
+        assert_eq!(path, target);
     }
 
     // include vs include_lib ------------------------------------------------
@@ -559,8 +607,8 @@ mod tests {
         let link = tmp.path.join("hdr.hrl");
         std::os::unix::fs::symlink(&link, &link).expect("create symlink loop");
         let req = dummy_request(IncludeKind::Include, "hdr.hrl");
-        let e = open_include_with_env(&req, std::slice::from_ref(&tmp.path), |_| None, |_| None)
-            .unwrap_err();
+        let e = open_include_with_env(&req, std::slice::from_ref(&tmp.path), &[], |_| None)
+            .expect_err("symlink loop should surface as an I/O error");
         assert!(matches!(e, OpenIncludeError::Io(_)), "got {e:?}");
     }
 
@@ -568,23 +616,72 @@ mod tests {
     fn include_lib_prefers_normal_search() {
         let tmp = TempDir::new("lib-normal");
         let target = tmp.write("myapp/include/hdr.hrl", b"c");
+        let bogus_lib = TempDir::new("lib-bogus");
+        // erl_libs would resolve to a non-existent app root, but
+        // normal include_paths search must win first.
+        bogus_lib.mkdir("myapp");
         let req = dummy_request(IncludeKind::IncludeLib, "myapp/include/hdr.hrl");
-        let app_lookup = |_: &str| Some(PathBuf::from("/nonexistent"));
-        let opened =
-            open_include_with_env(&req, std::slice::from_ref(&tmp.path), app_lookup, |_| None)
-                .expect("normal search wins");
-        assert_eq!(opened.path, target);
+        let path = open_include_with_env(
+            &req,
+            std::slice::from_ref(&tmp.path),
+            std::slice::from_ref(&bogus_lib.path),
+            |_| None,
+        )
+        .expect("normal search wins");
+        assert_eq!(path, target);
     }
 
     #[test]
-    fn include_lib_falls_back_to_app_lookup() {
-        let app_root = TempDir::new("lib-app");
-        let target = app_root.write("include/hdr.hrl", b"c");
+    fn include_lib_falls_back_via_erl_libs_exact_match() {
+        let lib = TempDir::new("lib-exact");
+        let target = lib.write("myapp/include/hdr.hrl", b"c");
         let req = dummy_request(IncludeKind::IncludeLib, "myapp/include/hdr.hrl");
-        let app_path = app_root.path.clone();
-        let app_lookup = |name: &str| (name == "myapp").then(|| app_path.clone());
-        let opened = open_include_with_env(&req, &[], app_lookup, |_| None).expect("app fallback");
-        assert_eq!(opened.path, target);
+        let path = open_include_with_env(&req, &[], std::slice::from_ref(&lib.path), |_| None)
+            .expect("exact-match app dir");
+        assert_eq!(path, target);
+    }
+
+    #[test]
+    fn include_lib_prefers_exact_match_over_versioned() {
+        let lib = TempDir::new("lib-mixed");
+        let target = lib.write("myapp/include/hdr.hrl", b"c");
+        // decoy versioned dir that would otherwise win the fallback.
+        lib.write("myapp-9.0/include/hdr.hrl", b"decoy");
+        let req = dummy_request(IncludeKind::IncludeLib, "myapp/include/hdr.hrl");
+        let path = open_include_with_env(&req, &[], std::slice::from_ref(&lib.path), |_| None)
+            .expect("exact match preferred");
+        assert_eq!(path, target);
+    }
+
+    #[test]
+    fn include_lib_picks_highest_version() {
+        let lib = TempDir::new("lib-highver");
+        lib.write("myapp-1.0/include/hdr.hrl", b"old");
+        lib.write(
+            "myapp-1.10/include/hdr.hrl",
+            b"newer than 1.2 by natural order",
+        );
+        let target = lib.write("myapp-2.0/include/hdr.hrl", b"newest");
+        // Also 1.2 sits between numerically to confirm natural order
+        lib.write("myapp-1.2/include/hdr.hrl", b"middle");
+        let req = dummy_request(IncludeKind::IncludeLib, "myapp/include/hdr.hrl");
+        let path = open_include_with_env(&req, &[], std::slice::from_ref(&lib.path), |_| None)
+            .expect("highest version wins");
+        assert_eq!(path, target);
+    }
+
+    #[test]
+    fn include_lib_stops_at_first_lib_with_match() {
+        let lib1 = TempDir::new("lib-first");
+        let target = lib1.write("myapp/include/hdr.hrl", b"c");
+        let lib2 = TempDir::new("lib-second");
+        // A higher-version match in a later lib dir must not win.
+        lib2.write("myapp-9.9/include/hdr.hrl", b"ignored");
+        let req = dummy_request(IncludeKind::IncludeLib, "myapp/include/hdr.hrl");
+        let path =
+            open_include_with_env(&req, &[], &[lib1.path.clone(), lib2.path.clone()], |_| None)
+                .expect("first lib wins");
+        assert_eq!(path, target);
     }
 
     #[cfg(unix)]
@@ -593,25 +690,28 @@ mod tests {
         // Symlink loop in the include path causes an I/O error
         // (ELOOP) during the ordinary search. For `include_lib`,
         // that must NOT surface as `Io(...)`; the resolver falls
-        // through to the application lookup.
+        // through to the erl_libs lookup.
         let bad = TempDir::new("lib-io-bad");
         let link = bad.path.join("myapp");
         std::os::unix::fs::symlink(&link, &link).expect("symlink loop");
-        let app_root = TempDir::new("lib-io-app");
-        let target = app_root.write("include/hdr.hrl", b"c");
+        let lib = TempDir::new("lib-io-libs");
+        let target = lib.write("myapp/include/hdr.hrl", b"c");
         let req = dummy_request(IncludeKind::IncludeLib, "myapp/include/hdr.hrl");
-        let app_path = app_root.path.clone();
-        let app_lookup = |name: &str| (name == "myapp").then(|| app_path.clone());
-        let opened =
-            open_include_with_env(&req, std::slice::from_ref(&bad.path), app_lookup, |_| None)
-                .expect("fallback resolves despite I/O error");
-        assert_eq!(opened.path, target);
+        let path = open_include_with_env(
+            &req,
+            std::slice::from_ref(&bad.path),
+            std::slice::from_ref(&lib.path),
+            |_| None,
+        )
+        .expect("fallback resolves despite I/O error");
+        assert_eq!(path, target);
     }
 
     #[test]
     fn include_lib_app_not_found_returns_app_not_found() {
         let req = dummy_request(IncludeKind::IncludeLib, "myapp/include/hdr.hrl");
-        let e = open_include_with_env(&req, &[], |_| None, |_| None).unwrap_err();
+        let e = open_include_with_env(&req, &[], &[], |_| None)
+            .expect_err("unknown application should not resolve");
         match e {
             OpenIncludeError::AppNotFound { app } => assert_eq!(app, "myapp"),
             other => panic!("expected AppNotFound, got {other:?}"),
@@ -620,11 +720,11 @@ mod tests {
 
     #[test]
     fn include_lib_app_file_not_found() {
-        let app_root = TempDir::new("lib-nofile");
+        let lib = TempDir::new("lib-nofile");
+        lib.mkdir("myapp");
         let req = dummy_request(IncludeKind::IncludeLib, "myapp/include/missing.hrl");
-        let app_path = app_root.path.clone();
-        let app_lookup = |name: &str| (name == "myapp").then(|| app_path.clone());
-        let e = open_include_with_env(&req, &[], app_lookup, |_| None).unwrap_err();
+        let e = open_include_with_env(&req, &[], std::slice::from_ref(&lib.path), |_| None)
+            .expect_err("missing file under an existing app dir should not resolve");
         match e {
             OpenIncludeError::AppFileNotFound { app, tail } => {
                 assert_eq!(app, "myapp");
@@ -634,33 +734,16 @@ mod tests {
         }
     }
 
-    // Non-canonicalization + file/path identity -----------------------------
+    // Non-canonicalization --------------------------------------------------
 
     #[test]
     fn does_not_canonicalize_dotdot() {
         let tmp = TempDir::new("nocanon");
         tmp.write("sub/hdr.hrl", b"c");
         let req = dummy_request(IncludeKind::Include, "sub/../sub/hdr.hrl");
-        let opened =
-            open_include_with_env(&req, std::slice::from_ref(&tmp.path), |_| None, |_| None)
-                .expect("resolve");
+        let path = open_include_with_env(&req, std::slice::from_ref(&tmp.path), &[], |_| None)
+            .expect("resolve");
         let expected = tmp.path.join("sub/../sub/hdr.hrl");
-        assert_eq!(opened.path, expected);
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn opened_file_matches_inode_of_resolved_path() {
-        use std::os::unix::fs::MetadataExt;
-        let tmp = TempDir::new("inode");
-        let _target = tmp.write("hdr.hrl", b"c");
-        let req = dummy_request(IncludeKind::Include, "hdr.hrl");
-        let opened =
-            open_include_with_env(&req, std::slice::from_ref(&tmp.path), |_| None, |_| None)
-                .expect("resolve");
-        let m_path = std::fs::metadata(&opened.path).expect("stat path");
-        let m_file = opened.file.metadata().expect("stat file");
-        assert_eq!(m_path.dev(), m_file.dev());
-        assert_eq!(m_path.ino(), m_file.ino());
+        assert_eq!(path, expected);
     }
 }

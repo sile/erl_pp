@@ -1,14 +1,15 @@
 //! Integration tests for the public `open_include` resolver.
 //!
 //! `IncludeRequest` values are obtained through the real
-//! `Preprocessor` event loop rather than constructed by hand, so the
-//! integration test exercises the actual caller path.
+//! `Preprocessor` event loop rather than constructed by hand, so
+//! the integration test exercises the actual caller path.
 //!
-//! Environment-variable expansion goes through `std::env::var` inside
-//! `open_include`. Because `std::env::set_var` is `unsafe` in Rust
-//! 2024, `$VAR` behavior is covered by unit tests via the internal
-//! `open_include_with_env` closure form; this integration surface
-//! only walks paths that do not touch the process environment.
+//! Environment-variable expansion goes through `std::env::var`
+//! inside `open_include`. Because `std::env::set_var` is `unsafe`
+//! in Rust 2024, `$VAR` behavior is covered by unit tests via the
+//! internal `open_include_with_env` closure form; this integration
+//! surface only walks paths that do not touch the process
+//! environment.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -79,8 +80,8 @@ fn absolute_path_opens_directly() {
     let path_str = target.to_str().expect("utf8 path");
     let request = take_include_request(&format!(r#"-include("{path_str}")."#));
     assert_eq!(request.kind, IncludeKind::Include);
-    let opened = open_include(&request, &[], |_| None).expect("resolve");
-    assert_eq!(opened.path, target);
+    let path = open_include(&request, &[], &[]).expect("resolve");
+    assert_eq!(path, target);
 }
 
 #[test]
@@ -90,34 +91,44 @@ fn relative_path_walks_include_paths_in_order() {
     let target = tmp2.write("hdr.hrl", b"c");
     let request = take_include_request(r#"-include("hdr.hrl")."#);
     let include_paths = vec![tmp1.path.clone(), tmp2.path.clone()];
-    let opened = open_include(&request, &include_paths, |_| None).expect("resolve");
-    assert_eq!(opened.path, target);
+    let path = open_include(&request, &include_paths, &[]).expect("resolve");
+    assert_eq!(path, target);
 }
 
 #[test]
 fn missing_relative_include_returns_not_found() {
     let tmp = TempDir::new("nf");
     let request = take_include_request(r#"-include("missing.hrl")."#);
-    let err = open_include(&request, std::slice::from_ref(&tmp.path), |_| None).unwrap_err();
+    let err = open_include(&request, std::slice::from_ref(&tmp.path), &[])
+        .expect_err("missing include should not resolve");
     assert!(matches!(err, OpenIncludeError::NotFound), "got {err:?}");
 }
 
 #[test]
-fn include_lib_falls_back_to_app_lookup() {
-    let app_root = TempDir::new("lib-app");
-    let target = app_root.write("include/hdr.hrl", b"c");
+fn include_lib_falls_back_via_erl_libs() {
+    let lib = TempDir::new("lib-app");
+    let target = lib.write("myapp/include/hdr.hrl", b"c");
     let request = take_include_request(r#"-include_lib("myapp/include/hdr.hrl")."#);
     assert_eq!(request.kind, IncludeKind::IncludeLib);
-    let app_path = app_root.path.clone();
-    let app_lookup = move |name: &str| (name == "myapp").then(|| app_path.clone());
-    let opened = open_include(&request, &[], app_lookup).expect("resolve");
-    assert_eq!(opened.path, target);
+    let path = open_include(&request, &[], std::slice::from_ref(&lib.path)).expect("resolve");
+    assert_eq!(path, target);
+}
+
+#[test]
+fn include_lib_picks_highest_version_from_erl_libs() {
+    let lib = TempDir::new("lib-highver");
+    lib.write("myapp-1.0/include/hdr.hrl", b"old");
+    lib.write("myapp-1.10/include/hdr.hrl", b"middle-natural");
+    let target = lib.write("myapp-2.0/include/hdr.hrl", b"newest");
+    let request = take_include_request(r#"-include_lib("myapp/include/hdr.hrl")."#);
+    let path = open_include(&request, &[], std::slice::from_ref(&lib.path)).expect("resolve");
+    assert_eq!(path, target);
 }
 
 #[test]
 fn include_lib_unknown_app_returns_app_not_found() {
     let request = take_include_request(r#"-include_lib("unknown_app/include/hdr.hrl")."#);
-    let err = open_include(&request, &[], |_| None).unwrap_err();
+    let err = open_include(&request, &[], &[]).expect_err("unknown app should not resolve");
     match err {
         OpenIncludeError::AppNotFound { app } => assert_eq!(app, "unknown_app"),
         other => panic!("expected AppNotFound, got {other:?}"),
