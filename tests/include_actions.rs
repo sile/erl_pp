@@ -252,28 +252,28 @@ a_after."#,
 // ---------------------------------------------------------------------
 // 9. Protocol error: resume_include in Status::Scanning.
 #[test]
-fn resume_include_in_scanning_is_unexpected_response() {
+fn resume_include_in_scanning_is_protocol_error() {
     let mut pp = make("just_a_token.");
     let err = pp
         .resume_include(build_source("x.hrl", "x."))
         .expect_err("resume_include in Scanning should fail");
-    assert!(matches!(err, ProtocolError::UnexpectedResponse));
-    // State was not consumed — still Scanning.
+    assert_eq!(err, ProtocolError);
+    // Caller checks the exact case via status() — still Scanning here.
     assert!(matches!(pp.status(), Status::Scanning));
 }
 
 // ---------------------------------------------------------------------
 // 10. Protocol error: resume_include while awaiting a macro expansion.
 #[test]
-fn resume_include_while_awaiting_macro_is_wrong_response_kind() {
+fn resume_include_while_awaiting_macro_is_protocol_error() {
     let mut pp = make("?UNKNOWN.");
     let event = step(&mut pp);
     assert!(matches!(event, Event::AwaitingMacroExpansion(_)));
     let err = pp
         .resume_include(build_source("x.hrl", "x."))
         .expect_err("resume_include while awaiting macro should fail");
-    assert!(matches!(err, ProtocolError::WrongResponseKind));
-    // Macro pending state was not consumed.
+    assert_eq!(err, ProtocolError);
+    // Macro pending state was not consumed — caller sees this via status().
     assert!(matches!(pp.status(), Status::AwaitingMacroExpansion));
 }
 

@@ -279,14 +279,15 @@ impl Preprocessor {
 
     /// Advances the state machine and returns one [`Event`].
     ///
-    /// Returns `Err(ProtocolError::StepWhilePending)` when the
-    /// machine is awaiting a response; the caller must respond before
-    /// calling this method again.
+    /// Returns `Err(ProtocolError)` when the machine is awaiting a
+    /// response; the caller must respond before calling this method
+    /// again. Inspect [`Preprocessor::status`] to see which response
+    /// is expected.
     pub fn step(&mut self) -> Result<Event, ProtocolError> {
         match &self.state {
             State::AwaitingIncludeResolution(_)
             | State::AwaitingConditionalDecision
-            | State::AwaitingMacroExpansion(_) => Err(ProtocolError::StepWhilePending),
+            | State::AwaitingMacroExpansion(_) => Err(ProtocolError),
             State::Completed => Ok(Event::Complete),
             State::Scanning => Ok(self.step_scan()),
         }
@@ -301,20 +302,17 @@ impl Preprocessor {
     /// tokens; the caller is responsible for surfacing any error
     /// diagnostic in its own error stream.
     ///
-    /// Returns:
-    /// * [`ProtocolError::UnexpectedResponse`] when the machine is
-    ///   scanning or completed (no macro expansion is pending);
-    /// * [`ProtocolError::WrongResponseKind`] when the machine is
-    ///   awaiting a different response (include, conditional).
+    /// Returns `Err(ProtocolError)` when no macro-expansion response
+    /// is expected (the machine is scanning, completed, or awaiting a
+    /// different response). Inspect [`Preprocessor::status`] to
+    /// distinguish the exact case.
     pub fn resume_macro_expansion(&mut self, source: Source) -> Result<(), ProtocolError> {
         match &self.state {
             State::AwaitingMacroExpansion(_) => {}
-            State::AwaitingIncludeResolution(_) | State::AwaitingConditionalDecision => {
-                return Err(ProtocolError::WrongResponseKind);
-            }
-            State::Scanning | State::Completed => {
-                return Err(ProtocolError::UnexpectedResponse);
-            }
+            State::AwaitingIncludeResolution(_)
+            | State::AwaitingConditionalDecision
+            | State::Scanning
+            | State::Completed => return Err(ProtocolError),
         }
         let State::AwaitingMacroExpansion(pending) =
             std::mem::replace(&mut self.state, State::Scanning)
@@ -351,20 +349,17 @@ impl Preprocessor {
     /// caller is responsible for surfacing any diagnostic in its own
     /// error stream.
     ///
-    /// Returns:
-    /// * [`ProtocolError::UnexpectedResponse`] when the machine is
-    ///   scanning or completed (no include is pending);
-    /// * [`ProtocolError::WrongResponseKind`] when the machine is
-    ///   awaiting a different response (macro expansion, conditional).
+    /// Returns `Err(ProtocolError)` when no include response is
+    /// expected (the machine is scanning, completed, or awaiting a
+    /// different response). Inspect [`Preprocessor::status`] to
+    /// distinguish the exact case.
     pub fn resume_include(&mut self, source: Source) -> Result<(), ProtocolError> {
         match &self.state {
             State::AwaitingIncludeResolution(_) => {}
-            State::AwaitingMacroExpansion(_) | State::AwaitingConditionalDecision => {
-                return Err(ProtocolError::WrongResponseKind);
-            }
-            State::Scanning | State::Completed => {
-                return Err(ProtocolError::UnexpectedResponse);
-            }
+            State::AwaitingMacroExpansion(_)
+            | State::AwaitingConditionalDecision
+            | State::Scanning
+            | State::Completed => return Err(ProtocolError),
         }
         let State::AwaitingIncludeResolution(pending) =
             std::mem::replace(&mut self.state, State::Scanning)
@@ -1754,7 +1749,7 @@ mod tests {
         assert_eq!(
             pp.resume_macro_expansion(response)
                 .expect_err("protocol error expected"),
-            ProtocolError::UnexpectedResponse
+            ProtocolError
         );
     }
 
@@ -1767,7 +1762,7 @@ mod tests {
         assert_eq!(
             pp.resume_macro_expansion(response)
                 .expect_err("protocol error expected"),
-            ProtocolError::UnexpectedResponse
+            ProtocolError
         );
     }
 
@@ -1872,7 +1867,7 @@ mod tests {
         pp.step().expect("first step yields Awaiting event");
         assert_eq!(
             pp.step().expect_err("second step is a protocol error"),
-            ProtocolError::StepWhilePending
+            ProtocolError
         );
     }
 

@@ -186,17 +186,27 @@ impl From<ParseError> for PreprocessError {
     }
 }
 
-/// Caller-driven-mistake error returned from response methods and from
-/// `step` when the caller uses the state machine's protocol
+/// Caller-driven-mistake error returned from response methods and
+/// from `step` when the caller uses the state machine's protocol
 /// incorrectly.
+///
+/// The value has no variants because every protocol violation is
+/// caller-observable through [`crate::Preprocessor::status`] instead:
+/// each method's error space is disjoint (`step` only fails when a
+/// response is pending; `resume_*` only fails when no response — or
+/// the wrong one — is expected), and asking `status()` tells the
+/// caller exactly which case it is. Distinguishing them in the
+/// error type would duplicate what `status()` already exposes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProtocolError {
-    /// A response method was called while the machine was not
-    /// awaiting any response.
-    UnexpectedResponse,
-    /// A response method was called that does not match what the
-    /// machine is awaiting.
-    WrongResponseKind,
-    /// `step` was called while the machine is awaiting a response.
-    StepWhilePending,
+pub struct ProtocolError;
+
+impl std::fmt::Display for ProtocolError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(
+            "preprocessor protocol violation; \
+             check Preprocessor::status() for the awaited state",
+        )
+    }
 }
+
+impl std::error::Error for ProtocolError {}
