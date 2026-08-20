@@ -7,6 +7,7 @@
 
 use std::sync::Arc;
 
+use crate::event::IncludeKind;
 use crate::source::SourceSpan;
 use crate::source_string::SourceString;
 
@@ -45,7 +46,17 @@ pub enum Origin {
     ///
     /// The parent points at the origin of the `-include` /
     /// `-include_lib` directive that pulled the source in.
-    Include(Arc<Origin>),
+    Include {
+        /// Parent origin (the origin at the include directive's
+        /// call site).
+        parent: Arc<Origin>,
+        /// Span of the whole `-include` / `-include_lib` directive at
+        /// the site that pulled the source in.
+        include_site: SourceSpan,
+        /// Whether the source was pulled in with `-include` or
+        /// `-include_lib`.
+        kind: IncludeKind,
+    },
 
     /// Token was copied from the replacement body of a user-defined
     /// macro.
@@ -148,7 +159,7 @@ mod tests {
         // coverage.
         match o {
             Origin::Source => "source",
-            Origin::Include(_) => "include",
+            Origin::Include { .. } => "include",
             Origin::MacroBody { .. } => "macro_body",
             Origin::MacroArgument { .. } => "macro_argument",
             Origin::Stringification { .. } => "stringification",
@@ -167,7 +178,11 @@ mod tests {
         let param = dummy_source_string();
         let all = [
             Origin::Source,
-            Origin::Include(dummy_parent()),
+            Origin::Include {
+                parent: dummy_parent(),
+                include_site: span,
+                kind: IncludeKind::Include,
+            },
             Origin::MacroBody {
                 parent: dummy_parent(),
                 call_site: span,
@@ -239,7 +254,11 @@ mod tests {
     fn nested_chain_survives_cloning() {
         let span = dummy_span();
         let root = Arc::new(Origin::Source);
-        let mid = Arc::new(Origin::Include(Arc::clone(&root)));
+        let mid = Arc::new(Origin::Include {
+            parent: Arc::clone(&root),
+            include_site: span,
+            kind: IncludeKind::Include,
+        });
         let leaf = Origin::MacroBody {
             parent: Arc::clone(&mid),
             call_site: span,
@@ -253,7 +272,11 @@ mod tests {
         else {
             panic!("expected MacroBody");
         };
-        let Origin::Include(cloned_root) = cloned_mid.as_ref() else {
+        let Origin::Include {
+            parent: cloned_root,
+            ..
+        } = cloned_mid.as_ref()
+        else {
             panic!("expected Include as parent");
         };
         assert!(Arc::ptr_eq(cloned_root, &root));

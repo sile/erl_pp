@@ -7,8 +7,11 @@
 //! [`crate::Preprocessor::status`] reports which response (if any) the
 //! machine is currently awaiting.
 
+use std::sync::Arc;
+
 use crate::directive::Directive;
 use crate::error::PreprocessError;
+use crate::origin::Origin;
 use crate::preprocessed_token::PreprocessedToken;
 use crate::source::SourceSpan;
 use crate::source_string::SourceString;
@@ -94,12 +97,41 @@ pub enum Event {
     Complete,
 }
 
+/// Distinguishes `-include` from `-include_lib` in an
+/// [`IncludeRequest`] and in [`Origin::Include`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum IncludeKind {
+    /// `-include("path").`
+    Include,
+    /// `-include_lib("app/include/hdr.hrl").`
+    IncludeLib,
+}
+
 /// Data of an [`Event::AwaitingInclude`].
 ///
-/// Payload details (directive kind, decoded path, span, origin, etc.)
-/// are filled in by later work on include resolution.
+/// Describes the include the caller must resolve. The preprocessor
+/// does no path lookup, no environment expansion, and no filesystem
+/// access — the caller uses `path`, `kind`, and (via `SourceStore`)
+/// the source referenced by `directive_span.source_id` to resolve the
+/// include, then hands the resulting [`crate::Source`] back through
+/// [`crate::Preprocessor::resume_include`].
 #[derive(Debug, Clone)]
-pub struct IncludeRequest {}
+pub struct IncludeRequest {
+    /// Whether this is `-include` or `-include_lib`.
+    pub kind: IncludeKind,
+    /// Decoded, concatenated contents of the include's string
+    /// literals (matches `IncludeDirective::path` /
+    /// `IncludeLibDirective::path`).
+    pub path: SourceString,
+    /// Span of the whole directive from the leading `-` through the
+    /// terminating `.`. The include's parent source is
+    /// `directive_span.source_id`.
+    pub directive_span: SourceSpan,
+    /// Origin of the directive itself. Becomes the `parent` of the
+    /// [`Origin::Include`] attached to every token emitted from the
+    /// resolved source.
+    pub parent_origin: Arc<Origin>,
+}
 
 /// Data of an [`Event::AwaitingConditional`].
 ///
