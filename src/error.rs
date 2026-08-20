@@ -98,6 +98,31 @@ pub enum PreprocessError {
         /// What made the call invalid.
         kind: MacroCallErrorKind,
     },
+    /// A conditional directive (`-ifdef` / `-ifndef` / `-else` /
+    /// `-endif`) is used incorrectly (stray boundary, double `-else`,
+    /// unclosed conditional at EOF).
+    Conditional {
+        /// Span of the offending directive (or of the opening
+        /// directive when the error is `UnclosedConditional`).
+        span: SourceSpan,
+        /// What made the conditional structure invalid.
+        kind: ConditionalErrorKind,
+    },
+}
+
+/// Reasons a conditional-directive structure is rejected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ConditionalErrorKind {
+    /// `-else` appeared without a matching opening `-ifdef` /
+    /// `-ifndef`.
+    StrayElse,
+    /// `-endif` appeared without a matching opening `-ifdef` /
+    /// `-ifndef`.
+    StrayEndif,
+    /// A second `-else` appeared inside the same conditional.
+    DoubleElse,
+    /// The source ended while a conditional was still open.
+    UnclosedConditional,
 }
 
 /// Reasons a `-define(...)` directive is rejected by the macro table.

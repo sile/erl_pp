@@ -21,12 +21,12 @@ pub use crate::directive::{
     WarningDirective,
 };
 pub use crate::error::{
-    MacroCallErrorKind, MacroDefinitionErrorKind, PreprocessError, PreprocessParseFailure,
-    ProtocolError,
+    ConditionalErrorKind, MacroCallErrorKind, MacroDefinitionErrorKind, PreprocessError,
+    PreprocessParseFailure, ProtocolError,
 };
 pub use crate::event::{
-    BranchBoundary, ConditionalRequest, Diagnostic, Event, IncludeKind, IncludeRequest,
-    MacroExpansionRequest,
+    Branch, BranchBoundary, BranchBoundaryKind, ConditionalKind, ConditionalRequest, Diagnostic,
+    Event, IncludeKind, IncludeRequest, MacroExpansionRequest,
 };
 pub use crate::macros::{MacroDefinition, MacroKey, MacroTable};
 pub use crate::origin::{Origin, SourceInfoMacroKind};

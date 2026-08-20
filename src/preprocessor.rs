@@ -35,8 +35,11 @@ use erl_tokenize::{Keyword, Position, Symbol, Token, TokenKind, TokenValue};
 
 use crate::cursor::Cursor;
 use crate::directive::{Directive, parse_directive};
-use crate::error::{MacroCallErrorKind, PreprocessError, ProtocolError};
-use crate::event::{Event, IncludeKind, MacroExpansionRequest};
+use crate::error::{ConditionalErrorKind, MacroCallErrorKind, PreprocessError, ProtocolError};
+use crate::event::{
+    Branch, BranchBoundary, BranchBoundaryKind, ConditionalKind, ConditionalRequest, Event,
+    IncludeKind, MacroExpansionRequest,
+};
 use crate::macros::{MacroDefinition, MacroKey, MacroTable};
 use crate::origin::{Origin, SourceInfoMacroKind};
 use crate::preprocessed_token::PreprocessedToken;
@@ -76,6 +79,12 @@ pub struct Preprocessor {
     /// Parent (cursor, current_origin) pairs saved when an include is
     /// pushed; restored in the same order on include EOF.
     include_stack: Vec<(Cursor, Arc<Origin>)>,
+    /// Currently open conditional frames. Pushed on
+    /// `-ifdef` / `-ifndef` (via [`Preprocessor::resume_conditional`]),
+    /// flipped on `-else`, popped on `-endif`. The top of the stack
+    /// determines whether the current scan is active or an inactive
+    /// skip.
+    branch_stack: Vec<BranchFrame>,
     /// Macro table updated on `-define` / `-undef`.
     macros: MacroTable,
     /// State-machine state.
@@ -107,9 +116,11 @@ enum State {
     /// payload retains what the resume path needs to build the new
     /// `Origin::Include` when a `Source` is supplied.
     AwaitingIncludeResolution(PendingInclude),
-    /// Placeholder for future conditional response handling.
-    #[expect(dead_code, reason = "constructed by later conditional work")]
-    AwaitingConditionalDecision,
+    /// The scan loop emitted [`Event::AwaitingConditional`] and is
+    /// waiting for a [`Preprocessor::resume_conditional`] call. The
+    /// payload retains what the resume path needs to push a matching
+    /// `BranchFrame` onto the branch stack.
+    AwaitingConditionalDecision(PendingConditional),
     /// The scan loop emitted [`Event::AwaitingMacroExpansion`] and is
     /// waiting for a [`Preprocessor::resume_macro_expansion`] call.
     /// The payload retains what the resume path needs to attach the
@@ -133,6 +144,38 @@ struct PendingInclude {
     /// Whether the directive was `-include` or `-include_lib`;
     /// becomes the `kind` of the new `Origin::Include`.
     kind: IncludeKind,
+}
+
+/// Bookkeeping saved while an [`Event::AwaitingConditional`] is
+/// pending. Kept minimal: the caller already has the full request
+/// payload, and the only field the resume path needs to carry over
+/// to the `BranchFrame` is the opening directive's span (used by
+/// `UnclosedConditional` diagnostics at EOF).
+#[derive(Debug, Clone)]
+struct PendingConditional {
+    directive_span: SourceSpan,
+}
+
+/// A conditional currently open on the branch stack. Pushed when a
+/// `-ifdef` / `-ifndef` is resolved; the `active` flag flips on
+/// `-else`; the frame is popped on `-endif`.
+#[derive(Debug, Clone)]
+struct BranchFrame {
+    /// Whether the current side of the frame is being executed
+    /// (`true`) or skipped (`false`). Flips on `-else`.
+    active: bool,
+    /// `true` once `-else` has been observed for this frame.
+    else_seen: bool,
+    /// `true` when the frame was pushed while an outer frame was
+    /// already inactive. Silent frames do not fire
+    /// `Event::BranchBoundary` on `-else` / `-endif`, matching the
+    /// polished contract that nested conditionals inside an
+    /// inactive skip stay invisible to the caller.
+    silent_close: bool,
+    /// Span of the opening `-ifdef` / `-ifndef`. Reported by
+    /// `UnclosedConditional` when the source ends with the frame
+    /// still on the stack.
+    open_span: SourceSpan,
 }
 
 /// Bookkeeping saved while an [`Event::AwaitingMacroExpansion`] is
@@ -189,6 +232,7 @@ impl Preprocessor {
             cursor,
             current_origin: Arc::new(Origin::Source),
             include_stack: Vec::new(),
+            branch_stack: Vec::new(),
             macros: MacroTable::new(),
             state: State::Scanning,
             at_form_boundary: true,
@@ -271,7 +315,7 @@ impl Preprocessor {
         match &self.state {
             State::Scanning => Status::Scanning,
             State::AwaitingIncludeResolution(_) => Status::AwaitingIncludeResolution,
-            State::AwaitingConditionalDecision => Status::AwaitingConditionalDecision,
+            State::AwaitingConditionalDecision(_) => Status::AwaitingConditionalDecision,
             State::AwaitingMacroExpansion(_) => Status::AwaitingMacroExpansion,
             State::Completed => Status::Completed,
         }
@@ -286,7 +330,7 @@ impl Preprocessor {
     pub fn step(&mut self) -> Result<Event, ProtocolError> {
         match &self.state {
             State::AwaitingIncludeResolution(_)
-            | State::AwaitingConditionalDecision
+            | State::AwaitingConditionalDecision(_)
             | State::AwaitingMacroExpansion(_) => Err(ProtocolError),
             State::Completed => Ok(Event::Complete),
             State::Scanning => Ok(self.step_scan()),
@@ -310,7 +354,7 @@ impl Preprocessor {
         match &self.state {
             State::AwaitingMacroExpansion(_) => {}
             State::AwaitingIncludeResolution(_)
-            | State::AwaitingConditionalDecision
+            | State::AwaitingConditionalDecision(_)
             | State::Scanning
             | State::Completed => return Err(ProtocolError),
         }
@@ -357,7 +401,7 @@ impl Preprocessor {
         match &self.state {
             State::AwaitingIncludeResolution(_) => {}
             State::AwaitingMacroExpansion(_)
-            | State::AwaitingConditionalDecision
+            | State::AwaitingConditionalDecision(_)
             | State::Scanning
             | State::Completed => return Err(ProtocolError),
         }
@@ -383,6 +427,49 @@ impl Preprocessor {
         self.include_stack.push((parent_cursor, parent_origin));
         // Fresh source starts at a form boundary.
         self.at_form_boundary = true;
+        Ok(())
+    }
+
+    /// Resumes the scan loop after an [`Event::AwaitingConditional`]
+    /// event.
+    ///
+    /// `branch` is the side of the conditional the caller wants to
+    /// scan (`Branch::Then` for tokens up to `-else`, `Branch::Else`
+    /// for tokens after `-else`). Both sides may be processed by
+    /// [`Preprocessor::clone`]-ing the machine at the awaiting event
+    /// and calling this method on the two clones with different
+    /// arguments.
+    ///
+    /// Returns `Err(ProtocolError)` when no conditional response is
+    /// expected (the machine is scanning, completed, or awaiting a
+    /// different response). Inspect [`Preprocessor::status`] to
+    /// distinguish the exact case.
+    pub fn resume_conditional(&mut self, branch: Branch) -> Result<(), ProtocolError> {
+        match &self.state {
+            State::AwaitingConditionalDecision(_) => {}
+            State::AwaitingIncludeResolution(_)
+            | State::AwaitingMacroExpansion(_)
+            | State::Scanning
+            | State::Completed => return Err(ProtocolError),
+        }
+        let State::AwaitingConditionalDecision(pending) =
+            std::mem::replace(&mut self.state, State::Scanning)
+        else {
+            unreachable!("state was checked immediately above");
+        };
+        // The scan always starts on the Then side (source order).
+        // Then chose → active; Else chose → inactive until the frame
+        // flips at `-else` (or stays inactive to the closing endif
+        // when the conditional has no `-else`).
+        let active = matches!(branch, Branch::Then);
+        // AwaitingConditional only fires from an active state, so
+        // this frame is never nested inside an inactive one.
+        self.branch_stack.push(BranchFrame {
+            active,
+            else_seen: false,
+            silent_close: false,
+            open_span: pending.directive_span,
+        });
         Ok(())
     }
 
@@ -413,6 +500,11 @@ impl Preprocessor {
     /// Makes a macro that appeared in an earlier expansion body
     /// expand itself before its tokens surface as regular output.
     fn try_rescan_queue_head(&mut self) -> StepAction {
+        // Do not recognize macros while skipping an inactive branch;
+        // the drain path will silently discard the queued tokens.
+        if self.is_in_inactive_branch() {
+            return StepAction::Fall;
+        }
         let head_is_question = matches!(
             self.expansion_queue.front(),
             Some(ppt) if is_symbol(*ppt.token(), Symbol::Question)
@@ -436,6 +528,10 @@ impl Preprocessor {
         };
         let token = *ppt.token();
         self.update_form_boundary_after_bump(token);
+        if self.is_in_inactive_branch() {
+            // Silently discard queued tokens while skipping.
+            return StepAction::Retry;
+        }
         StepAction::Emit(Box::new(Event::Token(ppt)))
     }
 
@@ -451,6 +547,20 @@ impl Preprocessor {
             // form boundary.
             self.at_form_boundary = true;
             return StepAction::Retry;
+        }
+        // Top-level EOF: an open conditional is a syntax error.
+        // Report the opening directive's span for the outermost
+        // still-open frame and clear the stack so the error does
+        // not fire twice.
+        if let Some(frame) = self.branch_stack.first() {
+            let open_span = frame.open_span;
+            self.branch_stack.clear();
+            return StepAction::Emit(Box::new(Event::PreprocessError(
+                PreprocessError::Conditional {
+                    span: open_span,
+                    kind: ConditionalErrorKind::UnclosedConditional,
+                },
+            )));
         }
         self.state = State::Completed;
         StepAction::Emit(Box::new(Event::Complete))
@@ -474,15 +584,68 @@ impl Preprocessor {
             }
             Err(pe) => {
                 self.at_form_boundary = false;
+                if self.is_in_inactive_branch() {
+                    // Skipping: swallow the parse error silently
+                    // rather than surface diagnostics in code the
+                    // caller chose not to compile.
+                    return StepAction::Retry;
+                }
                 StepAction::Emit(Box::new(Event::PreprocessError(pe.into())))
             }
         }
+    }
+
+    /// `true` when scanning should be silently skipping tokens
+    /// because at least one open conditional frame is on the
+    /// inactive side.
+    fn is_in_inactive_branch(&self) -> bool {
+        self.branch_stack.iter().any(|f| !f.active)
     }
 
     fn dispatch_directive(&mut self, directive: Directive) -> StepAction {
         // The parser consumed the whole directive including the
         // terminating `.`, so we are at a new form boundary.
         self.at_form_boundary = true;
+        let inactive = self.is_in_inactive_branch();
+        // Conditional directives must be tracked in both branches
+        // so `-else` / `-endif` line up correctly.
+        match directive {
+            Directive::Ifdef(d) => {
+                if inactive {
+                    self.push_nested_inactive_frame(d.span);
+                    return StepAction::Retry;
+                }
+                return StepAction::Emit(Box::new(self.fire_awaiting_conditional(
+                    ConditionalKind::Ifdef,
+                    d.name.clone(),
+                    d.span,
+                )));
+            }
+            Directive::Ifndef(d) => {
+                if inactive {
+                    self.push_nested_inactive_frame(d.span);
+                    return StepAction::Retry;
+                }
+                return StepAction::Emit(Box::new(self.fire_awaiting_conditional(
+                    ConditionalKind::Ifndef,
+                    d.name.clone(),
+                    d.span,
+                )));
+            }
+            Directive::Else(d) => {
+                return self.dispatch_else(d.span);
+            }
+            Directive::Endif(d) => {
+                return self.dispatch_endif(d.span);
+            }
+            _ => {}
+        }
+        // Non-conditional directive inside an inactive branch: no
+        // event, no macro-table effect. The parser already advanced
+        // the cursor past it.
+        if inactive {
+            return StepAction::Retry;
+        }
         // `-include` / `-include_lib` are folded into
         // Event::AwaitingInclude — we do not emit an Event::Directive
         // for them, matching how Event::AwaitingMacroExpansion
@@ -513,6 +676,20 @@ impl Preprocessor {
         StepAction::Emit(Box::new(Event::Directive(directive)))
     }
 
+    /// Pushes a `BranchFrame` for a nested `-ifdef` / `-ifndef`
+    /// encountered while an outer frame is already inactive. The
+    /// frame is marked `silent_close` so its `-else` / `-endif` do
+    /// not fire boundary events and its `active` starts `false`
+    /// (nested content is always skipped alongside the outer skip).
+    fn push_nested_inactive_frame(&mut self, open_span: SourceSpan) {
+        self.branch_stack.push(BranchFrame {
+            active: false,
+            else_seen: false,
+            silent_close: true,
+            open_span,
+        });
+    }
+
     fn fire_awaiting_include(
         &mut self,
         kind: IncludeKind,
@@ -534,7 +711,99 @@ impl Preprocessor {
         Event::AwaitingInclude(request)
     }
 
+    /// Handles a `-else` directive: flips the top branch frame's
+    /// active side, records the else, and fires
+    /// `Event::BranchBoundary(Else)` unless the frame is a silent
+    /// nested one. Stray `-else` (no matching opening directive) and
+    /// double `-else` inside the same conditional surface as
+    /// `PreprocessError::Conditional`.
+    fn dispatch_else(&mut self, span: SourceSpan) -> StepAction {
+        let Some(frame) = self.branch_stack.last_mut() else {
+            return StepAction::Emit(Box::new(Event::PreprocessError(
+                PreprocessError::Conditional {
+                    span,
+                    kind: ConditionalErrorKind::StrayElse,
+                },
+            )));
+        };
+        if frame.else_seen {
+            return StepAction::Emit(Box::new(Event::PreprocessError(
+                PreprocessError::Conditional {
+                    span,
+                    kind: ConditionalErrorKind::DoubleElse,
+                },
+            )));
+        }
+        frame.else_seen = true;
+        frame.active = !frame.active;
+        let silent = frame.silent_close;
+        if silent {
+            StepAction::Retry
+        } else {
+            StepAction::Emit(Box::new(
+                self.fire_branch_boundary(BranchBoundaryKind::Else, span),
+            ))
+        }
+    }
+
+    /// Handles a `-endif` directive: pops the top branch frame and
+    /// fires `Event::BranchBoundary(Endif)` unless the popped frame
+    /// was a silent nested one. Stray `-endif` (no matching opening
+    /// directive) surfaces as `PreprocessError::Conditional`.
+    fn dispatch_endif(&mut self, span: SourceSpan) -> StepAction {
+        let Some(frame) = self.branch_stack.pop() else {
+            return StepAction::Emit(Box::new(Event::PreprocessError(
+                PreprocessError::Conditional {
+                    span,
+                    kind: ConditionalErrorKind::StrayEndif,
+                },
+            )));
+        };
+        if frame.silent_close {
+            StepAction::Retry
+        } else {
+            StepAction::Emit(Box::new(
+                self.fire_branch_boundary(BranchBoundaryKind::Endif, span),
+            ))
+        }
+    }
+
+    fn fire_branch_boundary(&self, kind: BranchBoundaryKind, directive_span: SourceSpan) -> Event {
+        Event::BranchBoundary(BranchBoundary {
+            kind,
+            directive_span,
+            parent_origin: Arc::clone(&self.current_origin),
+        })
+    }
+
+    fn fire_awaiting_conditional(
+        &mut self,
+        kind: ConditionalKind,
+        name: SourceString,
+        directive_span: SourceSpan,
+    ) -> Event {
+        let parent_origin = Arc::clone(&self.current_origin);
+        let defined = self.macros.is_defined(name.as_str());
+        let recommended = recommended_branch(kind, defined);
+        let request = ConditionalRequest {
+            kind,
+            name: name.clone(),
+            defined,
+            recommended,
+            directive_span,
+            parent_origin: Arc::clone(&parent_origin),
+        };
+        self.state = State::AwaitingConditionalDecision(PendingConditional { directive_span });
+        Event::AwaitingConditional(request)
+    }
+
     fn try_scan_macro_call(&mut self) -> StepAction {
+        // Skipping: don't try to recognize any macro call. The `?`
+        // and its following tokens will be silently consumed by the
+        // bump path.
+        if self.is_in_inactive_branch() {
+            return StepAction::Fall;
+        }
         let peek_is_question = matches!(
             self.cursor.peek(),
             Some(t) if is_symbol(t, Symbol::Question)
@@ -557,6 +826,10 @@ impl Preprocessor {
             return StepAction::Retry;
         };
         self.update_form_boundary_after_bump(token);
+        if self.is_in_inactive_branch() {
+            // Silently consume tokens while skipping.
+            return StepAction::Retry;
+        }
         let ppt = PreprocessedToken::new(
             token,
             Arc::clone(self.cursor.source()),
@@ -1055,6 +1328,7 @@ impl Clone for Preprocessor {
             cursor: self.cursor.clone(),
             current_origin: Arc::clone(&self.current_origin),
             include_stack: self.include_stack.clone(),
+            branch_stack: self.branch_stack.clone(),
             macros: self.macros.clone(),
             state: self.state.clone(),
             at_form_boundary: self.at_form_boundary,
@@ -1098,6 +1372,15 @@ enum MacroCallOutcome {
     /// has been restored so the caller can proceed with the normal
     /// bump path.
     NotACall,
+}
+
+/// Which side of a conditional OTP `epp` would pick given the
+/// directive kind and whether the target macro is currently defined.
+fn recommended_branch(kind: ConditionalKind, defined: bool) -> Branch {
+    match (kind, defined) {
+        (ConditionalKind::Ifdef, true) | (ConditionalKind::Ifndef, false) => Branch::Then,
+        (ConditionalKind::Ifdef, false) | (ConditionalKind::Ifndef, true) => Branch::Else,
+    }
 }
 
 fn is_symbol(token: Token, sym: Symbol) -> bool {
@@ -2044,9 +2327,9 @@ mod tests {
 
     #[test]
     fn recognised_directive_becomes_event() {
-        let mut pp = make("-endif.");
+        let mut pp = make("-undef(foo).");
         let first = pp.step().expect("no protocol error");
-        assert!(matches!(first, Event::Directive(Directive::Endif(_))));
+        assert!(matches!(first, Event::Directive(Directive::Undef(_))));
         // Directive tokens are consumed by the parser, not streamed.
         let complete = pp.step().expect("no protocol error");
         assert!(matches!(complete, Event::Complete));
@@ -2054,12 +2337,12 @@ mod tests {
 
     #[test]
     fn mixed_forms_stream_correctly() {
-        let mut pp = make("foo.-endif.bar.");
+        let mut pp = make("foo.-undef(foo).bar.");
         let mut description = Vec::new();
         loop {
             match pp.step().expect("no protocol error") {
                 Event::Token(ppt) => description.push(format!("token:{}", ppt.text())),
-                Event::Directive(Directive::Endif(_)) => description.push("directive:endif".into()),
+                Event::Directive(Directive::Undef(_)) => description.push("directive:undef".into()),
                 Event::Complete => {
                     description.push("complete".into());
                     break;
@@ -2069,7 +2352,7 @@ mod tests {
         }
         assert!(description.iter().any(|s| s == "token:foo"));
         assert!(description.iter().any(|s| s == "token:bar"));
-        assert!(description.iter().any(|s| s == "directive:endif"));
+        assert!(description.iter().any(|s| s == "directive:undef"));
         assert!(description.last().expect("at least one description") == "complete");
     }
 
