@@ -198,7 +198,7 @@ struct PendingExpansion {
 /// Returned by [`Preprocessor::status`]. Payload for awaiting variants
 /// is deliberately empty: the payload of the last event already
 /// carries the information the caller needs to respond.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
     /// The machine is ready to advance; call
     /// [`Preprocessor::step`] for the next event.
