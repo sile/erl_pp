@@ -61,6 +61,7 @@ pub use crate::event::{
     Branch, BranchBoundary, BranchBoundaryKind, ConditionalKind, ConditionalRequest, Diagnostic,
     Event, IncludeKind, IncludeRequest, MacroExpansionRequest, Severity,
 };
+pub use crate::include_path::{OpenIncludeError, open_include};
 pub use crate::macros::{MacroDefinition, MacroKey, MacroTable};
 pub use crate::origin::{Origin, SourceInfoMacroKind};
 pub use crate::preprocessed_token::PreprocessedToken;
@@ -74,6 +75,7 @@ mod cursor;
 mod directive;
 mod error;
 mod event;
+mod include_path;
 mod macros;
 mod origin;
 mod preprocessed_token;
