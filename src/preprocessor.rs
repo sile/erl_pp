@@ -1262,10 +1262,16 @@ fn parse_macro_arguments(
                     let close_end = token.end();
                     cursor.bump();
                     stack.clear();
-                    if before_first_content {
+                    if before_first_content && current.is_empty() {
                         // `?NAME()` — arity 0.
                     } else if !current_has_lexical {
-                        return Err(MacroCallErrorKind::TrailingEmptyArgument);
+                        if before_first_content {
+                            // `?NAME(  )` — arity 1, hidden-only
+                            // argument (valid, semantically empty).
+                            arguments.push(current);
+                        } else {
+                            return Err(MacroCallErrorKind::TrailingEmptyArgument);
+                        }
                     } else {
                         arguments.push(current);
                     }
