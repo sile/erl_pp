@@ -21,15 +21,20 @@ pub use crate::directive::{
     WarningDirective,
 };
 pub use crate::error::{
-    MacroDefinitionErrorKind, PreprocessError, PreprocessParseFailure, ProtocolError,
+    MacroCallErrorKind, MacroDefinitionErrorKind, PreprocessError, PreprocessParseFailure,
+    ProtocolError,
 };
-pub use crate::event::{BranchBoundary, ConditionalRequest, Diagnostic, Event, IncludeRequest};
+pub use crate::event::{
+    BranchBoundary, ConditionalRequest, Diagnostic, Event, IncludeRequest, MacroExpansionRequest,
+};
 pub use crate::macros::{MacroDefinition, MacroKey, MacroTable};
-pub use crate::origin::Origin;
+pub use crate::origin::{Origin, SourceInfoMacroKind};
 pub use crate::preprocessed_token::PreprocessedToken;
 pub use crate::preprocessor::{Preprocessor, Status};
 pub use crate::source::{Source, SourceId, SourceSpan, SourceStore};
 pub use crate::source_string::SourceString;
+
+pub mod docs;
 
 mod cursor;
 mod directive;
