@@ -10,6 +10,8 @@
 use crate::directive::Directive;
 use crate::error::PreprocessError;
 use crate::preprocessed_token::PreprocessedToken;
+use crate::source::SourceSpan;
+use crate::source_string::SourceString;
 
 /// One-shot output of [`crate::Preprocessor::step`].
 ///
@@ -58,6 +60,17 @@ pub enum Event {
     /// Payload struct name is preserved for now; details are filled
     /// in by later work on conditional branching.
     AwaitingConditional(ConditionalRequest),
+
+    /// The preprocessor is awaiting a caller-driven macro expansion.
+    ///
+    /// Fires for every `?NAME` (or `?NAME(...)`) that is neither
+    /// `?FILE` / `?LINE` nor present in the current macro table. The
+    /// caller inspects the request and responds via
+    /// [`crate::Preprocessor::resume_macro_expansion`] with a
+    /// [`crate::Source`] whose token stream is spliced in as the
+    /// expansion result. An empty [`crate::Source`] effectively
+    /// skips the call.
+    AwaitingMacroExpansion(MacroExpansionRequest),
 
     /// The preprocessor is crossing a conditional branch boundary
     /// (`-else` / `-endif`).
@@ -108,3 +121,28 @@ pub struct BranchBoundary {}
 /// directives.
 #[derive(Debug, Clone)]
 pub struct Diagnostic {}
+
+/// Data of an [`Event::AwaitingMacroExpansion`].
+///
+/// Describes the macro call the caller must resolve. `arity` is
+/// `None` for a bare `?NAME` and `Some(n)` for `?NAME(a1, ..., an)`;
+/// when `arity` is `Some(n)`, `arguments` holds the `n` argument
+/// token streams (each may include hidden tokens like whitespace and
+/// comments). An arity-0 call `?NAME()` is `arity: Some(0)` with an
+/// empty `arguments`, distinct from a constant-like `?NAME` where
+/// `arity` is `None` and `arguments` is also empty.
+#[derive(Debug, Clone)]
+pub struct MacroExpansionRequest {
+    /// Decoded name of the macro (the token following `?`).
+    pub name: SourceString,
+    /// Arity of the call: `None` for constant-like `?NAME`, `Some(n)`
+    /// for a function-like `?NAME(a1, ..., an)`.
+    pub arity: Option<usize>,
+    /// Span covering the whole call from the leading `?` through the
+    /// closing `)` (or through the name token for constant-like
+    /// calls).
+    pub call_site: SourceSpan,
+    /// Per-argument token streams. Empty when `arity` is `None` or
+    /// `Some(0)`; otherwise has exactly `n` entries.
+    pub arguments: Vec<Vec<PreprocessedToken>>,
+}

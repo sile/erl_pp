@@ -27,10 +27,10 @@ pub enum SourceInfoMacroKind {
 
 /// Provenance of a token emitted by the preprocessor.
 ///
-/// The six variants match the token-provenance categories defined in
-/// the parent redesign. Variants that can have a parent origin (every
-/// variant except [`Origin::Source`]) hold the parent inside an
-/// [`Arc<Origin>`] so that deep chains produced by nested macro
+/// The seven variants match the token-provenance categories defined
+/// in the parent redesign. Variants that can have a parent origin
+/// (every variant except [`Origin::Source`]) hold the parent inside
+/// an [`Arc<Origin>`] so that deep chains produced by nested macro
 /// expansion or by macros inside include sources are structurally
 /// shared and are not deep-copied when the enclosing state is cloned.
 #[derive(Debug, Clone)]
@@ -105,6 +105,23 @@ pub enum Origin {
         /// Which source-info macro this token came from.
         kind: SourceInfoMacroKind,
     },
+
+    /// Token came from a [`crate::Source`] the caller supplied through
+    /// `Preprocessor::resume_macro_expansion` in response to an
+    /// `Event::AwaitingMacroExpansion` request.
+    ///
+    /// Distinct from [`Origin::MacroBody`] (which is reserved for the
+    /// replacement body of a `-define` directive) because caller-driven
+    /// expansions do not have a definition to point at; only the call
+    /// site and the requested macro name are meaningful.
+    CallerExpansion {
+        /// Parent origin (the origin at the macro call site).
+        parent: Arc<Origin>,
+        /// Span covering the whole `?NAME(...)` call at the call site.
+        call_site: SourceSpan,
+        /// The name of the macro the caller was asked to expand.
+        name: SourceString,
+    },
 }
 
 #[cfg(test)]
@@ -136,6 +153,7 @@ mod tests {
             Origin::MacroArgument { .. } => "macro_argument",
             Origin::Stringification { .. } => "stringification",
             Origin::SourceInfo { .. } => "source_info",
+            Origin::CallerExpansion { .. } => "caller_expansion",
         }
     }
 
@@ -172,6 +190,11 @@ mod tests {
                 call_site: span,
                 kind: SourceInfoMacroKind::File,
             },
+            Origin::CallerExpansion {
+                parent: dummy_parent(),
+                call_site: span,
+                name: dummy_source_string(),
+            },
         ];
         let kinds: Vec<_> = all.iter().map(kind_label).collect();
         assert_eq!(
@@ -183,6 +206,7 @@ mod tests {
                 "macro_argument",
                 "stringification",
                 "source_info",
+                "caller_expansion",
             ]
         );
     }

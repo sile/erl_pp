@@ -96,6 +96,13 @@ enum State {
     /// Placeholder for future conditional response handling.
     #[expect(dead_code, reason = "constructed by later conditional work")]
     AwaitingConditionalDecision,
+    /// The scan loop emitted [`Event::AwaitingMacroExpansion`] and is
+    /// waiting for a [`Preprocessor::resume_macro_expansion`] call.
+    #[expect(
+        dead_code,
+        reason = "constructed by later macro-expansion fire-side work"
+    )]
+    AwaitingMacroExpansion,
     /// The input has been fully processed.
     Completed,
 }
@@ -116,6 +123,9 @@ pub enum Status {
     /// The machine paused waiting for a conditional-branch decision.
     /// Reserved for future work; not produced in this release.
     AwaitingConditionalDecision,
+    /// The machine paused waiting for the caller to expand a macro
+    /// through [`Preprocessor::resume_macro_expansion`].
+    AwaitingMacroExpansion,
     /// All input has been consumed; further `step` calls
     /// return [`Event::Complete`].
     Completed,
@@ -217,6 +227,7 @@ impl Preprocessor {
             State::Scanning => Status::Scanning,
             State::AwaitingIncludeResolution => Status::AwaitingIncludeResolution,
             State::AwaitingConditionalDecision => Status::AwaitingConditionalDecision,
+            State::AwaitingMacroExpansion => Status::AwaitingMacroExpansion,
             State::Completed => Status::Completed,
         }
     }
@@ -228,11 +239,42 @@ impl Preprocessor {
     /// calling this method again.
     pub fn step(&mut self) -> Result<Event, ProtocolError> {
         match self.state {
-            State::AwaitingIncludeResolution | State::AwaitingConditionalDecision => {
-                Err(ProtocolError::StepWhilePending)
-            }
+            State::AwaitingIncludeResolution
+            | State::AwaitingConditionalDecision
+            | State::AwaitingMacroExpansion => Err(ProtocolError::StepWhilePending),
             State::Completed => Ok(Event::Complete),
             State::Scanning => Ok(self.step_scan()),
+        }
+    }
+
+    /// Resumes the scan loop after an
+    /// [`Event::AwaitingMacroExpansion`] event.
+    ///
+    /// `source` is the caller-supplied expansion result whose tokens
+    /// are spliced into the token stream. Pass a token-free
+    /// [`Source`] to skip the call without emitting any expansion
+    /// tokens; the caller is responsible for surfacing any error
+    /// diagnostic in its own error stream.
+    ///
+    /// Returns:
+    /// * [`ProtocolError::UnexpectedResponse`] when the machine is
+    ///   scanning or completed (no macro expansion is pending);
+    /// * [`ProtocolError::WrongResponseKind`] when the machine is
+    ///   awaiting a different response (include, conditional).
+    pub fn resume_macro_expansion(&mut self, source: Source) -> Result<(), ProtocolError> {
+        match self.state {
+            State::AwaitingMacroExpansion => {
+                self.sources.append(source);
+                // The fire side (Phase 5+) will queue the tokens for
+                // emission; for now the caller-supplied source is
+                // stored and the machine returns to Scanning.
+                self.state = State::Scanning;
+                Ok(())
+            }
+            State::AwaitingIncludeResolution | State::AwaitingConditionalDecision => {
+                Err(ProtocolError::WrongResponseKind)
+            }
+            State::Scanning | State::Completed => Err(ProtocolError::UnexpectedResponse),
         }
     }
 
@@ -420,6 +462,30 @@ mod tests {
             pp.step().expect("no protocol error"),
             Event::Complete
         ));
+    }
+
+    #[test]
+    fn resume_macro_expansion_while_scanning_is_unexpected_response() {
+        let mut pp = make("foo");
+        let response = Source::from_text("<synth:test>", "");
+        assert_eq!(
+            pp.resume_macro_expansion(response)
+                .expect_err("protocol error expected"),
+            ProtocolError::UnexpectedResponse
+        );
+    }
+
+    #[test]
+    fn resume_macro_expansion_while_completed_is_unexpected_response() {
+        let mut pp = make("");
+        // Drain to Completed.
+        drain(&mut pp);
+        let response = Source::from_text("<synth:test>", "");
+        assert_eq!(
+            pp.resume_macro_expansion(response)
+                .expect_err("protocol error expected"),
+            ProtocolError::UnexpectedResponse
+        );
     }
 
     #[test]

@@ -24,7 +24,9 @@ pub use crate::error::{
     MacroCallErrorKind, MacroDefinitionErrorKind, PreprocessError, PreprocessParseFailure,
     ProtocolError,
 };
-pub use crate::event::{BranchBoundary, ConditionalRequest, Diagnostic, Event, IncludeRequest};
+pub use crate::event::{
+    BranchBoundary, ConditionalRequest, Diagnostic, Event, IncludeRequest, MacroExpansionRequest,
+};
 pub use crate::macros::{MacroDefinition, MacroKey, MacroTable};
 pub use crate::origin::{Origin, SourceInfoMacroKind};
 pub use crate::preprocessed_token::PreprocessedToken;
