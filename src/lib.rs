@@ -1,13 +1,46 @@
 //! Erlang source code preprocessor.
 //!
-//! This crate is being rebuilt around a Sans-I/O state machine. The
-//! public API in this release exposes the shared data model that later
-//! work (state machine, directive parser, macro expansion, include
-//! handling, and so on) builds on: [`Source`], [`SourceStore`],
-//! [`SourceId`], [`SourceSpan`], [`PreprocessedToken`], and [`Origin`].
+//! The crate is built around a Sans-I/O state machine. The caller feeds
+//! a [`Source`] into [`Preprocessor`] and drives it by calling
+//! [`Preprocessor::step`] in a loop; each call returns one [`Event`]
+//! describing the next transition (a scanned token, a directive, a
+//! caller-driven include / conditional / macro-expansion response, a
+//! diagnostic, an error, or completion).
 //!
-//! Runnable examples of the full preprocessor loop will follow in
-//! later releases.
+//! # Minimal event loop
+//!
+//! Trivial input with no directives, includes, conditionals, macros, or
+//! `-error` / `-warning`. All `Awaiting*` / `Directive` / `Diagnostic` /
+//! `PreprocessError` branches are unreachable and fall into the
+//! `unreachable!` arm.
+//!
+//! ```
+//! use erl_pp::{Event, Preprocessor, Source};
+//! use erl_tokenize::{Position, Token, scan_token};
+//!
+//! let text = "atom, foo, bar.";
+//! let mut tokens = Vec::new();
+//! let mut position = Position::new();
+//! while let Some(t) = scan_token(text, position).unwrap() {
+//!     position = t.end();
+//!     tokens.push(t);
+//! }
+//! let source = Source::new("example.erl", text.to_string(), tokens);
+//! let mut pp = Preprocessor::new(source);
+//!
+//! let mut lexical = Vec::<String>::new();
+//! loop {
+//!     match pp.step().expect("no protocol error on trivial input") {
+//!         Event::Token(t) if t.token().kind().is_lexical() => {
+//!             lexical.push(t.text().to_owned());
+//!         }
+//!         Event::Token(_) => {} // hidden (whitespace / comments)
+//!         Event::Complete => break,
+//!         other => unreachable!("unexpected event: {other:?}"),
+//!     }
+//! }
+//! assert_eq!(lexical, ["atom", ",", "foo", ",", "bar", "."]);
+//! ```
 //!
 //! # References
 //!
