@@ -506,7 +506,11 @@ impl Preprocessor {
             }
         };
         let _ = open_paren; // acknowledged — position is captured via the parse result
-        let parsed = match parse_macro_arguments(&mut self.cursor, source_id) {
+        let mut arg_source = CursorArgSource {
+            cursor: &mut self.cursor,
+            source_id,
+        };
+        let parsed = match parse_macro_arguments(&mut arg_source) {
             Ok(p) => p,
             Err(kind) => {
                 let end = self
@@ -697,10 +701,12 @@ impl Preprocessor {
     /// Attempts to rescan a `?NAME` macro call whose `?` sits at the
     /// head of the expansion queue.
     ///
-    /// This handles the constant-like shape only (matching the
-    /// current phase). Function-like calls surfacing from a prior
-    /// expansion are treated as `NotACall` for now and the `?` is
-    /// emitted as a regular token.
+    /// Handles both the constant-like shape (`?NAME`) and the
+    /// function-like shape (`?NAME(...)`) when the call's opening
+    /// `(` and its arguments all sit inside the queue. If the
+    /// arguments straddle queue and source cursor, this returns
+    /// `NotACall` and the `?` is emitted as a regular token
+    /// (documented in `docs/otp-differences.md`).
     fn try_rescan_queue_call(&mut self) -> MacroCallOutcome {
         // Locate the next lexical token after the leading `?`,
         // skipping any hidden tokens in the queue.
@@ -725,9 +731,13 @@ impl Preprocessor {
         if !matches!(name_tok.kind(), TokenKind::Atom | TokenKind::Variable) {
             return MacroCallOutcome::NotACall;
         }
-        // If the next lexical after the name is `(`, this is a
-        // function-like call; deferred to a later phase.
-        let after_name_idx = {
+
+        // Look for the first lexical token after the name to decide
+        // between constant-like and function-like. `(` inside the
+        // queue makes it function-like; `(` sitting in the cursor
+        // (arguments would straddle queue and cursor) is out of
+        // scope for the queue-rescan path.
+        let after_name_lex = {
             let mut i = name_idx + 1;
             let mut found = None;
             while let Some(ppt) = self.expansion_queue.get(i) {
@@ -739,13 +749,16 @@ impl Preprocessor {
             }
             found
         };
-        let cursor_next_lexical = if after_name_idx.is_none() {
-            self.cursor.peek_lexical()
-        } else {
-            None
-        };
-        let following_lexical = after_name_idx.or(cursor_next_lexical);
-        if matches!(following_lexical, Some(t) if is_symbol(t, Symbol::OpenParen)) {
+        let is_function_like_in_queue =
+            matches!(after_name_lex, Some(t) if is_symbol(t, Symbol::OpenParen));
+        // Ambiguous straddling case: the queue holds `?NAME` (plus
+        // maybe hidden tokens) with no lexical follow-up, and the
+        // source cursor immediately shows `(`. Bail — otherwise a
+        // trailing `?FOO` inside a body would swallow the outer
+        // `(...)`.
+        if after_name_lex.is_none()
+            && matches!(self.cursor.peek_lexical(), Some(t) if is_symbol(t, Symbol::OpenParen))
+        {
             return MacroCallOutcome::NotACall;
         }
 
@@ -779,8 +792,6 @@ impl Preprocessor {
             }
         };
         let question_span = question_ppt.source_span();
-        let call_site =
-            SourceSpan::new(question_span.source_id, question_span.start, name_tok.end());
         let name_span = SourceSpan::new(
             name_ppt.source_span().source_id,
             name_tok.start(),
@@ -788,12 +799,65 @@ impl Preprocessor {
         );
         let name_ss = SourceString::new(name_text.clone(), name_span);
         let parent_origin = Arc::new(question_ppt.origin().clone());
+
+        if !is_function_like_in_queue {
+            let call_site =
+                SourceSpan::new(question_span.source_id, question_span.start, name_tok.end());
+            return self.finish_recognized_call(
+                name_text,
+                name_ss,
+                None,
+                call_site,
+                Vec::new(),
+                parent_origin,
+            );
+        }
+
+        // Function-like: drop any hidden tokens between the name and
+        // the opening `(`, then consume the `(` itself.
+        while let Some(front) = self.expansion_queue.front() {
+            let tok = *front.token();
+            if is_symbol(tok, Symbol::OpenParen) {
+                self.expansion_queue
+                    .pop_front()
+                    .expect("front peeked as `(`");
+                break;
+            }
+            if tok.kind().is_lexical() {
+                // Should not happen — `after_name_lex` established
+                // that the next lexical is `(`.
+                return MacroCallOutcome::NotACall;
+            }
+            self.expansion_queue
+                .pop_front()
+                .expect("front peeked as hidden");
+        }
+
+        let mut arg_source = QueueArgSource {
+            queue: &mut self.expansion_queue,
+        };
+        let parsed = match parse_macro_arguments(&mut arg_source) {
+            Ok(p) => p,
+            Err(kind) => {
+                let span =
+                    SourceSpan::new(question_span.source_id, question_span.start, name_tok.end());
+                return MacroCallOutcome::Fire(Box::new(Event::PreprocessError(
+                    PreprocessError::MacroCall { span, kind },
+                )));
+            }
+        };
+        let call_site = SourceSpan::new(
+            question_span.source_id,
+            question_span.start,
+            parsed.close_end,
+        );
+        let arity = Some(parsed.arguments.len());
         self.finish_recognized_call(
             name_text,
             name_ss,
-            None,
+            arity,
             call_site,
-            Vec::new(),
+            parsed.arguments,
             parent_origin,
         )
     }
@@ -1215,6 +1279,60 @@ struct ParsedArguments {
     close_end: Position,
 }
 
+/// A token producer that [`parse_macro_arguments`] pulls tokens from.
+///
+/// Abstracts over the two argument-parse call sites: the source
+/// cursor (initial recognition, tokens get [`Origin::Source`]) and
+/// the expansion queue (function-like rescan, tokens carry the
+/// Origin the earlier expansion assigned them).
+trait ArgTokenSource {
+    /// Returns the next token without consuming it, `None` at end.
+    fn peek(&self) -> Option<Token>;
+
+    /// Consumes the next token and returns it wrapped as a
+    /// [`PreprocessedToken`], `None` at end.
+    fn bump(&mut self) -> Option<PreprocessedToken>;
+}
+
+/// [`ArgTokenSource`] adapter that pulls from a raw source cursor,
+/// wrapping each token with [`Origin::Source`].
+struct CursorArgSource<'a> {
+    cursor: &'a mut Cursor,
+    source_id: SourceId,
+}
+
+impl ArgTokenSource for CursorArgSource<'_> {
+    fn peek(&self) -> Option<Token> {
+        self.cursor.peek()
+    }
+
+    fn bump(&mut self) -> Option<PreprocessedToken> {
+        let token = self.cursor.bump()?;
+        Some(PreprocessedToken::new(
+            token,
+            Arc::clone(self.cursor.source()),
+            self.source_id,
+            Origin::Source,
+        ))
+    }
+}
+
+/// [`ArgTokenSource`] adapter that pulls from the front of the
+/// expansion queue, keeping each token's existing Origin intact.
+struct QueueArgSource<'a> {
+    queue: &'a mut VecDeque<PreprocessedToken>,
+}
+
+impl ArgTokenSource for QueueArgSource<'_> {
+    fn peek(&self) -> Option<Token> {
+        self.queue.front().map(|ppt| *ppt.token())
+    }
+
+    fn bump(&mut self) -> Option<PreprocessedToken> {
+        self.queue.pop_front()
+    }
+}
+
 /// Parses macro-call arguments starting immediately after the opening
 /// `(`.
 ///
@@ -1224,9 +1342,13 @@ struct ParsedArguments {
 /// arguments are rejected as errors, middle empties (`?NAME(A, , B)`)
 /// are valid arity-`N` groups. Hidden tokens (whitespace and comments)
 /// are preserved inside the returned argument streams.
-fn parse_macro_arguments(
-    cursor: &mut Cursor,
-    source_id: SourceId,
+///
+/// Generic over [`ArgTokenSource`] so the same delimiter-tracking
+/// logic serves both the source-cursor call site (initial recognition)
+/// and the expansion-queue call site (rescan of a previous
+/// expansion's body).
+fn parse_macro_arguments<S: ArgTokenSource>(
+    source: &mut S,
 ) -> Result<ParsedArguments, MacroCallErrorKind> {
     let mut arguments: Vec<Vec<PreprocessedToken>> = Vec::new();
     let mut current: Vec<PreprocessedToken> = Vec::new();
@@ -1236,7 +1358,7 @@ fn parse_macro_arguments(
     let mut before_first_content = true;
 
     loop {
-        let Some(token) = cursor.peek() else {
+        let Some(token) = source.peek() else {
             return Err(MacroCallErrorKind::UnclosedArgument);
         };
 
@@ -1248,7 +1370,7 @@ fn parse_macro_arguments(
         if effective_top && token.kind().is_lexical() {
             match token.kind() {
                 TokenKind::Symbol(Symbol::Comma) => {
-                    cursor.bump();
+                    source.bump();
                     stack.clear();
                     if before_first_content {
                         return Err(MacroCallErrorKind::LeadingEmptyArgument);
@@ -1260,7 +1382,7 @@ fn parse_macro_arguments(
                 }
                 TokenKind::Symbol(Symbol::CloseParen) => {
                     let close_end = token.end();
-                    cursor.bump();
+                    source.bump();
                     stack.clear();
                     if before_first_content && current.is_empty() {
                         // `?NAME()` — arity 0.
@@ -1284,13 +1406,7 @@ fn parse_macro_arguments(
             }
         }
 
-        cursor.bump();
-        let ppt = PreprocessedToken::new(
-            token,
-            Arc::clone(cursor.source()),
-            source_id,
-            Origin::Source,
-        );
+        let ppt = source.bump().expect("peek returned Some, so bump must too");
         current.push(ppt);
         if token.kind().is_lexical() {
             current_has_lexical = true;

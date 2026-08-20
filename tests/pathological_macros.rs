@@ -120,19 +120,49 @@ fn constant_like_chain_rescans_through_three_layers() {
 }
 
 // ---------------------------------------------------------------------
-// 6. Function-like macro inside constant-like body — known limitation.
-//
-// The rescan path currently bails on `(` after a queued `?NAME`, so
-// `?WRAP(42)` inside `?FOO`'s body surfaces as raw tokens instead of
-// expanding. This test locks the current behaviour; a follow-up
-// change will replace the assertion with the fully-expanded output.
+// 6. Function-like macro inside a constant-like body — rescan path
+//    now expands the nested call.
 #[test]
-fn function_like_in_constant_body_currently_leaks_raw_tokens() {
+fn function_like_in_constant_body_rescans_to_expanded_tokens() {
     let mut pp = make("-define(WRAP(X), <<X>>).\n-define(FOO, ?WRAP(42)).\n?FOO.");
     let texts = collect_lexical_texts(&mut pp);
-    assert!(texts.contains(&"?".to_owned()));
-    assert!(texts.contains(&"WRAP".to_owned()));
+    assert!(!texts.contains(&"?".to_owned()));
+    assert!(!texts.contains(&"WRAP".to_owned()));
+    // Body substituted `X` → `42`, so `<<`, `42`, `>>` appear.
+    assert!(texts.contains(&"<<".to_owned()));
     assert!(texts.contains(&"42".to_owned()));
+    assert!(texts.contains(&">>".to_owned()));
+}
+
+// ---------------------------------------------------------------------
+// 6b. Cycle through a function-like body — static uses graph still
+//     rejects `?A -> ?B(x) -> ?A` even though the second hop only
+//     surfaces from the queue.
+#[test]
+fn function_like_rescan_detects_cycle() {
+    let mut pp = make("-define(A, ?B(x)).\n-define(B(X), ?A).\n?A.");
+    let kind = drive_until(&mut pp, |e| match e {
+        Event::PreprocessError(PreprocessError::MacroCall { kind, .. }) => Some(kind),
+        Event::Complete => panic!("expected CircularExpansion"),
+        _ => None,
+    });
+    assert!(matches!(kind, MacroCallErrorKind::CircularExpansion { .. }));
+}
+
+// ---------------------------------------------------------------------
+// 6c. Function-like rescan with an undefined nested call surfaces
+//     the AwaitingMacroExpansion event so the caller can supply the
+//     expansion.
+#[test]
+fn function_like_rescan_fires_event_on_table_miss() {
+    let mut pp = make("-define(FOO, ?UNKNOWN(1, 2)).\n?FOO.");
+    let request = drive_until(&mut pp, |e| match e {
+        Event::AwaitingMacroExpansion(req) => Some(req),
+        Event::Complete => panic!("expected AwaitingMacroExpansion"),
+        _ => None,
+    });
+    assert_eq!(request.name.as_str(), "UNKNOWN");
+    assert_eq!(request.arity, Some(2));
 }
 
 // ---------------------------------------------------------------------
