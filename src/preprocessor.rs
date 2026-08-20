@@ -31,16 +31,16 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use erl_tokenize::{Symbol, Token, TokenKind, TokenValue};
+use erl_tokenize::{Keyword, Position, Symbol, Token, TokenKind, TokenValue};
 
 use crate::cursor::Cursor;
 use crate::directive::{Directive, parse_directive};
-use crate::error::{PreprocessError, ProtocolError};
+use crate::error::{MacroCallErrorKind, PreprocessError, ProtocolError};
 use crate::event::{Event, MacroExpansionRequest};
 use crate::macros::{MacroDefinition, MacroTable};
 use crate::origin::Origin;
 use crate::preprocessed_token::PreprocessedToken;
-use crate::source::{Source, SourceSpan, SourceStore};
+use crate::source::{Source, SourceId, SourceSpan, SourceStore};
 use crate::source_string::SourceString;
 
 /// Sans-I/O preprocessor state machine.
@@ -438,19 +438,6 @@ impl Preprocessor {
             }
         }
 
-        // Look one lexical token ahead; a `(` here indicates a
-        // function-like call which this phase cannot handle yet.
-        let inner = self.cursor.checkpoint();
-        let is_function_like = matches!(
-            self.cursor.peek_lexical(),
-            Some(t) if is_symbol(t, Symbol::OpenParen)
-        );
-        self.cursor.restore(inner);
-        if is_function_like {
-            self.cursor.restore(entry);
-            return MacroCallOutcome::NotACall;
-        }
-
         let source_id = self.cursor.source_id();
         let source_text = self.cursor.source_text();
         let name_text = match name_tok.value(source_text) {
@@ -463,16 +450,73 @@ impl Preprocessor {
                 return MacroCallOutcome::NotACall;
             }
         };
-        let call_site = SourceSpan::new(source_id, question_tok.start(), name_tok.end());
         let name_span = SourceSpan::new(source_id, name_tok.start(), name_tok.end());
         let name_ss = SourceString::new(name_text.clone(), name_span);
 
-        if let Some(def) = self.macros.get_constant(&name_text) {
-            // Table hit — enqueue the replacement tokens, wrapping
-            // each token's existing origin under a new
-            // Origin::MacroBody whose call_site points at the call
-            // and whose definition_span points at the `-define(...)`
-            // directive.
+        // Peek one lexical token ahead. `(` starts a function-like
+        // call; anything else keeps the constant-like shape.
+        let inner = self.cursor.checkpoint();
+        let is_function_like = matches!(
+            self.cursor.peek_lexical(),
+            Some(t) if is_symbol(t, Symbol::OpenParen)
+        );
+        self.cursor.restore(inner);
+
+        if !is_function_like {
+            // Constant-like call.
+            let call_site = SourceSpan::new(source_id, question_tok.start(), name_tok.end());
+            return self.finish_recognized_call(name_text, name_ss, None, call_site, Vec::new());
+        }
+
+        // Function-like call: consume through the opening `(` and
+        // parse the argument list.
+        let open_paren = 'find: loop {
+            let Some(t) = self.cursor.bump() else {
+                self.cursor.restore(entry);
+                return MacroCallOutcome::NotACall;
+            };
+            if is_symbol(t, Symbol::OpenParen) {
+                break 'find t;
+            }
+        };
+        let _ = open_paren; // acknowledged — position is captured via the parse result
+        let parsed = match parse_macro_arguments(&mut self.cursor, source_id) {
+            Ok(p) => p,
+            Err(kind) => {
+                let end = self
+                    .cursor
+                    .peek()
+                    .map(|t| t.start())
+                    .unwrap_or_else(|| name_tok.end());
+                let span = SourceSpan::new(source_id, question_tok.start(), end);
+                return MacroCallOutcome::Fire(Box::new(Event::PreprocessError(
+                    PreprocessError::MacroCall { span, kind },
+                )));
+            }
+        };
+        let call_site = SourceSpan::new(source_id, question_tok.start(), parsed.close_end);
+        let arity = Some(parsed.arguments.len());
+        self.finish_recognized_call(name_text, name_ss, arity, call_site, parsed.arguments)
+    }
+
+    /// Common tail of [`Preprocessor::try_recognize_macro_call`].
+    ///
+    /// Either enqueues a MacroTable hit (constant-like only in this
+    /// phase) or fires an [`Event::AwaitingMacroExpansion`] for the
+    /// caller.
+    fn finish_recognized_call(
+        &mut self,
+        name_text: String,
+        name_ss: SourceString,
+        arity: Option<usize>,
+        call_site: SourceSpan,
+        arguments: Vec<Vec<PreprocessedToken>>,
+    ) -> MacroCallOutcome {
+        // Function-like table hits are handled in the next phase; for
+        // now they fall through to the caller-driven expansion event.
+        if arity.is_none()
+            && let Some(def) = self.macros.get_constant(&name_text)
+        {
             let parent_origin = Arc::new(Origin::Source);
             let definition_span = def.directive_span;
             for replacement in &def.replacement {
@@ -487,22 +531,22 @@ impl Preprocessor {
                 self.expansion_queue
                     .push_back(PreprocessedToken::new(token, source, source_id, origin));
             }
-            MacroCallOutcome::Enqueued
-        } else {
-            let parent_origin = Arc::new(Origin::Source);
-            let request = MacroExpansionRequest {
-                name: name_ss.clone(),
-                arity: None,
-                call_site,
-                arguments: Vec::new(),
-            };
-            self.state = State::AwaitingMacroExpansion(PendingExpansion {
-                name: name_ss,
-                call_site,
-                parent_origin,
-            });
-            MacroCallOutcome::Fire(Box::new(Event::AwaitingMacroExpansion(request)))
+            return MacroCallOutcome::Enqueued;
         }
+
+        let parent_origin = Arc::new(Origin::Source);
+        let request = MacroExpansionRequest {
+            name: name_ss.clone(),
+            arity,
+            call_site,
+            arguments,
+        };
+        self.state = State::AwaitingMacroExpansion(PendingExpansion {
+            name: name_ss,
+            call_site,
+            parent_origin,
+        });
+        MacroCallOutcome::Fire(Box::new(Event::AwaitingMacroExpansion(request)))
     }
 
     fn apply_directive_effects(&mut self, directive: &Directive) -> Result<(), PreprocessError> {
@@ -569,6 +613,177 @@ enum MacroCallOutcome {
 
 fn is_symbol(token: Token, sym: Symbol) -> bool {
     matches!(token.kind(), TokenKind::Symbol(s) if s == sym)
+}
+
+/// Delimiter stack entry used while parsing macro-call arguments.
+///
+/// Each entry names the token that closes the enclosing bracket or
+/// keyword block. `FunEnd` is the OTP-style sentinel for `fun ...`
+/// expressions and types whose closer depends on later tokens: a
+/// `when` or `->` promotes it to `End`, while an outer `)` / `,`
+/// drains it as a terminator.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Delimiter {
+    CloseParen,
+    CloseSquare,
+    CloseBrace,
+    CloseDoubleAngle,
+    End,
+    FunEnd,
+}
+
+/// Result of one macro-argument-parse attempt.
+struct ParsedArguments {
+    /// Per-argument token streams. Empty when the call was `()` (arity 0).
+    arguments: Vec<Vec<PreprocessedToken>>,
+    /// Position of the byte after the closing `)`. Used together with
+    /// the call's opening `?` to build the call-site span.
+    close_end: Position,
+}
+
+/// Parses macro-call arguments starting immediately after the opening
+/// `(`.
+///
+/// Tracks a small delimiter stack so top-level `,` and `)` are only
+/// recognized at the outermost bracket depth. Follows OTP `epp:macro_arg`:
+/// leading empty (`?NAME(, ...)`) and trailing empty (`?NAME(..., )`)
+/// arguments are rejected as errors, middle empties (`?NAME(A, , B)`)
+/// are valid arity-`N` groups. Hidden tokens (whitespace and comments)
+/// are preserved inside the returned argument streams.
+fn parse_macro_arguments(
+    cursor: &mut Cursor,
+    source_id: SourceId,
+) -> Result<ParsedArguments, MacroCallErrorKind> {
+    let mut arguments: Vec<Vec<PreprocessedToken>> = Vec::new();
+    let mut current: Vec<PreprocessedToken> = Vec::new();
+    let mut current_has_lexical = false;
+    let mut stack: Vec<Delimiter> = Vec::new();
+    // `true` while we have not yet seen any lexical token or comma.
+    let mut before_first_content = true;
+
+    loop {
+        let Some(token) = cursor.peek() else {
+            return Err(MacroCallErrorKind::UnclosedArgument);
+        };
+
+        // A `,` or `)` counts as top-level once every remaining
+        // delimiter is a `FunEnd` sentinel; the sentinels get drained
+        // when the enclosing group ends, matching OTP's re-drive.
+        let effective_top = stack.iter().all(|d| *d == Delimiter::FunEnd);
+
+        if effective_top && token.kind().is_lexical() {
+            match token.kind() {
+                TokenKind::Symbol(Symbol::Comma) => {
+                    cursor.bump();
+                    stack.clear();
+                    if before_first_content {
+                        return Err(MacroCallErrorKind::LeadingEmptyArgument);
+                    }
+                    arguments.push(std::mem::take(&mut current));
+                    current_has_lexical = false;
+                    before_first_content = false;
+                    continue;
+                }
+                TokenKind::Symbol(Symbol::CloseParen) => {
+                    let close_end = token.end();
+                    cursor.bump();
+                    stack.clear();
+                    if before_first_content {
+                        // `?NAME()` — arity 0.
+                    } else if !current_has_lexical {
+                        return Err(MacroCallErrorKind::TrailingEmptyArgument);
+                    } else {
+                        arguments.push(current);
+                    }
+                    return Ok(ParsedArguments {
+                        arguments,
+                        close_end,
+                    });
+                }
+                _ => {}
+            }
+        }
+
+        cursor.bump();
+        let ppt = PreprocessedToken::new(
+            token,
+            Arc::clone(cursor.source()),
+            source_id,
+            Origin::Source,
+        );
+        current.push(ppt);
+        if token.kind().is_lexical() {
+            current_has_lexical = true;
+            before_first_content = false;
+        }
+
+        match token.kind() {
+            TokenKind::Symbol(sym) => match sym {
+                Symbol::OpenParen => stack.push(Delimiter::CloseParen),
+                Symbol::OpenSquare => stack.push(Delimiter::CloseSquare),
+                Symbol::OpenBrace => stack.push(Delimiter::CloseBrace),
+                Symbol::DoubleLeftAngle => stack.push(Delimiter::CloseDoubleAngle),
+                Symbol::CloseParen => {
+                    pop_fun_ends(&mut stack);
+                    if matches!(stack.last(), Some(Delimiter::CloseParen)) {
+                        stack.pop();
+                    }
+                }
+                Symbol::CloseSquare => {
+                    pop_fun_ends(&mut stack);
+                    if matches!(stack.last(), Some(Delimiter::CloseSquare)) {
+                        stack.pop();
+                    }
+                }
+                Symbol::CloseBrace => {
+                    pop_fun_ends(&mut stack);
+                    if matches!(stack.last(), Some(Delimiter::CloseBrace)) {
+                        stack.pop();
+                    }
+                }
+                Symbol::DoubleRightAngle => {
+                    pop_fun_ends(&mut stack);
+                    if matches!(stack.last(), Some(Delimiter::CloseDoubleAngle)) {
+                        stack.pop();
+                    }
+                }
+                Symbol::RightArrow => promote_fun_end_to_end(&mut stack),
+                _ => {}
+            },
+            TokenKind::Keyword(kw) => match kw {
+                Keyword::Begin
+                | Keyword::If
+                | Keyword::Case
+                | Keyword::Maybe
+                | Keyword::Receive
+                | Keyword::Try
+                | Keyword::Cond => stack.push(Delimiter::End),
+                Keyword::Fun => stack.push(Delimiter::FunEnd),
+                Keyword::End => {
+                    if matches!(stack.last(), Some(Delimiter::End) | Some(Delimiter::FunEnd)) {
+                        stack.pop();
+                    }
+                }
+                Keyword::When => promote_fun_end_to_end(&mut stack),
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+}
+
+fn pop_fun_ends(stack: &mut Vec<Delimiter>) {
+    while matches!(stack.last(), Some(Delimiter::FunEnd)) {
+        stack.pop();
+    }
+}
+
+fn promote_fun_end_to_end(stack: &mut [Delimiter]) {
+    if let Some(top) = stack.last_mut()
+        && *top == Delimiter::FunEnd
+    {
+        *top = Delimiter::End;
+    }
 }
 
 impl std::fmt::Debug for Preprocessor {
@@ -781,24 +996,130 @@ mod tests {
         );
     }
 
-    #[test]
-    fn function_like_call_is_not_recognized_yet() {
-        // The function-like shape is deferred to a later phase, so the
-        // `?` and the name here should surface as regular tokens.
-        let mut pp = make("?FOO(1).");
-        let mut texts = Vec::new();
-        loop {
-            match pp.step().expect("no protocol errors") {
-                Event::Token(ppt) => texts.push(ppt.text().to_owned()),
-                Event::Complete => break,
-                other => panic!("unexpected event: {other:?}"),
-            }
+    fn expect_awaiting(pp: &mut Preprocessor) -> MacroExpansionRequest {
+        match pp.step().expect("no protocol errors") {
+            Event::AwaitingMacroExpansion(req) => req,
+            other => panic!("expected AwaitingMacroExpansion, got {other:?}"),
         }
-        assert!(texts.contains(&"?".to_owned()));
-        assert!(texts.contains(&"FOO".to_owned()));
-        assert!(texts.contains(&"(".to_owned()));
-        assert!(texts.contains(&"1".to_owned()));
-        assert!(texts.contains(&")".to_owned()));
+    }
+
+    fn expect_preprocess_error(pp: &mut Preprocessor) -> MacroCallErrorKind {
+        match pp.step().expect("no protocol errors") {
+            Event::PreprocessError(PreprocessError::MacroCall { kind, .. }) => kind,
+            other => panic!("expected PreprocessError::MacroCall, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn function_like_call_arity_zero() {
+        let mut pp = make("?FOO().");
+        let request = expect_awaiting(&mut pp);
+        assert_eq!(request.name.as_str(), "FOO");
+        assert_eq!(request.arity, Some(0));
+        assert!(request.arguments.is_empty());
+    }
+
+    #[test]
+    fn function_like_call_single_argument() {
+        let mut pp = make("?FOO(bar).");
+        let request = expect_awaiting(&mut pp);
+        assert_eq!(request.arity, Some(1));
+        assert_eq!(request.arguments.len(), 1);
+        let arg_texts: Vec<_> = request.arguments[0]
+            .iter()
+            .map(|t| t.text().to_owned())
+            .collect();
+        assert!(arg_texts.contains(&"bar".to_owned()));
+    }
+
+    #[test]
+    fn function_like_call_multiple_arguments() {
+        let mut pp = make("?FOO(a, b, c).");
+        let request = expect_awaiting(&mut pp);
+        assert_eq!(request.arity, Some(3));
+        let names: Vec<_> = request
+            .arguments
+            .iter()
+            .map(|arg| {
+                arg.iter()
+                    .find(|t| t.token().kind().is_lexical())
+                    .expect("each arg has at least one lexical token")
+                    .text()
+                    .to_owned()
+            })
+            .collect();
+        assert_eq!(names, ["a", "b", "c"]);
+    }
+
+    #[test]
+    fn function_like_call_nested_parens_do_not_split_arguments() {
+        let mut pp = make("?FOO((a, b), c).");
+        let request = expect_awaiting(&mut pp);
+        assert_eq!(request.arity, Some(2));
+    }
+
+    #[test]
+    fn function_like_call_nested_brackets_and_braces() {
+        let mut pp = make("?FOO([a, b], {c, d}, <<1, 2>>).");
+        let request = expect_awaiting(&mut pp);
+        assert_eq!(request.arity, Some(3));
+    }
+
+    #[test]
+    fn function_like_call_middle_empty_is_valid() {
+        let mut pp = make("?FOO(a, , b).");
+        let request = expect_awaiting(&mut pp);
+        assert_eq!(request.arity, Some(3));
+        // The middle argument has no lexical token, only hidden or empty.
+        let middle_has_lexical = request.arguments[1]
+            .iter()
+            .any(|t| t.token().kind().is_lexical());
+        assert!(!middle_has_lexical);
+    }
+
+    #[test]
+    fn function_like_call_leading_empty_is_error() {
+        let mut pp = make("?FOO(, a).");
+        let kind = expect_preprocess_error(&mut pp);
+        assert!(matches!(kind, MacroCallErrorKind::LeadingEmptyArgument));
+    }
+
+    #[test]
+    fn function_like_call_trailing_empty_is_error() {
+        let mut pp = make("?FOO(a, ).");
+        let kind = expect_preprocess_error(&mut pp);
+        assert!(matches!(kind, MacroCallErrorKind::TrailingEmptyArgument));
+    }
+
+    #[test]
+    fn function_like_call_unclosed_argument_is_error() {
+        let mut pp = make("?FOO(a, b");
+        let kind = expect_preprocess_error(&mut pp);
+        assert!(matches!(kind, MacroCallErrorKind::UnclosedArgument));
+    }
+
+    #[test]
+    fn function_like_call_keyword_block_balancing() {
+        let mut pp = make("?FOO(case X of Y -> Z end, W).");
+        let request = expect_awaiting(&mut pp);
+        // The commas inside case ... end are not top-level.
+        assert_eq!(request.arity, Some(2));
+    }
+
+    #[test]
+    fn function_like_call_fun_expression() {
+        let mut pp = make("?FOO(fun() -> ok end, a).");
+        let request = expect_awaiting(&mut pp);
+        assert_eq!(request.arity, Some(2));
+    }
+
+    #[test]
+    fn function_like_call_fun_type_syntax() {
+        // `fun((atom()) -> ok)` ends with `)`, not `end`; the FunEnd
+        // sentinel must drain when the outer macro `)` is reached.
+        let mut pp = make("?FOO(fun((atom()) -> ok), b).");
+        let request = expect_awaiting(&mut pp);
+        assert_eq!(request.arity, Some(2));
     }
 
     #[test]
