@@ -114,15 +114,6 @@ pub enum MacroDefinitionErrorKind {
 /// Reasons a macro call could not be expanded.
 #[derive(Debug, Clone)]
 pub enum MacroCallErrorKind {
-    /// The macro is not defined for any arity (constant-like or
-    /// function-like).
-    Undefined {
-        /// Called name.
-        name: SourceString,
-        /// Called arity (`None` for constant-like calls, `Some(n)` for
-        /// function-like calls).
-        arity: Option<usize>,
-    },
     /// The macro is defined, but not for the called shape. The
     /// `defined_arities` list carries every arity currently defined
     /// for the name (constant-like is `None`, function-like is
