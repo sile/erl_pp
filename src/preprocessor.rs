@@ -37,7 +37,7 @@ use crate::cursor::Cursor;
 use crate::directive::{Directive, parse_directive};
 use crate::error::{MacroCallErrorKind, PreprocessError, ProtocolError};
 use crate::event::{Event, MacroExpansionRequest};
-use crate::macros::{MacroDefinition, MacroTable};
+use crate::macros::{MacroDefinition, MacroKey, MacroTable};
 use crate::origin::Origin;
 use crate::preprocessed_token::PreprocessedToken;
 use crate::source::{Source, SourceId, SourceSpan, SourceStore};
@@ -551,6 +551,12 @@ impl Preprocessor {
         match arity {
             None => {
                 if let Some(def) = self.macros.get_constant(&name_text) {
+                    if let Some(chain) = self
+                        .macros
+                        .check_circular_uses(&MacroKey::constant(name_text.clone()))
+                    {
+                        return fire_circular(name_text, None, call_site, chain);
+                    }
                     let expanded = expand_constant_like(def, call_site, &parent_origin);
                     self.prepend_to_queue(expanded);
                     return MacroCallOutcome::Enqueued;
@@ -558,11 +564,23 @@ impl Preprocessor {
             }
             Some(n) => {
                 if let Some(def) = self.macros.get_function(&name_text, n) {
+                    if let Some(chain) = self
+                        .macros
+                        .check_circular_uses(&MacroKey::function(name_text.clone(), n))
+                    {
+                        return fire_circular(name_text, Some(n), call_site, chain);
+                    }
                     let expanded = expand_function_like(def, &arguments, call_site, &parent_origin);
                     self.prepend_to_queue(expanded);
                     return MacroCallOutcome::Enqueued;
                 }
             }
+        }
+
+        // Unknown / caller-driven macro path: reject direct or indirect
+        // caller-response recursion via the Origin ancestor chain.
+        if let Some(chain) = collect_caller_ancestor_cycle(&parent_origin, &name_text) {
+            return fire_circular(name_text, arity, call_site, chain);
         }
 
         let request = MacroExpansionRequest {
@@ -754,6 +772,61 @@ enum MacroCallOutcome {
 
 fn is_symbol(token: Token, sym: Symbol) -> bool {
     matches!(token.kind(), TokenKind::Symbol(s) if s == sym)
+}
+
+/// Builds a [`MacroCallOutcome::Fire`] carrying a
+/// [`PreprocessError::MacroCall`] with a `CircularExpansion` kind.
+fn fire_circular(
+    name: String,
+    arity: Option<usize>,
+    call_site: SourceSpan,
+    chain: Vec<(String, Option<usize>)>,
+) -> MacroCallOutcome {
+    MacroCallOutcome::Fire(Box::new(Event::PreprocessError(
+        PreprocessError::MacroCall {
+            span: call_site,
+            kind: MacroCallErrorKind::CircularExpansion { name, arity, chain },
+        },
+    )))
+}
+
+/// Walks a caller-driven expansion chain via [`Origin::CallerExpansion`]
+/// entries, looking for the same macro name already in progress. On a
+/// hit, returns the chain from the outer occurrence to the current
+/// name. Only names are compared; the fired chain uses `None` for
+/// arity because Origin::CallerExpansion does not carry it.
+fn collect_caller_ancestor_cycle(
+    origin: &Origin,
+    target_name: &str,
+) -> Option<Vec<(String, Option<usize>)>> {
+    let mut ancestors: Vec<String> = Vec::new();
+    let mut cur: &Origin = origin;
+    loop {
+        match cur {
+            Origin::CallerExpansion { parent, name, .. } => {
+                ancestors.push(name.value.clone());
+                cur = parent;
+            }
+            Origin::MacroBody { parent, .. }
+            | Origin::MacroArgument { parent, .. }
+            | Origin::Stringification { parent, .. }
+            | Origin::SourceInfo { parent, .. } => cur = parent,
+            Origin::Include(parent) => cur = parent,
+            Origin::Source => break,
+        }
+    }
+    if ancestors.iter().any(|n| n == target_name) {
+        // Ancestors are outermost-first? We pushed as we descended
+        // toward Origin::Source (deepest-first), so reverse to get
+        // outermost-first for a readable chain.
+        ancestors.reverse();
+        let mut chain: Vec<(String, Option<usize>)> =
+            ancestors.into_iter().map(|n| (n, None)).collect();
+        chain.push((target_name.to_owned(), None));
+        Some(chain)
+    } else {
+        None
+    }
 }
 
 /// Builds the expansion of a constant-like macro definition.
@@ -1739,6 +1812,87 @@ mod tests {
     }
 
     // ---- End of Phase 8 tests ---------------------------------------
+
+    // ---- Phase 9: circular expansion detection ----------------------
+
+    type CircularChain = Vec<(String, Option<usize>)>;
+
+    fn expect_circular(pp: &mut Preprocessor) -> (String, Option<usize>, CircularChain) {
+        loop {
+            match pp.step().expect("no protocol errors") {
+                Event::PreprocessError(PreprocessError::MacroCall {
+                    kind: MacroCallErrorKind::CircularExpansion { name, arity, chain },
+                    ..
+                }) => return (name, arity, chain),
+                Event::Directive(_) | Event::Token(_) => {}
+                other => panic!("expected CircularExpansion, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn direct_recursion_in_constant_like_is_detected() {
+        let mut pp = make("-define(FOO, ?FOO).\n?FOO.");
+        let (name, arity, chain) = expect_circular(&mut pp);
+        assert_eq!(name, "FOO");
+        assert_eq!(arity, None);
+        assert!(chain.iter().any(|(n, _)| n == "FOO"));
+    }
+
+    #[test]
+    fn indirect_recursion_between_two_macros_is_detected() {
+        let mut pp = make("-define(A, ?B).\n-define(B, ?A).\n?A.");
+        let (name, _arity, chain) = expect_circular(&mut pp);
+        // The chain should mention both A and B.
+        assert!(chain.iter().any(|(n, _)| n == "A"));
+        assert!(chain.iter().any(|(n, _)| n == "B"));
+        // The chain closes on `name`.
+        assert_eq!(chain.first().map(|(n, _)| n.as_str()), Some(name.as_str()));
+    }
+
+    #[test]
+    fn nested_but_non_recursive_expansion_is_allowed() {
+        // FOO -> BAR -> 1 : no cycle, expansion should complete without
+        // a CircularExpansion error.
+        let mut pp = make("-define(BAR, 1).\n-define(FOO, ?BAR).\n?FOO.");
+        loop {
+            match pp.step().expect("no protocol errors") {
+                Event::PreprocessError(PreprocessError::MacroCall {
+                    kind: MacroCallErrorKind::CircularExpansion { .. },
+                    ..
+                }) => panic!("unexpected CircularExpansion for non-recursive macros"),
+                Event::Complete => return,
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
+    fn direct_recursion_in_function_like_is_detected() {
+        let mut pp = make("-define(FOO(A), ?FOO(A)).\n?FOO(1).");
+        let (name, arity, _chain) = expect_circular(&mut pp);
+        assert_eq!(name, "FOO");
+        assert_eq!(arity, Some(1));
+    }
+
+    #[test]
+    fn caller_response_direct_recursion_is_detected() {
+        // Unknown ?FOO fires an event; caller responds with ?FOO,
+        // which should surface CircularExpansion on the second step
+        // instead of firing another event.
+        let mut pp = make("?FOO.");
+        match pp.step().expect("no protocol errors") {
+            Event::AwaitingMacroExpansion(req) => assert_eq!(req.name.as_str(), "FOO"),
+            other => panic!("expected AwaitingMacroExpansion, got {other:?}"),
+        }
+        let response = Source::from_text("<synth:FOO>", "?FOO");
+        pp.resume_macro_expansion(response).expect("resume ok");
+        let (name, _arity, chain) = expect_circular(&mut pp);
+        assert_eq!(name, "FOO");
+        assert!(chain.iter().any(|(n, _)| n == "FOO"));
+    }
+
+    // ---- End of Phase 9 tests ---------------------------------------
 
     #[test]
     fn clone_isolates_macro_table_updates() {

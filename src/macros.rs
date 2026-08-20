@@ -231,16 +231,62 @@ impl MacroTable {
     /// Returns the statically collected macro references that the
     /// definition for `key` calls from its replacement body.
     ///
-    /// Used by circular-expansion detection.
+    /// Kept as a lightweight accessor for tests; production callers
+    /// consult [`MacroTable::check_circular_uses`] instead.
     #[cfg_attr(
         not(test),
         expect(
             dead_code,
-            reason = "consumed by later work on circular expansion detection"
+            reason = "runtime cycle detection goes through check_circular_uses"
         )
     )]
     pub(crate) fn uses_of(&self, key: &MacroKey) -> Option<&[(String, Option<usize>)]> {
         self.uses.get(key).map(Vec::as_slice)
+    }
+
+    /// Runs an OTP-style top-level DFS over the static uses graph
+    /// starting from `key`. Returns the ancestor chain that closes
+    /// back on itself when a cycle is found, or `None` when no cycle
+    /// is reachable from `key`.
+    ///
+    /// The returned chain is in call order (outermost first) and ends
+    /// with the repeated `(name, arity)` pair.
+    pub(crate) fn check_circular_uses(
+        &self,
+        key: &MacroKey,
+    ) -> Option<Vec<(String, Option<usize>)>> {
+        let mut ancestors: Vec<(String, Option<usize>)> = Vec::new();
+        self.check_uses_dfs(&key.name, key.arity, &mut ancestors)
+    }
+
+    fn check_uses_dfs(
+        &self,
+        name: &str,
+        arity: Option<usize>,
+        ancestors: &mut Vec<(String, Option<usize>)>,
+    ) -> Option<Vec<(String, Option<usize>)>> {
+        let node = (name.to_owned(), arity);
+        if let Some(existing_idx) = ancestors.iter().position(|k| *k == node) {
+            let mut chain: Vec<_> = ancestors[existing_idx..].to_vec();
+            chain.push(node);
+            return Some(chain);
+        }
+        ancestors.push(node);
+        let child_uses = self
+            .uses
+            .get(&MacroKey {
+                name: name.to_owned(),
+                arity,
+            })
+            .cloned()
+            .unwrap_or_default();
+        for (child_name, child_arity) in &child_uses {
+            if let Some(chain) = self.check_uses_dfs(child_name, *child_arity, ancestors) {
+                return Some(chain);
+            }
+        }
+        ancestors.pop();
+        None
     }
 
     /// Inserts `def`, returning the previous entry for the same key
