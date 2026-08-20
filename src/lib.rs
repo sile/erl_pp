@@ -25,7 +25,8 @@ pub use crate::error::{
     ProtocolError,
 };
 pub use crate::event::{
-    BranchBoundary, ConditionalRequest, Diagnostic, Event, IncludeRequest, MacroExpansionRequest,
+    BranchBoundary, ConditionalRequest, Diagnostic, Event, IncludeKind, IncludeRequest,
+    MacroExpansionRequest,
 };
 pub use crate::macros::{MacroDefinition, MacroKey, MacroTable};
 pub use crate::origin::{Origin, SourceInfoMacroKind};

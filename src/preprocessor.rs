@@ -36,7 +36,7 @@ use erl_tokenize::{Keyword, Position, Symbol, Token, TokenKind, TokenValue};
 use crate::cursor::Cursor;
 use crate::directive::{Directive, parse_directive};
 use crate::error::{MacroCallErrorKind, PreprocessError, ProtocolError};
-use crate::event::{Event, MacroExpansionRequest};
+use crate::event::{Event, IncludeKind, MacroExpansionRequest};
 use crate::macros::{MacroDefinition, MacroKey, MacroTable};
 use crate::origin::{Origin, SourceInfoMacroKind};
 use crate::preprocessed_token::PreprocessedToken;
@@ -68,10 +68,14 @@ pub struct Preprocessor {
     sources: Arc<SourceStore>,
     /// Cursor for the source currently being scanned.
     cursor: Cursor,
-    /// Parent cursors saved when include support pushes a new source.
-    /// Placeholder for future include support; not populated in this
-    /// release.
-    include_stack: Vec<Cursor>,
+    /// Origin attached to every token emitted from the current cursor
+    /// (`Origin::Source` at the top level, `Origin::Include { ... }`
+    /// while an include source is active). Swapped in and out
+    /// together with `cursor` on include push / pop.
+    current_origin: Arc<Origin>,
+    /// Parent (cursor, current_origin) pairs saved when an include is
+    /// pushed; restored in the same order on include EOF.
+    include_stack: Vec<(Cursor, Arc<Origin>)>,
     /// Macro table updated on `-define` / `-undef`.
     macros: MacroTable,
     /// State-machine state.
@@ -98,9 +102,11 @@ pub struct Preprocessor {
 enum State {
     /// Default state: `step` runs the scan loop.
     Scanning,
-    /// Placeholder for future include response handling.
-    #[expect(dead_code, reason = "constructed by later include work")]
-    AwaitingIncludeResolution,
+    /// The scan loop emitted [`Event::AwaitingInclude`] and is
+    /// waiting for a [`Preprocessor::resume_include`] call. The
+    /// payload retains what the resume path needs to build the new
+    /// `Origin::Include` when a `Source` is supplied.
+    AwaitingIncludeResolution(PendingInclude),
     /// Placeholder for future conditional response handling.
     #[expect(dead_code, reason = "constructed by later conditional work")]
     AwaitingConditionalDecision,
@@ -111,6 +117,22 @@ enum State {
     AwaitingMacroExpansion(PendingExpansion),
     /// The input has been fully processed.
     Completed,
+}
+
+/// Bookkeeping saved while an [`Event::AwaitingInclude`] is pending,
+/// used to build the correct [`Origin::Include`] when a `Source` is
+/// supplied via [`Preprocessor::resume_include`].
+#[derive(Debug, Clone)]
+struct PendingInclude {
+    /// Origin at the include directive's call site; becomes the
+    /// `parent` of the new `Origin::Include`.
+    parent_origin: Arc<Origin>,
+    /// Span of the whole directive at the call site; becomes the
+    /// `include_site` of the new `Origin::Include`.
+    directive_span: SourceSpan,
+    /// Whether the directive was `-include` or `-include_lib`;
+    /// becomes the `kind` of the new `Origin::Include`.
+    kind: IncludeKind,
 }
 
 /// Bookkeeping saved while an [`Event::AwaitingMacroExpansion`] is
@@ -165,6 +187,7 @@ impl Preprocessor {
         Self {
             sources,
             cursor,
+            current_origin: Arc::new(Origin::Source),
             include_stack: Vec::new(),
             macros: MacroTable::new(),
             state: State::Scanning,
@@ -247,7 +270,7 @@ impl Preprocessor {
     pub fn status(&self) -> Status {
         match &self.state {
             State::Scanning => Status::Scanning,
-            State::AwaitingIncludeResolution => Status::AwaitingIncludeResolution,
+            State::AwaitingIncludeResolution(_) => Status::AwaitingIncludeResolution,
             State::AwaitingConditionalDecision => Status::AwaitingConditionalDecision,
             State::AwaitingMacroExpansion(_) => Status::AwaitingMacroExpansion,
             State::Completed => Status::Completed,
@@ -261,7 +284,7 @@ impl Preprocessor {
     /// calling this method again.
     pub fn step(&mut self) -> Result<Event, ProtocolError> {
         match &self.state {
-            State::AwaitingIncludeResolution
+            State::AwaitingIncludeResolution(_)
             | State::AwaitingConditionalDecision
             | State::AwaitingMacroExpansion(_) => Err(ProtocolError::StepWhilePending),
             State::Completed => Ok(Event::Complete),
@@ -286,7 +309,7 @@ impl Preprocessor {
     pub fn resume_macro_expansion(&mut self, source: Source) -> Result<(), ProtocolError> {
         match &self.state {
             State::AwaitingMacroExpansion(_) => {}
-            State::AwaitingIncludeResolution | State::AwaitingConditionalDecision => {
+            State::AwaitingIncludeResolution(_) | State::AwaitingConditionalDecision => {
                 return Err(ProtocolError::WrongResponseKind);
             }
             State::Scanning | State::Completed => {
@@ -313,6 +336,62 @@ impl Preprocessor {
                 origin,
             ));
         }
+        Ok(())
+    }
+
+    /// Resumes the scan loop after an [`Event::AwaitingInclude`]
+    /// event.
+    ///
+    /// `source` is the caller-supplied include content:
+    /// * `Some(source)`: `source` is appended to the shared
+    ///   [`SourceStore`] and becomes the active cursor; the parent
+    ///   cursor and origin are pushed onto the include stack and
+    ///   restored on include EOF.
+    /// * `None`: the include is skipped; the parent source resumes at
+    ///   the token right after the directive. Diagnostics are the
+    ///   caller's responsibility.
+    ///
+    /// Returns:
+    /// * [`ProtocolError::UnexpectedResponse`] when the machine is
+    ///   scanning or completed (no include is pending);
+    /// * [`ProtocolError::WrongResponseKind`] when the machine is
+    ///   awaiting a different response (macro expansion, conditional).
+    pub fn resume_include(&mut self, source: Option<Source>) -> Result<(), ProtocolError> {
+        match &self.state {
+            State::AwaitingIncludeResolution(_) => {}
+            State::AwaitingMacroExpansion(_) | State::AwaitingConditionalDecision => {
+                return Err(ProtocolError::WrongResponseKind);
+            }
+            State::Scanning | State::Completed => {
+                return Err(ProtocolError::UnexpectedResponse);
+            }
+        }
+        let State::AwaitingIncludeResolution(pending) =
+            std::mem::replace(&mut self.state, State::Scanning)
+        else {
+            unreachable!("state was checked immediately above");
+        };
+        let Some(source) = source else {
+            // Skip: parent source resumes at the token right after the
+            // directive. The directive parser already consumed through
+            // the terminating `.`, so we are at a form boundary.
+            self.at_form_boundary = true;
+            return Ok(());
+        };
+        // Push parent cursor + origin, swap in the include cursor.
+        let source_id = self.sources.append(source);
+        let source_arc = self.sources.get(source_id);
+        let child_cursor = Cursor::new(source_id, source_arc);
+        let child_origin = Arc::new(Origin::Include {
+            parent: Arc::clone(&pending.parent_origin),
+            include_site: pending.directive_span,
+            kind: pending.kind,
+        });
+        let parent_cursor = std::mem::replace(&mut self.cursor, child_cursor);
+        let parent_origin = std::mem::replace(&mut self.current_origin, child_origin);
+        self.include_stack.push((parent_cursor, parent_origin));
+        // Fresh source starts at a form boundary.
+        self.at_form_boundary = true;
         Ok(())
     }
 
@@ -346,8 +425,13 @@ impl Preprocessor {
             }
 
             if self.cursor.is_at_eof() {
-                if let Some(parent) = self.include_stack.pop() {
-                    self.cursor = parent;
+                if let Some((parent_cursor, parent_origin)) = self.include_stack.pop() {
+                    self.cursor = parent_cursor;
+                    self.current_origin = parent_origin;
+                    // Coming back to the parent source lands on the
+                    // token right after the include directive, which
+                    // is always a form boundary.
+                    self.at_form_boundary = true;
                     continue;
                 }
                 self.state = State::Completed;
@@ -361,6 +445,44 @@ impl Preprocessor {
                         // including the terminating `.`, so we are at
                         // a new form boundary.
                         self.at_form_boundary = true;
+                        // `-include` / `-include_lib` are folded into
+                        // Event::AwaitingInclude — we do not emit an
+                        // Event::Directive for them, matching how
+                        // Event::AwaitingMacroExpansion swallows the
+                        // observation event.
+                        match directive {
+                            Directive::Include(d) => {
+                                let parent_origin = Arc::clone(&self.current_origin);
+                                let request = crate::event::IncludeRequest {
+                                    kind: IncludeKind::Include,
+                                    path: d.path.clone(),
+                                    directive_span: d.span,
+                                    parent_origin: Arc::clone(&parent_origin),
+                                };
+                                self.state = State::AwaitingIncludeResolution(PendingInclude {
+                                    parent_origin,
+                                    directive_span: d.span,
+                                    kind: IncludeKind::Include,
+                                });
+                                return Event::AwaitingInclude(request);
+                            }
+                            Directive::IncludeLib(d) => {
+                                let parent_origin = Arc::clone(&self.current_origin);
+                                let request = crate::event::IncludeRequest {
+                                    kind: IncludeKind::IncludeLib,
+                                    path: d.path.clone(),
+                                    directive_span: d.span,
+                                    parent_origin: Arc::clone(&parent_origin),
+                                };
+                                self.state = State::AwaitingIncludeResolution(PendingInclude {
+                                    parent_origin,
+                                    directive_span: d.span,
+                                    kind: IncludeKind::IncludeLib,
+                                });
+                                return Event::AwaitingInclude(request);
+                            }
+                            _ => {}
+                        }
                         // Apply state effects (macro table updates)
                         // BEFORE emitting the event so the caller
                         // observes the post-update table state when
@@ -410,7 +532,7 @@ impl Preprocessor {
                         token,
                         Arc::clone(self.cursor.source()),
                         self.cursor.source_id(),
-                        Origin::Source,
+                        (*self.current_origin).clone(),
                     );
                     return Event::Token(ppt);
                 }
@@ -490,7 +612,7 @@ impl Preprocessor {
                 None,
                 call_site,
                 Vec::new(),
-                Arc::new(Origin::Source),
+                Arc::clone(&self.current_origin),
             );
         }
 
@@ -506,9 +628,11 @@ impl Preprocessor {
             }
         };
         let _ = open_paren; // acknowledged — position is captured via the parse result
+        let current_origin = Arc::clone(&self.current_origin);
         let mut arg_source = CursorArgSource {
             cursor: &mut self.cursor,
             source_id,
+            origin: &current_origin,
         };
         let parsed = match parse_macro_arguments(&mut arg_source) {
             Ok(p) => p,
@@ -532,7 +656,7 @@ impl Preprocessor {
             arity,
             call_site,
             parsed.arguments,
-            Arc::new(Origin::Source),
+            current_origin,
         )
     }
 
@@ -867,7 +991,12 @@ impl Preprocessor {
             Directive::Define(d) => {
                 let source = Arc::clone(self.cursor.source());
                 let source_id = self.cursor.source_id();
-                let def = MacroDefinition::from_directive(d, source, source_id, Origin::Source)?;
+                let def = MacroDefinition::from_directive(
+                    d,
+                    source,
+                    source_id,
+                    (*self.current_origin).clone(),
+                )?;
                 self.macros.insert(def);
                 Ok(())
             }
@@ -899,6 +1028,7 @@ impl Clone for Preprocessor {
         Self {
             sources: Arc::clone(&self.sources),
             cursor: self.cursor.clone(),
+            current_origin: Arc::clone(&self.current_origin),
             include_stack: self.include_stack.clone(),
             macros: self.macros.clone(),
             state: self.state.clone(),
@@ -958,7 +1088,7 @@ fn synthesize_source(
 /// for `?LINE` and `?FILE`.
 fn outermost_call_context(origin: &Origin, current_call_site: SourceSpan) -> SourceSpan {
     match origin {
-        Origin::Source | Origin::Include(_) => current_call_site,
+        Origin::Source | Origin::Include { .. } => current_call_site,
         Origin::MacroBody {
             parent, call_site, ..
         }
@@ -1035,7 +1165,7 @@ fn collect_caller_ancestor_cycle(
             | Origin::MacroArgument { parent, .. }
             | Origin::Stringification { parent, .. }
             | Origin::SourceInfo { parent, .. } => cur = parent,
-            Origin::Include(parent) => cur = parent,
+            Origin::Include { parent, .. } => cur = parent,
             Origin::Source => break,
         }
     }
@@ -1295,10 +1425,13 @@ trait ArgTokenSource {
 }
 
 /// [`ArgTokenSource`] adapter that pulls from a raw source cursor,
-/// wrapping each token with [`Origin::Source`].
+/// wrapping each token with the caller's current origin (which is
+/// `Origin::Source` at the top level and `Origin::Include { ... }`
+/// inside an include source).
 struct CursorArgSource<'a> {
     cursor: &'a mut Cursor,
     source_id: SourceId,
+    origin: &'a Arc<Origin>,
 }
 
 impl ArgTokenSource for CursorArgSource<'_> {
@@ -1312,7 +1445,7 @@ impl ArgTokenSource for CursorArgSource<'_> {
             token,
             Arc::clone(self.cursor.source()),
             self.source_id,
-            Origin::Source,
+            (**self.origin).clone(),
         ))
     }
 }
