@@ -1,0 +1,448 @@
+//! Integration tests for `-ifdef` / `-ifndef` / `-else` / `-endif`
+//! and the Sans-I/O fork / resume_conditional protocol.
+
+use erl_pp::{
+    Branch, BranchBoundaryKind, ConditionalErrorKind, ConditionalKind, Event, IncludeKind,
+    PreprocessError, Preprocessor, ProtocolError, Source, Status,
+};
+use erl_tokenize::{Position, scan_token};
+
+fn build_source(name: &str, text: &str) -> Source {
+    let mut tokens = Vec::new();
+    let mut position = Position::new();
+    while let Some(t) = scan_token(text, position).expect("test input scans without lex errors") {
+        position = t.end();
+        tokens.push(t);
+    }
+    Source::new(name, text.to_string(), tokens)
+}
+
+fn make(text: &str) -> Preprocessor {
+    Preprocessor::new(build_source("m.erl", text))
+}
+
+fn step(pp: &mut Preprocessor) -> Event {
+    pp.step().expect("no protocol error")
+}
+
+fn lexical_texts(pp: &mut Preprocessor) -> Vec<String> {
+    let mut out = Vec::new();
+    loop {
+        match step(pp) {
+            Event::Token(ppt) if ppt.token().kind().is_lexical() => {
+                out.push(ppt.text().to_owned());
+            }
+            Event::Token(_) | Event::Directive(_) | Event::BranchBoundary(_) => {}
+            Event::Complete => return out,
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------
+// 1. -ifdef with the macro defined: request carries kind=Ifdef,
+//    defined=true, recommended=Then.
+#[test]
+fn ifdef_defined_recommends_then() {
+    let mut pp = make("-define(FOO, 1).\n-ifdef(FOO).\nthen_side.\n-endif.\n");
+    // consume -define
+    assert!(matches!(step(&mut pp), Event::Directive(_)));
+    let request = match step(&mut pp) {
+        Event::AwaitingConditional(r) => r,
+        other => panic!("expected AwaitingConditional, got {other:?}"),
+    };
+    assert_eq!(request.kind, ConditionalKind::Ifdef);
+    assert_eq!(request.name.as_str(), "FOO");
+    assert!(request.defined);
+    assert_eq!(request.recommended, Branch::Then);
+    assert!(matches!(pp.status(), Status::AwaitingConditionalDecision));
+}
+
+// ---------------------------------------------------------------------
+// 2. -ifndef with the macro undefined: recommended=Then.
+#[test]
+fn ifndef_undefined_recommends_then() {
+    let mut pp = make("-ifndef(NOPE).\nthen_side.\n-endif.\n");
+    let request = match step(&mut pp) {
+        Event::AwaitingConditional(r) => r,
+        other => panic!("expected AwaitingConditional, got {other:?}"),
+    };
+    assert_eq!(request.kind, ConditionalKind::Ifndef);
+    assert!(!request.defined);
+    assert_eq!(request.recommended, Branch::Then);
+}
+
+// ---------------------------------------------------------------------
+// 3. `-ifdef` does not emit `Event::Directive` (folded into
+//    AwaitingConditional, like AwaitingMacroExpansion).
+#[test]
+fn ifdef_does_not_emit_event_directive() {
+    let mut pp = make("-ifdef(FOO).\n-endif.\n");
+    let first = step(&mut pp);
+    assert!(matches!(first, Event::AwaitingConditional(_)));
+}
+
+// ---------------------------------------------------------------------
+// 4. Choosing Then in an -ifdef/-endif with content on the Then side:
+//    scan of Then tokens, then BranchBoundary(Endif) at end.
+#[test]
+fn resume_conditional_then_scans_then_side() {
+    let mut pp = make("-ifdef(FOO).\nthen_side.\n-endif.\n");
+    let _ = step(&mut pp); // AwaitingConditional
+    pp.resume_conditional(Branch::Then).expect("resume ok");
+    let mut saw_then = false;
+    let mut saw_endif_boundary = false;
+    loop {
+        match step(&mut pp) {
+            Event::Token(t) if t.text() == "then_side" => saw_then = true,
+            Event::Token(_) => {}
+            Event::BranchBoundary(b) => {
+                assert_eq!(b.kind, BranchBoundaryKind::Endif);
+                saw_endif_boundary = true;
+            }
+            Event::Complete => break,
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+    assert!(saw_then, "Then side content was not emitted");
+    assert!(saw_endif_boundary, "endif boundary event was not emitted");
+}
+
+// ---------------------------------------------------------------------
+// 5. Choosing Else on an ifdef with content on both sides: Then is
+//    skipped, Else content is emitted, boundaries fire for else and
+//    endif.
+#[test]
+fn resume_conditional_else_skips_then_and_scans_else_side() {
+    let mut pp = make("-ifdef(FOO).\nthen_side.\n-else.\nelse_side.\n-endif.\n");
+    let _ = step(&mut pp);
+    pp.resume_conditional(Branch::Else).expect("resume ok");
+    let mut saw_else = false;
+    let mut saw_then = false;
+    let mut boundaries = Vec::new();
+    loop {
+        match step(&mut pp) {
+            Event::Token(t) if t.text() == "then_side" => saw_then = true,
+            Event::Token(t) if t.text() == "else_side" => saw_else = true,
+            Event::Token(_) => {}
+            Event::BranchBoundary(b) => boundaries.push(b.kind),
+            Event::Complete => break,
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+    assert!(saw_else);
+    assert!(!saw_then, "Then side should have been skipped");
+    assert_eq!(
+        boundaries,
+        vec![BranchBoundaryKind::Else, BranchBoundaryKind::Endif]
+    );
+}
+
+// ---------------------------------------------------------------------
+// 6. Choosing Then still fires Else boundary when the conditional has
+//    an else, then skips the Else side.
+#[test]
+fn resume_conditional_then_fires_else_boundary_and_skips_else_side() {
+    let mut pp = make("-ifdef(FOO).\nthen_side.\n-else.\nelse_side.\n-endif.\n");
+    let _ = step(&mut pp);
+    pp.resume_conditional(Branch::Then).expect("resume ok");
+    let mut saw_then = false;
+    let mut saw_else = false;
+    let mut boundaries = Vec::new();
+    loop {
+        match step(&mut pp) {
+            Event::Token(t) if t.text() == "then_side" => saw_then = true,
+            Event::Token(t) if t.text() == "else_side" => saw_else = true,
+            Event::Token(_) => {}
+            Event::BranchBoundary(b) => boundaries.push(b.kind),
+            Event::Complete => break,
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+    assert!(saw_then);
+    assert!(!saw_else);
+    assert_eq!(
+        boundaries,
+        vec![BranchBoundaryKind::Else, BranchBoundaryKind::Endif]
+    );
+}
+
+// ---------------------------------------------------------------------
+// 7. No -else: Choosing Else means the whole span from ifdef to endif
+//    is empty content (skip Then, no else side to visit), single
+//    Endif boundary.
+#[test]
+fn resume_conditional_else_without_else_is_empty_branch() {
+    let mut pp = make("-ifdef(FOO).\nthen_side.\n-endif.\n");
+    let _ = step(&mut pp);
+    pp.resume_conditional(Branch::Else).expect("resume ok");
+    let mut saw_then = false;
+    let mut boundaries = Vec::new();
+    loop {
+        match step(&mut pp) {
+            Event::Token(t) if t.text() == "then_side" => saw_then = true,
+            Event::Token(_) => {}
+            Event::BranchBoundary(b) => boundaries.push(b.kind),
+            Event::Complete => break,
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+    assert!(!saw_then);
+    assert_eq!(boundaries, vec![BranchBoundaryKind::Endif]);
+}
+
+// ---------------------------------------------------------------------
+// 8. Inactive branch suppresses -define side effects.
+#[test]
+fn inactive_branch_does_not_apply_define() {
+    let mut pp = make("-ifdef(FOO).\n-define(BAR, 1).\n-endif.\n?BAR.\n");
+    let _ = step(&mut pp);
+    pp.resume_conditional(Branch::Else).expect("resume ok");
+    // BAR was defined inside the inactive Then side, so ?BAR should
+    // trigger AwaitingMacroExpansion (unknown macro).
+    loop {
+        match step(&mut pp) {
+            Event::BranchBoundary(_) | Event::Token(_) => {}
+            Event::AwaitingMacroExpansion(req) => {
+                assert_eq!(req.name.as_str(), "BAR");
+                return;
+            }
+            other => panic!("expected AwaitingMacroExpansion, got {other:?}"),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------
+// 9. Inactive branch suppresses -include request.
+#[test]
+fn inactive_branch_does_not_fire_include_request() {
+    let mut pp = make(
+        r#"-ifdef(FOO).
+-include("skipped.hrl").
+-endif.
+"#,
+    );
+    let _ = step(&mut pp);
+    pp.resume_conditional(Branch::Else).expect("resume ok");
+    // Drain to completion — no AwaitingInclude should appear.
+    loop {
+        match step(&mut pp) {
+            Event::BranchBoundary(_) | Event::Token(_) => {}
+            Event::Complete => return,
+            Event::AwaitingInclude(_) => {
+                panic!("include request fired inside an inactive branch");
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------
+// 10. Inactive branch skips ?MACRO calls (no AwaitingMacroExpansion).
+#[test]
+fn inactive_branch_does_not_recognize_macro_calls() {
+    let mut pp = make("-ifdef(FOO).\n?UNKNOWN.\n-endif.\n");
+    let _ = step(&mut pp);
+    pp.resume_conditional(Branch::Else).expect("resume ok");
+    loop {
+        match step(&mut pp) {
+            Event::BranchBoundary(_) | Event::Token(_) => {}
+            Event::Complete => return,
+            Event::AwaitingMacroExpansion(_) => {
+                panic!("macro expansion fired inside an inactive branch");
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------
+// 11. Nested conditional inside inactive branch: no
+//     AwaitingConditional, no boundary events for the nested one.
+//     Only the outer endif fires a boundary.
+#[test]
+fn nested_conditional_inside_inactive_is_silent() {
+    let mut pp = make(
+        "-ifdef(OUTER).\n\
+         -ifdef(INNER).\n\
+         inner_then.\n\
+         -else.\n\
+         inner_else.\n\
+         -endif.\n\
+         -endif.\n",
+    );
+    let _ = step(&mut pp);
+    pp.resume_conditional(Branch::Else).expect("resume ok");
+    let mut requests = 0;
+    let mut boundaries = Vec::new();
+    loop {
+        match step(&mut pp) {
+            Event::AwaitingConditional(_) => requests += 1,
+            Event::BranchBoundary(b) => boundaries.push(b.kind),
+            Event::Token(_) => {}
+            Event::Complete => break,
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+    assert_eq!(requests, 0, "no nested request should have fired");
+    assert_eq!(
+        boundaries,
+        vec![BranchBoundaryKind::Endif],
+        "only the outer endif boundary should have fired"
+    );
+}
+
+// ---------------------------------------------------------------------
+// 12. Clone at the awaiting event and drive Then / Else independently
+//     with independent macro state.
+#[test]
+fn clone_then_and_else_share_source_but_diverge_state() {
+    let mut base =
+        make("-ifdef(FOO).\n-define(FROM_THEN, 1).\n-else.\n-define(FROM_ELSE, 2).\n-endif.\n");
+    let _ = step(&mut base); // AwaitingConditional
+    let mut then_pp = base.clone();
+    let mut else_pp = base;
+    then_pp.resume_conditional(Branch::Then).expect("then");
+    else_pp.resume_conditional(Branch::Else).expect("else");
+    let _ = lexical_texts(&mut then_pp);
+    let _ = lexical_texts(&mut else_pp);
+    // then_pp saw -define(FROM_THEN, 1). only.
+    assert!(then_pp.macros().is_defined("FROM_THEN"));
+    assert!(!then_pp.macros().is_defined("FROM_ELSE"));
+    assert!(!else_pp.macros().is_defined("FROM_THEN"));
+    assert!(else_pp.macros().is_defined("FROM_ELSE"));
+}
+
+// ---------------------------------------------------------------------
+// 13. Stray -endif at top level is a PreprocessError::Conditional.
+#[test]
+fn stray_endif_is_conditional_error() {
+    let mut pp = make("-endif.\n");
+    let event = step(&mut pp);
+    match event {
+        Event::PreprocessError(PreprocessError::Conditional { kind, .. }) => {
+            assert_eq!(kind, ConditionalErrorKind::StrayEndif);
+        }
+        other => panic!("expected StrayEndif error, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------
+// 14. Stray -else at top level is a PreprocessError::Conditional.
+#[test]
+fn stray_else_is_conditional_error() {
+    let mut pp = make("-else.\n");
+    let event = step(&mut pp);
+    match event {
+        Event::PreprocessError(PreprocessError::Conditional { kind, .. }) => {
+            assert_eq!(kind, ConditionalErrorKind::StrayElse);
+        }
+        other => panic!("expected StrayElse error, got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------
+// 15. Double -else in the same conditional is a
+//     PreprocessError::Conditional::DoubleElse.
+#[test]
+fn double_else_is_conditional_error() {
+    let mut pp = make("-ifdef(FOO).\n-else.\n-else.\n-endif.\n");
+    let _ = step(&mut pp);
+    pp.resume_conditional(Branch::Then).expect("resume ok");
+    // Drain until we hit the second -else.
+    loop {
+        match step(&mut pp) {
+            Event::BranchBoundary(_) | Event::Token(_) => {}
+            Event::PreprocessError(PreprocessError::Conditional { kind, .. }) => {
+                assert_eq!(kind, ConditionalErrorKind::DoubleElse);
+                return;
+            }
+            other => panic!("expected DoubleElse error, got {other:?}"),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------
+// 16. Unclosed conditional at EOF fires
+//     PreprocessError::Conditional::UnclosedConditional pointing at
+//     the opening directive.
+#[test]
+fn unclosed_conditional_at_eof_is_error() {
+    let mut pp = make("-ifdef(FOO).\nsomething.\n");
+    let _ = step(&mut pp);
+    pp.resume_conditional(Branch::Then).expect("resume ok");
+    loop {
+        match step(&mut pp) {
+            Event::Token(_) | Event::BranchBoundary(_) => {}
+            Event::PreprocessError(PreprocessError::Conditional { kind, .. }) => {
+                assert_eq!(kind, ConditionalErrorKind::UnclosedConditional);
+                return;
+            }
+            other => panic!("expected UnclosedConditional error, got {other:?}"),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------
+// 17. Protocol error: resume_conditional while scanning.
+#[test]
+fn resume_conditional_in_scanning_is_protocol_error() {
+    let mut pp = make("foo.");
+    let err = pp
+        .resume_conditional(Branch::Then)
+        .expect_err("should fail");
+    assert_eq!(err, ProtocolError);
+    assert!(matches!(pp.status(), Status::Scanning));
+}
+
+// ---------------------------------------------------------------------
+// 18. Protocol error: resume_conditional while awaiting an include.
+#[test]
+fn resume_conditional_while_awaiting_include_is_protocol_error() {
+    let mut pp = make(r#"-include("h.hrl")."#);
+    let event = step(&mut pp);
+    assert!(matches!(event, Event::AwaitingInclude(_)));
+    let err = pp
+        .resume_conditional(Branch::Then)
+        .expect_err("should fail");
+    assert_eq!(err, ProtocolError);
+    assert!(matches!(pp.status(), Status::AwaitingIncludeResolution));
+}
+
+// ---------------------------------------------------------------------
+// 19. Sanity: an active-branch parse error IS surfaced normally.
+//     (Ensures the inactive-suppression logic did not accidentally
+//     silence errors that should always fire.)
+#[test]
+fn active_branch_parse_error_still_fires() {
+    // Malformed directive parses fail in the active branch.
+    let mut pp = make("-include.\n");
+    let event = step(&mut pp);
+    assert!(matches!(event, Event::PreprocessError(_)));
+}
+
+// ---------------------------------------------------------------------
+// 20. Include-in-active-branch still works normally (guards the
+//     "not is_in_inactive_branch" path).
+#[test]
+fn include_in_active_branch_still_fires_awaiting_include() {
+    let mut pp = make(
+        r#"-ifdef(FOO).
+-include("h.hrl").
+-endif.
+"#,
+    );
+    let _ = step(&mut pp);
+    pp.resume_conditional(Branch::Then).expect("resume ok");
+    loop {
+        match step(&mut pp) {
+            Event::AwaitingInclude(req) => {
+                assert_eq!(req.kind, IncludeKind::Include);
+                assert_eq!(req.path.as_str(), "h.hrl");
+                return;
+            }
+            Event::Token(_) | Event::BranchBoundary(_) => {}
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+}

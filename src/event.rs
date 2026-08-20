@@ -133,19 +133,77 @@ pub struct IncludeRequest {
     pub parent_origin: Arc<Origin>,
 }
 
+/// Distinguishes `-ifdef` from `-ifndef` in a [`ConditionalRequest`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ConditionalKind {
+    /// `-ifdef(NAME).`
+    Ifdef,
+    /// `-ifndef(NAME).`
+    Ifndef,
+}
+
+/// Which side of a `-ifdef` / `-ifndef` the caller wants to
+/// process. Passed to [`crate::Preprocessor::resume_conditional`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Branch {
+    /// The tokens between the opening directive and `-else`
+    /// (or `-endif` when there is no `-else`).
+    Then,
+    /// The tokens between `-else` and `-endif`
+    /// (an empty branch when the conditional has no `-else`).
+    Else,
+}
+
+/// Which conditional boundary directive an [`Event::BranchBoundary`]
+/// event marks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BranchBoundaryKind {
+    /// The scanner crossed a `-else`.
+    Else,
+    /// The scanner crossed a `-endif`.
+    Endif,
+}
+
 /// Data of an [`Event::AwaitingConditional`].
 ///
-/// Payload details are filled in by later work on conditional
-/// branching.
+/// Describes the `-ifdef` / `-ifndef` the caller must choose a
+/// branch for. `defined` reports the current macro table state and
+/// `recommended` is the branch OTP `epp` would take (a `defined`
+/// `Ifdef` prefers `Then`, `Ifndef` prefers the opposite); the
+/// caller may pick either side.
 #[derive(Debug, Clone)]
-pub struct ConditionalRequest {}
+pub struct ConditionalRequest {
+    /// Whether this is `-ifdef` or `-ifndef`.
+    pub kind: ConditionalKind,
+    /// Decoded name of the target macro (matches
+    /// `IfdefDirective::name` / `IfndefDirective::name`).
+    pub name: SourceString,
+    /// `MacroTable::is_defined(name)` at the point of the directive.
+    pub defined: bool,
+    /// The branch OTP `epp` would take given `kind` and `defined`.
+    /// Cached so callers do not have to reproduce the mapping.
+    pub recommended: Branch,
+    /// Span of the whole directive.
+    pub directive_span: SourceSpan,
+    /// Origin at the directive's site.
+    pub parent_origin: Arc<Origin>,
+}
 
 /// Data of an [`Event::BranchBoundary`].
 ///
-/// Payload details are filled in by later work on conditional
-/// branching.
+/// Emitted when the scanner crosses `-else` or `-endif` of the
+/// current conditional, both from the active branch and from an
+/// inactive skip. The `directive_span` and the caller's own branch
+/// stack identify which conditional this boundary closes.
 #[derive(Debug, Clone)]
-pub struct BranchBoundary {}
+pub struct BranchBoundary {
+    /// Whether the boundary is `-else` or `-endif`.
+    pub kind: BranchBoundaryKind,
+    /// Span of the boundary directive.
+    pub directive_span: SourceSpan,
+    /// Origin at the boundary directive's site.
+    pub parent_origin: Arc<Origin>,
+}
 
 /// Data of an [`Event::Diagnostic`].
 ///
