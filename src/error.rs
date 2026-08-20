@@ -24,15 +24,6 @@ use erl_tokenize::TokenKind;
 use crate::source::SourceSpan;
 use crate::source_string::SourceString;
 
-/// Position of an empty argument within a macro call's argument list.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum EmptyArgumentPosition {
-    /// `?NAME(, ...)` — leading empty argument.
-    First,
-    /// `?NAME(..., )` — trailing empty argument.
-    Last,
-}
-
 // ---------------------------------------------------------------------------
 // crate-internal parse error (produced by the directive parser)
 
@@ -148,12 +139,12 @@ pub enum MacroCallErrorKind {
     /// The argument list of a function-like call was never closed
     /// before the end of source.
     UnclosedArgument,
-    /// An empty argument appeared at a position OTP rejects
-    /// (`?NAME(, ...)` or `?NAME(..., )`).
-    EmptyArgument {
-        /// Which end of the argument list the empty argument was at.
-        position: EmptyArgumentPosition,
-    },
+    /// A leading empty argument appeared (`?NAME(, ...)`). Middle
+    /// empty arguments (`?NAME(A, , B)`) are valid per OTP and do not
+    /// surface here.
+    LeadingEmptyArgument,
+    /// A trailing empty argument appeared (`?NAME(..., )`).
+    TrailingEmptyArgument,
     /// The token following `??` is not a parameter name of the
     /// enclosing macro.
     InvalidStringificationTarget {

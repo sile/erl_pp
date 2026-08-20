@@ -21,8 +21,8 @@ pub use crate::directive::{
     WarningDirective,
 };
 pub use crate::error::{
-    EmptyArgumentPosition, MacroCallErrorKind, MacroDefinitionErrorKind, PreprocessError,
-    PreprocessParseFailure, ProtocolError,
+    MacroCallErrorKind, MacroDefinitionErrorKind, PreprocessError, PreprocessParseFailure,
+    ProtocolError,
 };
 pub use crate::event::{BranchBoundary, ConditionalRequest, Diagnostic, Event, IncludeRequest};
 pub use crate::macros::{MacroDefinition, MacroKey, MacroTable};
