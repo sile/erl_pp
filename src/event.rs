@@ -205,12 +205,44 @@ pub struct BranchBoundary {
     pub parent_origin: Arc<Origin>,
 }
 
+/// Distinguishes `-error` from `-warning` in a [`Diagnostic`] event.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Severity {
+    /// `-error(...)`
+    Error,
+    /// `-warning(...)`
+    Warning,
+}
+
 /// Data of an [`Event::Diagnostic`].
 ///
-/// Payload details are filled in by later work on diagnostic
-/// directives.
+/// Describes an `-error` or `-warning` directive surfaced to the
+/// caller. The preprocessor never writes to stdout / stderr / a
+/// logger; the caller decides whether to abort, record, or ignore.
+/// State machine is not held pending: after this event, `step`
+/// returns the next event as usual.
 #[derive(Debug, Clone)]
-pub struct Diagnostic {}
+pub struct Diagnostic {
+    /// Whether this is `-error` or `-warning`.
+    pub severity: Severity,
+    /// Argument tokens inside the parentheses, kept as a flat
+    /// stream that includes hidden tokens (whitespace / comments)
+    /// — same convention as
+    /// [`MacroExpansionRequest::arguments`]'s inner streams. Each
+    /// token's `Origin` is the directive site's origin (the
+    /// `parent_origin` on this same struct); no macro expansion is
+    /// applied inside the arguments.
+    pub arguments: Vec<PreprocessedToken>,
+    /// Span of the whole directive (`-` through `.`).
+    pub directive_span: SourceSpan,
+    /// Span of the argument tokens. Kept as-is from the underlying
+    /// `ErrorDirective` / `WarningDirective`, which set it to run
+    /// from the first lexical token's start to the last lexical
+    /// token's end (hidden token edges are not included).
+    pub arg_span: SourceSpan,
+    /// Origin at the directive's site.
+    pub parent_origin: Arc<Origin>,
+}
 
 /// Data of an [`Event::AwaitingMacroExpansion`].
 ///

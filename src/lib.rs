@@ -26,7 +26,7 @@ pub use crate::error::{
 };
 pub use crate::event::{
     Branch, BranchBoundary, BranchBoundaryKind, ConditionalKind, ConditionalRequest, Diagnostic,
-    Event, IncludeKind, IncludeRequest, MacroExpansionRequest,
+    Event, IncludeKind, IncludeRequest, MacroExpansionRequest, Severity,
 };
 pub use crate::macros::{MacroDefinition, MacroKey, MacroTable};
 pub use crate::origin::{Origin, SourceInfoMacroKind};
