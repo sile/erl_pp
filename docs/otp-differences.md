@@ -104,27 +104,17 @@ than OTP, not less.
 
 ## Known corner cases
 
-### Function-like macro rescan is not yet implemented
+### Function-like rescan across the queue/cursor boundary
 
-When an expansion body contains a function-like call — a `?FOO(...)`
-literal in another macro's replacement — the queued `?`, `FOO`,
-`(`, arguments, and `)` tokens are emitted as raw tokens instead of
-being expanded. Constant-like rescan (`?BAR` in a body, `?BAR` an
-alias for something else) works.
-
-For example:
-
-```erlang
--define(WRAP(X), <<X>>).
--define(FOO, ?WRAP(42)).
-?FOO.
-```
-
-emits `?`, `WRAP`, `(`, `42`, `)` instead of `<< 42 >>`.
-
-This is tracked as a separate future change. The workaround is to
-avoid nesting a function-like macro inside another macro's body
-until the follow-up lands.
+Function-like rescan handles `?NAME(...)` when the whole call —
+the `?`, name, `(`, arguments, and `)` — sits inside the expansion
+queue (the usual case: the call is a literal inside another macro's
+body). If the queue holds only `?NAME` and the arguments start in
+the source cursor, erl_pp bails out and emits the `?`, name, and
+`(` as raw tokens. Real Erlang code rarely writes a naked `?NAME`
+at the very tail of a macro body whose caller supplies the
+argument list; keeping the boundary case out of scope avoids a
+speculative parse across two token producers.
 
 ### Cycles that cross a caller-response boundary
 
@@ -160,7 +150,8 @@ arity form alone as a macro argument.
 
 Within the design decisions above, erl_pp guarantees:
 
-- Constant-like and function-like macros expand.
+- Constant-like and function-like macros expand, including nested
+  function-like calls inside another macro's body (queued rescan).
 - OTP-style argument parsing including the fun_end sentinel and
   all `end`-terminated keyword blocks.
 - Middle empty arguments (`?FOO(A, , B)`) are valid arity-3
