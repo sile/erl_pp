@@ -38,7 +38,7 @@ use crate::directive::{Directive, parse_directive};
 use crate::error::{MacroCallErrorKind, PreprocessError, ProtocolError};
 use crate::event::{Event, MacroExpansionRequest};
 use crate::macros::{MacroDefinition, MacroKey, MacroTable};
-use crate::origin::Origin;
+use crate::origin::{Origin, SourceInfoMacroKind};
 use crate::preprocessed_token::PreprocessedToken;
 use crate::source::{Source, SourceId, SourceSpan, SourceStore};
 use crate::source_string::SourceString;
@@ -561,6 +561,14 @@ impl Preprocessor {
                     self.prepend_to_queue(expanded);
                     return MacroCallOutcome::Enqueued;
                 }
+                // erl_pp built-in `?FILE` / `?LINE`. User-defined
+                // macros with the same name would have hit above and
+                // shadow this path (matching OTP epp behaviour).
+                if let Some(outcome) =
+                    self.try_internal_source_info(&name_text, call_site, &parent_origin)
+                {
+                    return outcome;
+                }
             }
             Some(n) => {
                 if let Some(def) = self.macros.get_function(&name_text, n) {
@@ -602,6 +610,68 @@ impl Preprocessor {
     fn prepend_to_queue(&mut self, mut tokens: VecDeque<PreprocessedToken>) {
         tokens.append(&mut self.expansion_queue);
         self.expansion_queue = tokens;
+    }
+
+    /// Evaluates `?FILE` or `?LINE` internally when the caller has
+    /// not shadowed them via `-define`.
+    ///
+    /// Returns `Some` when the name matches one of the built-ins and
+    /// the synth source was queued; returns `None` for any other name
+    /// so the caller can fall through to the caller-driven expansion
+    /// event.
+    fn try_internal_source_info(
+        &mut self,
+        name_text: &str,
+        call_site: SourceSpan,
+        parent_origin: &Arc<Origin>,
+    ) -> Option<MacroCallOutcome> {
+        let (kind, synth_text, display_name) = match name_text {
+            "FILE" => {
+                let outer = outermost_call_context(parent_origin, call_site);
+                let outer_source = self.sources.get(outer.source_id);
+                let escaped = escape_erlang_string(outer_source.display_name());
+                let display = format!(
+                    "<synth:?FILE at {}:{}>",
+                    outer_source.display_name(),
+                    outer.start.line()
+                );
+                (SourceInfoMacroKind::File, escaped, display)
+            }
+            "LINE" => {
+                let outer = outermost_call_context(parent_origin, call_site);
+                let outer_source = self.sources.get(outer.source_id);
+                let synth = outer.start.line().to_string();
+                let display = format!(
+                    "<synth:?LINE at {}:{}>",
+                    outer_source.display_name(),
+                    outer.start.line()
+                );
+                (SourceInfoMacroKind::Line, synth, display)
+            }
+            _ => return None,
+        };
+        // Synthesize the source. Because the text was built from a
+        // simple integer or a well-escaped string literal, the scan
+        // is expected to succeed.
+        let (source_arc, source_id) = synthesize_source(&self.sources, display_name, synth_text)
+            .expect("synth text for ?FILE/?LINE always tokenizes");
+        let mut expanded: VecDeque<PreprocessedToken> =
+            VecDeque::with_capacity(source_arc.tokens().len());
+        for token in source_arc.tokens() {
+            let origin = Origin::SourceInfo {
+                parent: Arc::clone(parent_origin),
+                call_site,
+                kind,
+            };
+            expanded.push_back(PreprocessedToken::new(
+                *token,
+                Arc::clone(&source_arc),
+                source_id,
+                origin,
+            ));
+        }
+        self.prepend_to_queue(expanded);
+        Some(MacroCallOutcome::Enqueued)
     }
 
     /// Attempts to rescan a `?NAME` macro call whose `?` sits at the
@@ -772,6 +842,76 @@ enum MacroCallOutcome {
 
 fn is_symbol(token: Token, sym: Symbol) -> bool {
     matches!(token.kind(), TokenKind::Symbol(s) if s == sym)
+}
+
+/// Scans `text` and appends the resulting immutable [`Source`] to
+/// `sources`, returning both the shared handle and the newly issued
+/// [`SourceId`].
+///
+/// Used to materialise the small pseudo sources that hold the synth
+/// text of `?FILE` / `?LINE` (and, in later phases, `??Param`).
+fn synthesize_source(
+    sources: &Arc<SourceStore>,
+    display_name: String,
+    text: String,
+) -> Result<(Arc<Source>, SourceId), erl_tokenize::Error> {
+    let mut tokens = Vec::new();
+    let mut position = Position::new();
+    while let Some(token) = erl_tokenize::scan_token(&text, position)? {
+        position = token.end();
+        tokens.push(token);
+    }
+    let source = Source::new(display_name, text, tokens);
+    let source_id = sources.append(source);
+    let source_arc = sources.get(source_id);
+    Ok((source_arc, source_id))
+}
+
+/// Walks the origin chain to find the outermost non-macro
+/// [`SourceSpan`] — the position in the top-level (or included)
+/// source where the currently expanding macro was actually invoked
+/// by the user, matching OTP's "annotation of the call site" rule
+/// for `?LINE` and `?FILE`.
+fn outermost_call_context(origin: &Origin, current_call_site: SourceSpan) -> SourceSpan {
+    match origin {
+        Origin::Source | Origin::Include(_) => current_call_site,
+        Origin::MacroBody {
+            parent, call_site, ..
+        }
+        | Origin::MacroArgument {
+            parent, call_site, ..
+        }
+        | Origin::Stringification {
+            parent, call_site, ..
+        }
+        | Origin::SourceInfo {
+            parent, call_site, ..
+        }
+        | Origin::CallerExpansion {
+            parent, call_site, ..
+        } => outermost_call_context(parent, *call_site),
+    }
+}
+
+/// Escapes `s` as an Erlang double-quoted string literal, quoting the
+/// value and backslash-escaping characters that the tokenizer would
+/// otherwise refuse to parse (`"`, `\`, and the common control
+/// characters).
+fn escape_erlang_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            _ => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 /// Builds a [`MacroCallOutcome::Fire`] carrying a
@@ -1893,6 +2033,97 @@ mod tests {
     }
 
     // ---- End of Phase 9 tests ---------------------------------------
+
+    // ---- Phase 10: ?FILE / ?LINE ------------------------------------
+
+    #[test]
+    fn file_expands_to_source_display_name_as_string_literal() {
+        let mut pp = make("?FILE.");
+        loop {
+            match pp.step().expect("no protocol errors") {
+                Event::Token(ppt) if ppt.token().kind().is_lexical() => {
+                    // The synth token should be a String whose decoded
+                    // value is "main.erl".
+                    assert!(matches!(
+                        ppt.value(),
+                        erl_tokenize::TokenValue::String(ref cow) if cow.as_ref() == "main.erl"
+                    ));
+                    assert!(matches!(
+                        ppt.origin(),
+                        Origin::SourceInfo {
+                            kind: SourceInfoMacroKind::File,
+                            ..
+                        }
+                    ));
+                    return;
+                }
+                Event::Complete => panic!("expected ?FILE synth token"),
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
+    fn line_expands_to_integer_literal_at_call_site() {
+        // ?LINE on the second line should evaluate to 2.
+        let mut pp = make("\n?LINE.");
+        loop {
+            match pp.step().expect("no protocol errors") {
+                Event::Token(ppt) if ppt.text() == "2" => {
+                    assert!(matches!(
+                        ppt.token().kind(),
+                        erl_tokenize::TokenKind::Integer
+                    ));
+                    assert!(matches!(
+                        ppt.origin(),
+                        Origin::SourceInfo {
+                            kind: SourceInfoMacroKind::Line,
+                            ..
+                        }
+                    ));
+                    return;
+                }
+                Event::Complete => panic!("expected ?LINE synth token"),
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
+    fn line_inside_macro_body_uses_outer_call_site() {
+        // -define(FOO, ?LINE) on line 1. ?FOO on line 2. Expansion
+        // should evaluate ?LINE to 2 (the outer call site), not 1
+        // (the ?LINE token's own line inside the definition).
+        let mut pp = make("-define(FOO, ?LINE).\n?FOO.");
+        loop {
+            match pp.step().expect("no protocol errors") {
+                Event::Token(ppt) if ppt.text() == "2" => {
+                    return;
+                }
+                Event::Complete => panic!("expected `2` synth token"),
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
+    fn user_shadow_of_file_wins() {
+        // A user `-define(FILE, custom)` shadows the built-in
+        // evaluation; the tokens should carry the user's atom.
+        let mut pp = make("-define(FILE, custom).\n?FILE.");
+        loop {
+            match pp.step().expect("no protocol errors") {
+                Event::Token(ppt) if ppt.text() == "custom" => {
+                    assert!(matches!(ppt.origin(), Origin::MacroBody { .. }));
+                    return;
+                }
+                Event::Complete => panic!("expected `custom` token"),
+                _ => {}
+            }
+        }
+    }
+
+    // ---- End of Phase 10 tests --------------------------------------
 
     #[test]
     fn clone_isolates_macro_table_updates() {
