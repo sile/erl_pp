@@ -28,18 +28,20 @@
               boxing every Result would add allocation overhead on every define"
 )]
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 
-use erl_tokenize::{Symbol, Token, TokenKind};
+use erl_tokenize::{Symbol, Token, TokenKind, TokenValue};
 
 use crate::cursor::Cursor;
 use crate::directive::{Directive, parse_directive};
 use crate::error::{PreprocessError, ProtocolError};
-use crate::event::Event;
+use crate::event::{Event, MacroExpansionRequest};
 use crate::macros::{MacroDefinition, MacroTable};
 use crate::origin::Origin;
 use crate::preprocessed_token::PreprocessedToken;
-use crate::source::{Source, SourceStore};
+use crate::source::{Source, SourceSpan, SourceStore};
+use crate::source_string::SourceString;
 
 /// Sans-I/O preprocessor state machine.
 ///
@@ -83,6 +85,12 @@ pub struct Preprocessor {
     /// after a successful directive parse (the parser consumed the
     /// terminating `.`) or after a lexical `.` symbol is bumped.
     at_form_boundary: bool,
+    /// Tokens queued for emission as the result of a macro expansion.
+    ///
+    /// Drained by [`Preprocessor::step`] before consulting the cursor,
+    /// so a `?FOO` call finished during this or an earlier step
+    /// surfaces its replacement before scanning continues.
+    expansion_queue: VecDeque<PreprocessedToken>,
 }
 
 /// State-machine state.
@@ -98,13 +106,26 @@ enum State {
     AwaitingConditionalDecision,
     /// The scan loop emitted [`Event::AwaitingMacroExpansion`] and is
     /// waiting for a [`Preprocessor::resume_macro_expansion`] call.
-    #[expect(
-        dead_code,
-        reason = "constructed by later macro-expansion fire-side work"
-    )]
-    AwaitingMacroExpansion,
+    /// The payload retains what the resume path needs to attach the
+    /// caller-supplied tokens to the right call site.
+    AwaitingMacroExpansion(PendingExpansion),
     /// The input has been fully processed.
     Completed,
+}
+
+/// Bookkeeping saved while an [`Event::AwaitingMacroExpansion`] is
+/// pending, used to build the correct [`Origin::CallerExpansion`] for
+/// the response tokens.
+#[derive(Debug, Clone)]
+struct PendingExpansion {
+    /// Name of the requested macro, echoed on every response token's
+    /// origin.
+    name: SourceString,
+    /// Span of the whole `?NAME(...)` call at the call site.
+    call_site: SourceSpan,
+    /// Origin at the call site itself; response tokens hang under this
+    /// as their parent origin.
+    parent_origin: Arc<Origin>,
 }
 
 /// Public view of the preprocessor's state.
@@ -148,6 +169,7 @@ impl Preprocessor {
             macros: MacroTable::new(),
             state: State::Scanning,
             at_form_boundary: true,
+            expansion_queue: VecDeque::new(),
         }
     }
 
@@ -223,11 +245,11 @@ impl Preprocessor {
     /// This is a read-only view; call the appropriate response method
     /// to advance state.
     pub fn status(&self) -> Status {
-        match self.state {
+        match &self.state {
             State::Scanning => Status::Scanning,
             State::AwaitingIncludeResolution => Status::AwaitingIncludeResolution,
             State::AwaitingConditionalDecision => Status::AwaitingConditionalDecision,
-            State::AwaitingMacroExpansion => Status::AwaitingMacroExpansion,
+            State::AwaitingMacroExpansion(_) => Status::AwaitingMacroExpansion,
             State::Completed => Status::Completed,
         }
     }
@@ -238,10 +260,10 @@ impl Preprocessor {
     /// machine is awaiting a response; the caller must respond before
     /// calling this method again.
     pub fn step(&mut self) -> Result<Event, ProtocolError> {
-        match self.state {
+        match &self.state {
             State::AwaitingIncludeResolution
             | State::AwaitingConditionalDecision
-            | State::AwaitingMacroExpansion => Err(ProtocolError::StepWhilePending),
+            | State::AwaitingMacroExpansion(_) => Err(ProtocolError::StepWhilePending),
             State::Completed => Ok(Event::Complete),
             State::Scanning => Ok(self.step_scan()),
         }
@@ -262,20 +284,36 @@ impl Preprocessor {
     /// * [`ProtocolError::WrongResponseKind`] when the machine is
     ///   awaiting a different response (include, conditional).
     pub fn resume_macro_expansion(&mut self, source: Source) -> Result<(), ProtocolError> {
-        match self.state {
-            State::AwaitingMacroExpansion => {
-                self.sources.append(source);
-                // The fire side (Phase 5+) will queue the tokens for
-                // emission; for now the caller-supplied source is
-                // stored and the machine returns to Scanning.
-                self.state = State::Scanning;
-                Ok(())
-            }
+        match &self.state {
+            State::AwaitingMacroExpansion(_) => {}
             State::AwaitingIncludeResolution | State::AwaitingConditionalDecision => {
-                Err(ProtocolError::WrongResponseKind)
+                return Err(ProtocolError::WrongResponseKind);
             }
-            State::Scanning | State::Completed => Err(ProtocolError::UnexpectedResponse),
+            State::Scanning | State::Completed => {
+                return Err(ProtocolError::UnexpectedResponse);
+            }
         }
+        let State::AwaitingMacroExpansion(pending) =
+            std::mem::replace(&mut self.state, State::Scanning)
+        else {
+            unreachable!("state was checked immediately above");
+        };
+        let source_id = self.sources.append(source);
+        let source_arc = self.sources.get(source_id);
+        for token in source_arc.tokens() {
+            let origin = Origin::CallerExpansion {
+                parent: Arc::clone(&pending.parent_origin),
+                call_site: pending.call_site,
+                name: pending.name.clone(),
+            };
+            self.expansion_queue.push_back(PreprocessedToken::new(
+                *token,
+                Arc::clone(&source_arc),
+                source_id,
+                origin,
+            ));
+        }
+        Ok(())
     }
 
     /// Runs the scan loop until it can produce one event.
@@ -283,6 +321,14 @@ impl Preprocessor {
     /// See the module rustdoc for the loop contract.
     fn step_scan(&mut self) -> Event {
         loop {
+            // Drain any pending macro-expansion tokens first so that
+            // expansions surface in order before further scanning.
+            if let Some(ppt) = self.expansion_queue.pop_front() {
+                let token = *ppt.token();
+                self.update_form_boundary_after_bump(token);
+                return Event::Token(ppt);
+            }
+
             if self.cursor.is_at_eof() {
                 if let Some(parent) = self.include_stack.pop() {
                     self.cursor = parent;
@@ -322,6 +368,22 @@ impl Preprocessor {
                 }
             }
 
+            // Check for a macro call at the cursor before doing the
+            // normal bump. try_recognize_macro_call consumes the call
+            // when it matches, either queuing an expansion or emitting
+            // an AwaitingMacroExpansion event; when it does not match,
+            // it leaves the cursor untouched.
+            if matches!(
+                self.cursor.peek(),
+                Some(t) if is_symbol(t, Symbol::Question)
+            ) {
+                match self.try_recognize_macro_call() {
+                    MacroCallOutcome::Fire(event) => return *event,
+                    MacroCallOutcome::Enqueued => continue,
+                    MacroCallOutcome::NotACall => {}
+                }
+            }
+
             match self.cursor.bump() {
                 Some(token) => {
                     self.update_form_boundary_after_bump(token);
@@ -335,6 +397,111 @@ impl Preprocessor {
                 }
                 None => continue,
             }
+        }
+    }
+
+    /// Attempts to recognize a `?NAME` macro call at the cursor.
+    ///
+    /// Called only when the next raw token is `?`. Handles the
+    /// constant-like shape (`?NAME`, no arguments) in this phase; the
+    /// function-like shape (`?NAME(...)`) is left to a later phase
+    /// and reported as [`MacroCallOutcome::NotACall`] with the cursor
+    /// restored.
+    fn try_recognize_macro_call(&mut self) -> MacroCallOutcome {
+        let entry = self.cursor.checkpoint();
+        let question_tok = self
+            .cursor
+            .bump()
+            .expect("caller checked next token is `?`");
+
+        let Some(name_tok) = self.cursor.peek_lexical() else {
+            self.cursor.restore(entry);
+            return MacroCallOutcome::NotACall;
+        };
+        // `??` prefix is a stringification — deferred to a later phase.
+        if is_symbol(name_tok, Symbol::Question) {
+            self.cursor.restore(entry);
+            return MacroCallOutcome::NotACall;
+        }
+        if !matches!(name_tok.kind(), TokenKind::Atom | TokenKind::Variable) {
+            self.cursor.restore(entry);
+            return MacroCallOutcome::NotACall;
+        }
+
+        // Consume through the name token so the cursor sits just past
+        // it. Any hidden tokens between `?` and the name are absorbed
+        // by the call and dropped from the output stream (matching
+        // OTP epp's behaviour on a whitespace-free token stream).
+        while let Some(t) = self.cursor.bump() {
+            if t.start() == name_tok.start() {
+                break;
+            }
+        }
+
+        // Look one lexical token ahead; a `(` here indicates a
+        // function-like call which this phase cannot handle yet.
+        let inner = self.cursor.checkpoint();
+        let is_function_like = matches!(
+            self.cursor.peek_lexical(),
+            Some(t) if is_symbol(t, Symbol::OpenParen)
+        );
+        self.cursor.restore(inner);
+        if is_function_like {
+            self.cursor.restore(entry);
+            return MacroCallOutcome::NotACall;
+        }
+
+        let source_id = self.cursor.source_id();
+        let source_text = self.cursor.source_text();
+        let name_text = match name_tok.value(source_text) {
+            TokenValue::Atom(cow) => cow.into_owned(),
+            TokenValue::Variable(name) => name.to_owned(),
+            _ => {
+                // Shouldn't happen given the kind check above, but
+                // fall back to non-call rather than panic.
+                self.cursor.restore(entry);
+                return MacroCallOutcome::NotACall;
+            }
+        };
+        let call_site = SourceSpan::new(source_id, question_tok.start(), name_tok.end());
+        let name_span = SourceSpan::new(source_id, name_tok.start(), name_tok.end());
+        let name_ss = SourceString::new(name_text.clone(), name_span);
+
+        if let Some(def) = self.macros.get_constant(&name_text) {
+            // Table hit — enqueue the replacement tokens, wrapping
+            // each token's existing origin under a new
+            // Origin::MacroBody whose call_site points at the call
+            // and whose definition_span points at the `-define(...)`
+            // directive.
+            let parent_origin = Arc::new(Origin::Source);
+            let definition_span = def.directive_span;
+            for replacement in &def.replacement {
+                let origin = Origin::MacroBody {
+                    parent: Arc::clone(&parent_origin),
+                    call_site,
+                    definition_span,
+                };
+                let token = *replacement.token();
+                let source = Arc::clone(replacement.source());
+                let source_id = replacement.source_span().source_id;
+                self.expansion_queue
+                    .push_back(PreprocessedToken::new(token, source, source_id, origin));
+            }
+            MacroCallOutcome::Enqueued
+        } else {
+            let parent_origin = Arc::new(Origin::Source);
+            let request = MacroExpansionRequest {
+                name: name_ss.clone(),
+                arity: None,
+                call_site,
+                arguments: Vec::new(),
+            };
+            self.state = State::AwaitingMacroExpansion(PendingExpansion {
+                name: name_ss,
+                call_site,
+                parent_origin,
+            });
+            MacroCallOutcome::Fire(Box::new(Event::AwaitingMacroExpansion(request)))
         }
     }
 
@@ -379,8 +546,29 @@ impl Clone for Preprocessor {
             macros: self.macros.clone(),
             state: self.state.clone(),
             at_form_boundary: self.at_form_boundary,
+            expansion_queue: self.expansion_queue.clone(),
         }
     }
+}
+
+/// Outcome of one macro-call recognition attempt inside the scan loop.
+enum MacroCallOutcome {
+    /// The scanner recognized a call and produced an event
+    /// (`Event::AwaitingMacroExpansion`) that needs to be returned
+    /// immediately by the current `step`. Boxed because the event
+    /// payload is the largest branch of the enum.
+    Fire(Box<Event>),
+    /// The scanner recognized a call and queued its expansion result;
+    /// the surrounding loop should continue and let the queue drain.
+    Enqueued,
+    /// The cursor did not look like a macro call at all; the cursor
+    /// has been restored so the caller can proceed with the normal
+    /// bump path.
+    NotACall,
+}
+
+fn is_symbol(token: Token, sym: Symbol) -> bool {
+    matches!(token.kind(), TokenKind::Symbol(s) if s == sym)
 }
 
 impl std::fmt::Debug for Preprocessor {
@@ -486,6 +674,131 @@ mod tests {
                 .expect_err("protocol error expected"),
             ProtocolError::UnexpectedResponse
         );
+    }
+
+    #[test]
+    fn constant_like_call_with_table_hit_expands_from_body() {
+        let mut pp = make("-define(FOO, bar).\n?FOO.");
+        let mut texts = Vec::new();
+        loop {
+            match pp.step().expect("no protocol errors") {
+                Event::Token(ppt) => texts.push(ppt.text().to_owned()),
+                Event::Directive(Directive::Define(_)) => {}
+                Event::Complete => break,
+                other => panic!("unexpected event: {other:?}"),
+            }
+        }
+        // Whitespace, the expanded `bar`, then the trailing dot.
+        assert!(texts.contains(&"bar".to_owned()));
+        assert!(texts.contains(&".".to_owned()));
+    }
+
+    #[test]
+    fn constant_like_expanded_token_carries_macro_body_origin() {
+        let mut pp = make("-define(FOO, bar).\n?FOO.");
+        loop {
+            match pp.step().expect("no protocol errors") {
+                Event::Token(ppt) if ppt.text() == "bar" => {
+                    let Origin::MacroBody { call_site, .. } = ppt.origin() else {
+                        panic!("expected MacroBody origin, got {:?}", ppt.origin());
+                    };
+                    // Call site points at the `?FOO` in the source.
+                    assert!(call_site.start.offset() < call_site.end.offset());
+                    return;
+                }
+                Event::Complete => panic!("bar token never emitted"),
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
+    fn constant_like_call_without_table_fires_awaiting_event() {
+        let mut pp = make("?UNKNOWN.");
+        let event = pp.step().expect("no protocol errors");
+        let request = match event {
+            Event::AwaitingMacroExpansion(req) => req,
+            other => panic!("expected AwaitingMacroExpansion, got {other:?}"),
+        };
+        assert_eq!(request.name.as_str(), "UNKNOWN");
+        assert_eq!(request.arity, None);
+        assert!(request.arguments.is_empty());
+        assert!(matches!(pp.status(), Status::AwaitingMacroExpansion));
+    }
+
+    #[test]
+    fn resume_macro_expansion_enqueues_response_tokens() {
+        let mut pp = make("?UNKNOWN.");
+        let request = match pp.step().expect("no protocol errors") {
+            Event::AwaitingMacroExpansion(req) => req,
+            other => panic!("expected AwaitingMacroExpansion, got {other:?}"),
+        };
+        let response = Source::from_text("<synth:UNKNOWN>", "bar");
+        pp.resume_macro_expansion(response).expect("resume accepts");
+        // The response token surfaces before the trailing dot.
+        let ppt = match pp.step().expect("no protocol errors") {
+            Event::Token(t) => t,
+            other => panic!("expected token from response, got {other:?}"),
+        };
+        assert_eq!(ppt.text(), "bar");
+        let Origin::CallerExpansion {
+            call_site: origin_call_site,
+            name,
+            ..
+        } = ppt.origin()
+        else {
+            panic!("expected CallerExpansion origin, got {:?}", ppt.origin());
+        };
+        assert_eq!(*origin_call_site, request.call_site);
+        assert_eq!(name.as_str(), "UNKNOWN");
+    }
+
+    #[test]
+    fn resume_macro_expansion_with_empty_source_skips_call() {
+        let mut pp = make("?UNKNOWN.");
+        let _request = match pp.step().expect("no protocol errors") {
+            Event::AwaitingMacroExpansion(req) => req,
+            other => panic!("expected AwaitingMacroExpansion, got {other:?}"),
+        };
+        let empty_response = Source::from_text("<synth:UNKNOWN>", "");
+        pp.resume_macro_expansion(empty_response)
+            .expect("resume accepts");
+        // Next token is the trailing dot, no error event surfaces.
+        let ppt = match pp.step().expect("no protocol errors") {
+            Event::Token(t) => t,
+            other => panic!("expected token, got {other:?}"),
+        };
+        assert_eq!(ppt.text(), ".");
+    }
+
+    #[test]
+    fn step_while_awaiting_macro_expansion_is_protocol_error() {
+        let mut pp = make("?UNKNOWN.");
+        pp.step().expect("first step yields Awaiting event");
+        assert_eq!(
+            pp.step().expect_err("second step is a protocol error"),
+            ProtocolError::StepWhilePending
+        );
+    }
+
+    #[test]
+    fn function_like_call_is_not_recognized_yet() {
+        // The function-like shape is deferred to a later phase, so the
+        // `?` and the name here should surface as regular tokens.
+        let mut pp = make("?FOO(1).");
+        let mut texts = Vec::new();
+        loop {
+            match pp.step().expect("no protocol errors") {
+                Event::Token(ppt) => texts.push(ppt.text().to_owned()),
+                Event::Complete => break,
+                other => panic!("unexpected event: {other:?}"),
+            }
+        }
+        assert!(texts.contains(&"?".to_owned()));
+        assert!(texts.contains(&"FOO".to_owned()));
+        assert!(texts.contains(&"(".to_owned()));
+        assert!(texts.contains(&"1".to_owned()));
+        assert!(texts.contains(&")".to_owned()));
     }
 
     #[test]
