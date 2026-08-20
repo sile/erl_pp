@@ -10,18 +10,19 @@ use std::sync::Arc;
 use crate::source::SourceSpan;
 use crate::source_string::SourceString;
 
-/// Kind of predefined macro that a synthesized token came from.
+/// Which source-info macro a synthesized token came from.
 ///
-/// Attached to [`Origin::Predefined`] so callers can distinguish the
-/// three built-in predefined macros the preprocessor expands.
+/// Attached to [`Origin::SourceInfo`]. Distinguishes the two
+/// predefined macros the preprocessor evaluates from the current
+/// cursor state (source display name and line number). Every other
+/// predefined-in-OTP macro is out of scope for erl_pp itself and
+/// reaches the caller through `Event::AwaitingMacroExpansion`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum PredefinedMacroKind {
+pub enum SourceInfoMacroKind {
     /// `?FILE` — the display name of the current source.
     File,
     /// `?LINE` — the line number at the call site.
     Line,
-    /// `?MACHINE` — atom `'BEAM'`.
-    Machine,
 }
 
 /// Provenance of a token emitted by the preprocessor.
@@ -85,16 +86,24 @@ pub enum Origin {
         definition_span: SourceSpan,
     },
 
-    /// Token was synthesized by a predefined macro
-    /// (`?FILE`, `?LINE`, `?MACHINE`).
-    Predefined {
-        /// Parent origin (the origin at the predefined macro use site).
+    /// Token was synthesized from the current source cursor state
+    /// (`?FILE`, `?LINE`).
+    ///
+    /// Every other OTP predefined macro (`?MACHINE`, `?MODULE`,
+    /// `?FUNCTION_NAME`, etc.) is out of scope for erl_pp itself and
+    /// is delegated to the caller through
+    /// `Event::AwaitingMacroExpansion`. Caller-supplied macros
+    /// registered via `Preprocessor::define_initial` expand through
+    /// the normal user-macro path and carry [`Origin::MacroBody`],
+    /// not this variant.
+    SourceInfo {
+        /// Parent origin (the origin at the macro use site).
         parent: Arc<Origin>,
-        /// Span covering the `?FILE` / `?LINE` / `?MACHINE` token pair
-        /// at the call site.
+        /// Span covering the `?FILE` / `?LINE` token pair at the call
+        /// site.
         call_site: SourceSpan,
-        /// Which predefined macro this token came from.
-        kind: PredefinedMacroKind,
+        /// Which source-info macro this token came from.
+        kind: SourceInfoMacroKind,
     },
 }
 
@@ -126,7 +135,7 @@ mod tests {
             Origin::MacroBody { .. } => "macro_body",
             Origin::MacroArgument { .. } => "macro_argument",
             Origin::Stringification { .. } => "stringification",
-            Origin::Predefined { .. } => "predefined",
+            Origin::SourceInfo { .. } => "source_info",
         }
     }
 
@@ -158,10 +167,10 @@ mod tests {
                 parameter: param,
                 definition_span: span,
             },
-            Origin::Predefined {
+            Origin::SourceInfo {
                 parent: dummy_parent(),
                 call_site: span,
-                kind: PredefinedMacroKind::File,
+                kind: SourceInfoMacroKind::File,
             },
         ];
         let kinds: Vec<_> = all.iter().map(kind_label).collect();
@@ -173,7 +182,7 @@ mod tests {
                 "macro_body",
                 "macro_argument",
                 "stringification",
-                "predefined",
+                "source_info",
             ]
         );
     }

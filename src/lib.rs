@@ -26,7 +26,7 @@ pub use crate::error::{
 };
 pub use crate::event::{BranchBoundary, ConditionalRequest, Diagnostic, Event, IncludeRequest};
 pub use crate::macros::{MacroDefinition, MacroKey, MacroTable};
-pub use crate::origin::{Origin, PredefinedMacroKind};
+pub use crate::origin::{Origin, SourceInfoMacroKind};
 pub use crate::preprocessed_token::PreprocessedToken;
 pub use crate::preprocessor::{Preprocessor, Status};
 pub use crate::source::{Source, SourceId, SourceSpan, SourceStore};
