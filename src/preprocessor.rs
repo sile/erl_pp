@@ -578,9 +578,26 @@ impl Preprocessor {
                     {
                         return fire_circular(name_text, Some(n), call_site, chain);
                     }
-                    let expanded = expand_function_like(def, &arguments, call_site, &parent_origin);
-                    self.prepend_to_queue(expanded);
-                    return MacroCallOutcome::Enqueued;
+                    match expand_function_like(
+                        def,
+                        &arguments,
+                        call_site,
+                        &parent_origin,
+                        &self.sources,
+                    ) {
+                        Ok(expanded) => {
+                            self.prepend_to_queue(expanded);
+                            return MacroCallOutcome::Enqueued;
+                        }
+                        Err(kind) => {
+                            return MacroCallOutcome::Fire(Box::new(Event::PreprocessError(
+                                PreprocessError::MacroCall {
+                                    span: call_site,
+                                    kind,
+                                },
+                            )));
+                        }
+                    }
                 }
             }
         }
@@ -1010,13 +1027,63 @@ fn expand_function_like(
     arguments: &[Vec<PreprocessedToken>],
     call_site: SourceSpan,
     parent_origin: &Arc<Origin>,
-) -> VecDeque<PreprocessedToken> {
+    sources: &Arc<SourceStore>,
+) -> Result<VecDeque<PreprocessedToken>, MacroCallErrorKind> {
     let definition_span = def.directive_span;
     let mut out: VecDeque<PreprocessedToken> = VecDeque::new();
-    for replacement in &def.replacement {
-        let token = *replacement.token();
+    let repl = &def.replacement;
+    let mut i = 0;
+    while i < repl.len() {
+        let token = *repl[i].token();
+
+        // Recognize `??Param` before falling into the normal
+        // parameter-substitution path. The pattern is `?` + hidden* +
+        // `?` + hidden* + Variable-that-matches-a-parameter.
+        if is_symbol(token, Symbol::Question)
+            && let Some(next_idx) = find_next_lexical_index(repl, i + 1)
+            && is_symbol(*repl[next_idx].token(), Symbol::Question)
+        {
+            let target_idx = match find_next_lexical_index(repl, next_idx + 1) {
+                Some(idx) => idx,
+                None => {
+                    return Err(MacroCallErrorKind::InvalidStringificationTarget {
+                        span: repl[next_idx].source_span(),
+                    });
+                }
+            };
+            let target_ppt = &repl[target_idx];
+            let target_tok = *target_ppt.token();
+            if target_tok.kind() != TokenKind::Variable {
+                return Err(MacroCallErrorKind::InvalidStringificationTarget {
+                    span: target_ppt.source_span(),
+                });
+            }
+            let var_text = target_tok.text(target_ppt.source().text());
+            let Some(param_idx) = def.params.iter().position(|p| p.name.as_str() == var_text)
+            else {
+                return Err(MacroCallErrorKind::InvalidStringificationTarget {
+                    span: target_ppt.source_span(),
+                });
+            };
+            let parameter = def.params[param_idx].name.clone();
+            let argument = &arguments[param_idx];
+            let synth_tokens = stringify_argument(
+                argument,
+                sources,
+                call_site,
+                parameter,
+                definition_span,
+                parent_origin,
+            );
+            for t in synth_tokens {
+                out.push_back(t);
+            }
+            i = target_idx + 1;
+            continue;
+        }
+
         if token.kind() == TokenKind::Variable {
-            let var_text = token.text(replacement.source().text());
+            let var_text = token.text(repl[i].source().text());
             if let Some(idx) = def.params.iter().position(|p| p.name.as_str() == var_text)
                 && idx < arguments.len()
             {
@@ -1028,11 +1095,12 @@ fn expand_function_like(
                         parameter: parameter.clone(),
                         definition_span,
                     };
-                    let token = *arg_tok.token();
+                    let arg_token = *arg_tok.token();
                     let source = Arc::clone(arg_tok.source());
                     let source_id = arg_tok.source_span().source_id;
-                    out.push_back(PreprocessedToken::new(token, source, source_id, origin));
+                    out.push_back(PreprocessedToken::new(arg_token, source, source_id, origin));
                 }
+                i += 1;
                 continue;
             }
         }
@@ -1041,11 +1109,81 @@ fn expand_function_like(
             call_site,
             definition_span,
         };
-        let source = Arc::clone(replacement.source());
-        let source_id = replacement.source_span().source_id;
+        let source = Arc::clone(repl[i].source());
+        let source_id = repl[i].source_span().source_id;
         out.push_back(PreprocessedToken::new(token, source, source_id, origin));
+        i += 1;
     }
-    out
+    Ok(out)
+}
+
+/// Returns the index of the next lexical token in `tokens` at or
+/// after `start`, or `None` if none is found before the slice runs
+/// out.
+fn find_next_lexical_index(tokens: &[PreprocessedToken], start: usize) -> Option<usize> {
+    (start..tokens.len()).find(|&i| tokens[i].token().kind().is_lexical())
+}
+
+/// Materialises a stringified argument as a single Erlang string
+/// literal token, matching the OTP `epp:stringify/2` shape: keep only
+/// lexical tokens, print each with a per-kind formatter, and join
+/// them with a single space.
+fn stringify_argument(
+    argument: &[PreprocessedToken],
+    sources: &Arc<SourceStore>,
+    call_site: SourceSpan,
+    parameter: SourceString,
+    definition_span: SourceSpan,
+    parent_origin: &Arc<Origin>,
+) -> Vec<PreprocessedToken> {
+    let parts: Vec<String> = argument
+        .iter()
+        .filter(|ppt| ppt.token().kind().is_lexical())
+        .map(stringify_token_text)
+        .collect();
+    let joined = parts.join(" ");
+    let synth_text = escape_erlang_string(&joined);
+    let display_name = format!("<synth:??{} at {}:{}>", parameter.as_str(), "?", "?");
+    let (source_arc, source_id) = synthesize_source(sources, display_name, synth_text)
+        .expect("synth text for ??Param always tokenizes as a string literal");
+    source_arc
+        .tokens()
+        .iter()
+        .map(|t| {
+            PreprocessedToken::new(
+                *t,
+                Arc::clone(&source_arc),
+                source_id,
+                Origin::Stringification {
+                    parent: Arc::clone(parent_origin),
+                    call_site,
+                    parameter: parameter.clone(),
+                    definition_span,
+                },
+            )
+        })
+        .collect()
+}
+
+/// Formats a single argument token into the text form that OTP's
+/// `token_src/1` produces for `stringify_1/1`.
+fn stringify_token_text(ppt: &PreprocessedToken) -> String {
+    let token = *ppt.token();
+    let source_text = ppt.source().text();
+    // Integer / Float use the decoded value when the tokenizer
+    // produced one; other kinds pass through the source text.
+    match token.value(source_text) {
+        TokenValue::Integer(Some(n)) => n.to_string(),
+        TokenValue::Float(f) => {
+            let s = f.to_string();
+            if s.contains('.') || s.contains('e') || s.contains('E') {
+                s
+            } else {
+                format!("{s}.0")
+            }
+        }
+        _ => token.text(source_text).to_owned(),
+    }
 }
 
 /// Delimiter stack entry used while parsing macro-call arguments.
@@ -2124,6 +2262,90 @@ mod tests {
     }
 
     // ---- End of Phase 10 tests --------------------------------------
+
+    // ---- Phase 11: ??Param stringification --------------------------
+
+    fn expect_stringified_value(pp: &mut Preprocessor) -> String {
+        loop {
+            match pp.step().expect("no protocol errors") {
+                Event::Token(ppt) if ppt.token().kind() == erl_tokenize::TokenKind::String => {
+                    let erl_tokenize::TokenValue::String(cow) = ppt.value() else {
+                        panic!("expected string value")
+                    };
+                    return cow.into_owned();
+                }
+                Event::Complete => panic!("expected string token"),
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
+    fn stringification_of_atom_argument() {
+        let mut pp = make("-define(S(A), ??A).\n?S(hello).");
+        assert_eq!(expect_stringified_value(&mut pp), "hello");
+    }
+
+    #[test]
+    fn stringification_of_multi_token_argument() {
+        let mut pp = make("-define(S(A), ??A).\n?S(x + 1).");
+        assert_eq!(expect_stringified_value(&mut pp), "x + 1");
+    }
+
+    #[test]
+    fn stringification_drops_hidden_tokens() {
+        // Whitespace inside the argument should not survive
+        // stringification; consecutive lexical tokens are joined by a
+        // single space regardless of the source spacing.
+        let mut pp = make("-define(S(A), ??A).\n?S(a       b).");
+        assert_eq!(expect_stringified_value(&mut pp), "a b");
+    }
+
+    #[test]
+    fn stringification_uses_decoded_integer_value() {
+        // `16#FF` in the argument should be stringified to `"255"`,
+        // not `"16#FF"`, because Integer stringification uses the
+        // decoded value.
+        let mut pp = make("-define(S(A), ??A).\n?S(16#FF).");
+        assert_eq!(expect_stringified_value(&mut pp), "255");
+    }
+
+    #[test]
+    fn stringification_token_carries_stringification_origin() {
+        let mut pp = make("-define(S(A), ??A).\n?S(hello).");
+        loop {
+            match pp.step().expect("no protocol errors") {
+                Event::Token(ppt) if ppt.token().kind() == erl_tokenize::TokenKind::String => {
+                    let Origin::Stringification { parameter, .. } = ppt.origin() else {
+                        panic!("expected Stringification origin, got {:?}", ppt.origin());
+                    };
+                    assert_eq!(parameter.as_str(), "A");
+                    return;
+                }
+                Event::Complete => panic!("expected string token"),
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
+    fn stringification_of_non_parameter_is_error() {
+        // ??Foo where Foo is not a parameter should produce an
+        // InvalidStringificationTarget error.
+        let mut pp = make("-define(S(A), ??Foo).\n?S(x).");
+        loop {
+            match pp.step().expect("no protocol errors") {
+                Event::PreprocessError(PreprocessError::MacroCall {
+                    kind: MacroCallErrorKind::InvalidStringificationTarget { .. },
+                    ..
+                }) => return,
+                Event::Complete => panic!("expected InvalidStringificationTarget"),
+                _ => {}
+            }
+        }
+    }
+
+    // ---- End of Phase 11 tests --------------------------------------
 
     #[test]
     fn clone_isolates_macro_table_updates() {
