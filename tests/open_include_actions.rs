@@ -1,0 +1,125 @@
+//! Integration tests for the public `open_include` resolver.
+//!
+//! `IncludeRequest` values are obtained through the real
+//! `Preprocessor` event loop rather than constructed by hand, so the
+//! integration test exercises the actual caller path.
+//!
+//! Environment-variable expansion goes through `std::env::var` inside
+//! `open_include`. Because `std::env::set_var` is `unsafe` in Rust
+//! 2024, `$VAR` behavior is covered by unit tests via the internal
+//! `open_include_with_env` closure form; this integration surface
+//! only walks paths that do not touch the process environment.
+
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use erl_pp::{
+    Event, IncludeKind, IncludeRequest, OpenIncludeError, Preprocessor, Source, open_include,
+};
+use erl_tokenize::{Position, Token, scan_token};
+
+struct TempDir {
+    path: PathBuf,
+}
+
+impl TempDir {
+    fn new(label: &str) -> Self {
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let pid = std::process::id();
+        let mut base = std::env::temp_dir();
+        base.push(format!("erl_pp_open_include_{label}_{pid}_{n}"));
+        std::fs::create_dir_all(&base).expect("create tempdir");
+        Self { path: base }
+    }
+
+    fn write(&self, name: &str, content: &[u8]) -> PathBuf {
+        let p = self.path.join(name);
+        if let Some(parent) = p.parent() {
+            std::fs::create_dir_all(parent).expect("mkdir parent");
+        }
+        std::fs::write(&p, content).expect("write");
+        p
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
+fn scan_all(text: &str) -> Vec<Token> {
+    let mut tokens = Vec::new();
+    let mut position = Position::new();
+    while let Some(t) = scan_token(text, position).expect("tokenize test input") {
+        position = t.end();
+        tokens.push(t);
+    }
+    tokens
+}
+
+fn take_include_request(source_text: &str) -> IncludeRequest {
+    let tokens = scan_all(source_text);
+    let source = Source::new("caller.erl", source_text.to_string(), tokens);
+    let mut pp = Preprocessor::new(source);
+    loop {
+        match pp.step().expect("no protocol error") {
+            Event::AwaitingInclude(req) => return req,
+            Event::Token(_) => continue,
+            other => panic!("unexpected event before AwaitingInclude: {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn absolute_path_opens_directly() {
+    let tmp = TempDir::new("abs");
+    let target = tmp.write("hdr.hrl", b"c");
+    let path_str = target.to_str().expect("utf8 path");
+    let request = take_include_request(&format!(r#"-include("{path_str}")."#));
+    assert_eq!(request.kind, IncludeKind::Include);
+    let opened = open_include(&request, &[], |_| None).expect("resolve");
+    assert_eq!(opened.path, target);
+}
+
+#[test]
+fn relative_path_walks_include_paths_in_order() {
+    let tmp1 = TempDir::new("rel1");
+    let tmp2 = TempDir::new("rel2");
+    let target = tmp2.write("hdr.hrl", b"c");
+    let request = take_include_request(r#"-include("hdr.hrl")."#);
+    let include_paths = vec![tmp1.path.clone(), tmp2.path.clone()];
+    let opened = open_include(&request, &include_paths, |_| None).expect("resolve");
+    assert_eq!(opened.path, target);
+}
+
+#[test]
+fn missing_relative_include_returns_not_found() {
+    let tmp = TempDir::new("nf");
+    let request = take_include_request(r#"-include("missing.hrl")."#);
+    let err = open_include(&request, std::slice::from_ref(&tmp.path), |_| None).unwrap_err();
+    assert!(matches!(err, OpenIncludeError::NotFound), "got {err:?}");
+}
+
+#[test]
+fn include_lib_falls_back_to_app_lookup() {
+    let app_root = TempDir::new("lib-app");
+    let target = app_root.write("include/hdr.hrl", b"c");
+    let request = take_include_request(r#"-include_lib("myapp/include/hdr.hrl")."#);
+    assert_eq!(request.kind, IncludeKind::IncludeLib);
+    let app_path = app_root.path.clone();
+    let app_lookup = move |name: &str| (name == "myapp").then(|| app_path.clone());
+    let opened = open_include(&request, &[], app_lookup).expect("resolve");
+    assert_eq!(opened.path, target);
+}
+
+#[test]
+fn include_lib_unknown_app_returns_app_not_found() {
+    let request = take_include_request(r#"-include_lib("unknown_app/include/hdr.hrl")."#);
+    let err = open_include(&request, &[], |_| None).unwrap_err();
+    match err {
+        OpenIncludeError::AppNotFound { app } => assert_eq!(app, "unknown_app"),
+        other => panic!("expected AppNotFound, got {other:?}"),
+    }
+}
