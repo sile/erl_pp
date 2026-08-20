@@ -415,9 +415,8 @@ impl Preprocessor {
         }
     }
 
-    /// Step 1: rescan a `?NAME` sitting at the head of the expansion
-    /// queue, so a macro that appeared in an earlier expansion body
-    /// itself expands before its tokens surface.
+    /// Makes a macro that appeared in an earlier expansion body
+    /// expand itself before its tokens surface as regular output.
     fn try_rescan_queue_head(&mut self) -> StepAction {
         let head_is_question = matches!(
             self.expansion_queue.front(),
@@ -436,7 +435,6 @@ impl Preprocessor {
         }
     }
 
-    /// Step 2: drain any pending macro-expansion tokens.
     fn drain_expansion_queue(&mut self) -> StepAction {
         let Some(ppt) = self.expansion_queue.pop_front() else {
             return StepAction::Fall;
@@ -446,8 +444,6 @@ impl Preprocessor {
         StepAction::Emit(Box::new(Event::Token(ppt)))
     }
 
-    /// Step 3: at cursor EOF, pop back to the parent source (nested
-    /// include) or complete the whole run.
     fn handle_cursor_eof(&mut self) -> StepAction {
         if !self.cursor.is_at_eof() {
             return StepAction::Fall;
@@ -465,8 +461,6 @@ impl Preprocessor {
         StepAction::Emit(Box::new(Event::Complete))
     }
 
-    /// Step 4: at a form boundary, attempt to parse and dispatch a
-    /// directive.
     fn try_parse_directive_at_boundary(&mut self) -> StepAction {
         if !self.at_form_boundary {
             return StepAction::Fall;
@@ -490,10 +484,6 @@ impl Preprocessor {
         }
     }
 
-    /// Dispatches a successfully parsed directive: `-include` /
-    /// `-include_lib` are folded into `Event::AwaitingInclude`, other
-    /// directives run their state effects and surface as
-    /// `Event::Directive`.
     fn dispatch_directive(&mut self, directive: Directive) -> StepAction {
         // The parser consumed the whole directive including the
         // terminating `.`, so we are at a new form boundary.
@@ -528,9 +518,6 @@ impl Preprocessor {
         StepAction::Emit(Box::new(Event::Directive(directive)))
     }
 
-    /// Fires an `Event::AwaitingInclude` and moves the state machine
-    /// into `AwaitingIncludeResolution` with a matching pending
-    /// payload.
     fn fire_awaiting_include(
         &mut self,
         kind: IncludeKind,
@@ -552,11 +539,6 @@ impl Preprocessor {
         Event::AwaitingInclude(request)
     }
 
-    /// Step 5: recognize a `?NAME` macro call at the cursor before
-    /// the normal bump. `try_recognize_macro_call` consumes the call
-    /// when it matches, either queuing an expansion or emitting an
-    /// AwaitingMacroExpansion event; when it does not match, it
-    /// leaves the cursor untouched.
     fn try_scan_macro_call(&mut self) -> StepAction {
         let peek_is_question = matches!(
             self.cursor.peek(),
@@ -572,10 +554,9 @@ impl Preprocessor {
         }
     }
 
-    /// Step 6: consume the next source token and emit it as
-    /// `Event::Token`. Returns `Retry` when the cursor produced
-    /// nothing (EOF sneaked in during expansion) so the outer loop
-    /// revisits Step 3.
+    /// Returns `Retry` (not `Fall`) when the cursor produced nothing,
+    /// so `handle_cursor_eof` gets a chance to pop the include stack
+    /// or emit `Event::Complete` on the next round.
     fn bump_cursor(&mut self) -> StepAction {
         let Some(token) = self.cursor.bump() else {
             return StepAction::Retry;
