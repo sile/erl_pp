@@ -38,7 +38,8 @@ use crate::source_token::SourceToken;
 /// the constant-like `FOO`.
 ///
 /// Crate-internal HashMap key only; public lookup goes through
-/// [`MacroTable::get_constant`] / [`MacroTable::get_function`].
+/// [`MacroTable::get_constant`] / [`MacroTable::get_function`] /
+/// [`MacroTable::iter`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) struct MacroKey {
     name: String,
@@ -179,7 +180,9 @@ fn first_duplicate_param(params: &[SourceString]) -> Option<SourceString> {
 ///
 /// Exposed by [`Preprocessor::macros`](crate::Preprocessor::macros). Modifications happen
 /// through scanned `-define` / `-undef` directives; the caller has no
-/// direct mutator.
+/// direct mutator. Look up a known name with
+/// [`get_constant`](Self::get_constant) / [`get_function`](Self::get_function),
+/// or walk every entry with [`iter`](Self::iter).
 ///
 /// Internally the table maintains a parallel "uses" map that records,
 /// for every stored definition, the `(name, arity)` macro references
@@ -199,6 +202,8 @@ impl MacroTable {
     }
 
     /// Returns the number of macro definitions stored.
+    ///
+    /// Equal to the number of items yielded by [`iter`](Self::iter).
     pub fn len(&self) -> usize {
         self.entries.len()
     }
@@ -206,6 +211,14 @@ impl MacroTable {
     /// Returns `true` when no definition is stored.
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    /// Iterates over every stored definition.
+    ///
+    /// Order is unspecified. Constant-like and function-like entries
+    /// with the same name appear as distinct items.
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = &MacroDefinition> {
+        self.entries.values()
     }
 
     /// Returns the definition matching the exact name and arity, if any.
@@ -537,6 +550,11 @@ mod tests {
         assert!(table.get_function("FOO", 2).is_none());
         assert!(table.is_defined("FOO"));
         assert!(!table.is_defined("BAR"));
+        let slots: Vec<_> = table.iter().map(|d| (d.name.as_str(), d.arity)).collect();
+        assert_eq!(slots.len(), table.len());
+        assert!(slots.contains(&("FOO", None)));
+        assert!(slots.contains(&("FOO", Some(0))));
+        assert!(slots.contains(&("FOO", Some(1))));
     }
 
     #[test]
