@@ -277,10 +277,12 @@ fn ifdef_then_and_else_select_effective_branch() -> TestResult {
                     pp.resume_conditional(branch).expect("resume");
                     resumed = true;
                 }
-                erl_pp::Event::BranchBoundary(b) => match b.kind {
-                    erl_pp::BranchBoundaryKind::Else => saw_else_boundary.hit(),
-                    erl_pp::BranchBoundaryKind::Endif => saw_endif_boundary.hit(),
-                },
+                erl_pp::Event::BranchBoundary(erl_pp::BranchBoundary::Else { .. }) => {
+                    saw_else_boundary.hit()
+                }
+                erl_pp::Event::BranchBoundary(erl_pp::BranchBoundary::Endif { .. }) => {
+                    saw_endif_boundary.hit()
+                }
                 erl_pp::Event::Complete => break,
                 erl_pp::Event::Token(_)
                 | erl_pp::Event::MacroDefined(_)

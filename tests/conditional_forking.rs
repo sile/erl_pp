@@ -21,6 +21,13 @@ fn step(pp: &mut erl_pp::Preprocessor) -> erl_pp::Event {
     pp.step().expect("no protocol error")
 }
 
+fn boundary_tag(b: &erl_pp::BranchBoundary) -> &'static str {
+    match b {
+        erl_pp::BranchBoundary::Else { .. } => "else",
+        erl_pp::BranchBoundary::Endif { .. } => "endif",
+    }
+}
+
 fn lexical_texts(pp: &mut erl_pp::Preprocessor) -> Vec<String> {
     let mut out = Vec::new();
     loop {
@@ -104,7 +111,7 @@ fn resume_conditional_then_scans_then_side() {
             erl_pp::Event::Token(t) if t.text() == "then_side" => saw_then = true,
             erl_pp::Event::Token(_) => {}
             erl_pp::Event::BranchBoundary(b) => {
-                assert_eq!(b.kind, erl_pp::BranchBoundaryKind::Endif);
+                assert!(matches!(b, erl_pp::BranchBoundary::Endif { .. }));
                 saw_endif_boundary = true;
             }
             erl_pp::Event::Complete => break,
@@ -133,20 +140,14 @@ fn resume_conditional_else_skips_then_and_scans_else_side() {
             erl_pp::Event::Token(t) if t.text() == "then_side" => saw_then = true,
             erl_pp::Event::Token(t) if t.text() == "else_side" => saw_else = true,
             erl_pp::Event::Token(_) => {}
-            erl_pp::Event::BranchBoundary(b) => boundaries.push(b.kind),
+            erl_pp::Event::BranchBoundary(b) => boundaries.push(boundary_tag(&b)),
             erl_pp::Event::Complete => break,
             other => panic!("unexpected event: {other:?}"),
         }
     }
     assert!(saw_else);
     assert!(!saw_then, "Then side should have been skipped");
-    assert_eq!(
-        boundaries,
-        vec![
-            erl_pp::BranchBoundaryKind::Else,
-            erl_pp::BranchBoundaryKind::Endif
-        ]
-    );
+    assert_eq!(boundaries, ["else", "endif"]);
 }
 
 // ---------------------------------------------------------------------
@@ -166,20 +167,14 @@ fn resume_conditional_then_fires_else_boundary_and_skips_else_side() {
             erl_pp::Event::Token(t) if t.text() == "then_side" => saw_then = true,
             erl_pp::Event::Token(t) if t.text() == "else_side" => saw_else = true,
             erl_pp::Event::Token(_) => {}
-            erl_pp::Event::BranchBoundary(b) => boundaries.push(b.kind),
+            erl_pp::Event::BranchBoundary(b) => boundaries.push(boundary_tag(&b)),
             erl_pp::Event::Complete => break,
             other => panic!("unexpected event: {other:?}"),
         }
     }
     assert!(saw_then);
     assert!(!saw_else);
-    assert_eq!(
-        boundaries,
-        vec![
-            erl_pp::BranchBoundaryKind::Else,
-            erl_pp::BranchBoundaryKind::Endif
-        ]
-    );
+    assert_eq!(boundaries, ["else", "endif"]);
 }
 
 // ---------------------------------------------------------------------
@@ -198,13 +193,13 @@ fn resume_conditional_else_without_else_is_empty_branch() {
         match step(&mut pp) {
             erl_pp::Event::Token(t) if t.text() == "then_side" => saw_then = true,
             erl_pp::Event::Token(_) => {}
-            erl_pp::Event::BranchBoundary(b) => boundaries.push(b.kind),
+            erl_pp::Event::BranchBoundary(b) => boundaries.push(boundary_tag(&b)),
             erl_pp::Event::Complete => break,
             other => panic!("unexpected event: {other:?}"),
         }
     }
     assert!(!saw_then);
-    assert_eq!(boundaries, vec![erl_pp::BranchBoundaryKind::Endif]);
+    assert_eq!(boundaries, vec!["endif"]);
 }
 
 // ---------------------------------------------------------------------
@@ -298,7 +293,7 @@ fn nested_conditional_inside_inactive_is_silent() {
     loop {
         match step(&mut pp) {
             erl_pp::Event::AwaitingConditional(_) => requests += 1,
-            erl_pp::Event::BranchBoundary(b) => boundaries.push(b.kind),
+            erl_pp::Event::BranchBoundary(b) => boundaries.push(boundary_tag(&b)),
             erl_pp::Event::Token(_) => {}
             erl_pp::Event::Complete => break,
             other => panic!("unexpected event: {other:?}"),
@@ -307,7 +302,7 @@ fn nested_conditional_inside_inactive_is_silent() {
     assert_eq!(requests, 0, "no nested request should have fired");
     assert_eq!(
         boundaries,
-        vec![erl_pp::BranchBoundaryKind::Endif],
+        vec!["endif"],
         "only the outer endif boundary should have fired"
     );
 }
@@ -649,7 +644,7 @@ fn elif_after_else_errors() {
     // Cross -else boundary.
     loop {
         match step(&mut pp) {
-            erl_pp::Event::BranchBoundary(b) if b.kind == erl_pp::BranchBoundaryKind::Else => break,
+            erl_pp::Event::BranchBoundary(erl_pp::BranchBoundary::Else { .. }) => break,
             erl_pp::Event::Token(_) => {}
             erl_pp::Event::PreprocessError(erl_pp::PreprocessError::ElifAfterElse { .. }) => return,
             other => panic!("unexpected before else/elif: {other:?}"),

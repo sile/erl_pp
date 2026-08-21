@@ -37,8 +37,8 @@ use crate::cursor::Cursor;
 use crate::directive::{Directive, parse_directive};
 use crate::error::{MacroCallErrorKind, PreprocessError, ProtocolError};
 use crate::event::{
-    Branch, BranchBoundary, BranchBoundaryKind, ConditionalRequest, DefinedConditional, Diagnostic,
-    Event, ExpressionConditional, MacroExpansionRequest, Severity, UndefinedMacro,
+    Branch, BranchBoundary, ConditionalRequest, DefinedConditional, Diagnostic, Event,
+    ExpressionConditional, MacroExpansionRequest, Severity, UndefinedMacro,
 };
 use crate::macros::{MacroDefinition, MacroKey, MacroTable};
 use crate::origin::{IncludeKind, Origin, SourceInfoMacroKind};
@@ -895,9 +895,7 @@ impl Preprocessor {
         if silent {
             StepAction::Retry
         } else {
-            StepAction::Emit(Box::new(
-                self.fire_branch_boundary(BranchBoundaryKind::Else, span),
-            ))
+            StepAction::Emit(Box::new(self.fire_else_boundary(span)))
         }
     }
 
@@ -983,15 +981,19 @@ impl Preprocessor {
         if frame.silent_close {
             StepAction::Retry
         } else {
-            StepAction::Emit(Box::new(
-                self.fire_branch_boundary(BranchBoundaryKind::Endif, span),
-            ))
+            StepAction::Emit(Box::new(self.fire_endif_boundary(span)))
         }
     }
 
-    fn fire_branch_boundary(&self, kind: BranchBoundaryKind, directive_span: SourceSpan) -> Event {
-        Event::BranchBoundary(BranchBoundary {
-            kind,
+    fn fire_else_boundary(&self, directive_span: SourceSpan) -> Event {
+        Event::BranchBoundary(BranchBoundary::Else {
+            directive_span,
+            parent_origin: Arc::clone(&self.current_origin),
+        })
+    }
+
+    fn fire_endif_boundary(&self, directive_span: SourceSpan) -> Event {
+        Event::BranchBoundary(BranchBoundary::Endif {
             directive_span,
             parent_origin: Arc::clone(&self.current_origin),
         })

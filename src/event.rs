@@ -158,16 +158,6 @@ pub enum Branch {
     Else,
 }
 
-/// Which conditional boundary directive an [`Event::BranchBoundary`]
-/// event marks.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum BranchBoundaryKind {
-    /// The scanner crossed a `-else`.
-    Else,
-    /// The scanner crossed a `-endif`.
-    Endif,
-}
-
 /// Data of an [`Event::AwaitingConditional`].
 ///
 /// `-ifdef` / `-ifndef` and `-if` / `-elif` both wait for
@@ -228,13 +218,39 @@ pub struct ExpressionConditional {
 /// inactive skip. The `directive_span` and the caller's own branch
 /// stack identify which conditional this boundary closes.
 #[derive(Debug, Clone)]
-pub struct BranchBoundary {
-    /// Whether the boundary is `-else` or `-endif`.
-    pub kind: BranchBoundaryKind,
+pub enum BranchBoundary {
+    /// The scanner crossed a `-else`.
+    Else {
+        /// Span of the `-else` directive.
+        directive_span: SourceSpan,
+        /// Origin at the directive's site.
+        parent_origin: Arc<Origin>,
+    },
+    /// The scanner crossed a `-endif`.
+    Endif {
+        /// Span of the `-endif` directive.
+        directive_span: SourceSpan,
+        /// Origin at the directive's site.
+        parent_origin: Arc<Origin>,
+    },
+}
+
+impl BranchBoundary {
     /// Span of the boundary directive.
-    pub directive_span: SourceSpan,
+    pub fn directive_span(&self) -> SourceSpan {
+        match self {
+            Self::Else { directive_span, .. } | Self::Endif { directive_span, .. } => {
+                *directive_span
+            }
+        }
+    }
+
     /// Origin at the boundary directive's site.
-    pub parent_origin: Arc<Origin>,
+    pub fn parent_origin(&self) -> &Arc<Origin> {
+        match self {
+            Self::Else { parent_origin, .. } | Self::Endif { parent_origin, .. } => parent_origin,
+        }
+    }
 }
 
 /// Distinguishes `-error` from `-warning` in a [`Diagnostic`] event.
