@@ -9,8 +9,8 @@
 
 use std::sync::Arc;
 
-use crate::directive::Directive;
 use crate::error::PreprocessError;
+use crate::macros::MacroDefinition;
 use crate::origin::{IncludeKind, Origin};
 use crate::preprocessed_token::PreprocessedToken;
 use crate::source::SourceSpan;
@@ -35,20 +35,19 @@ pub enum Event {
     /// tokens.
     Token(PreprocessedToken),
 
-    /// A preprocessor directive was observed.
+    /// A `-define(...)` was applied to the macro table.
     ///
-    /// The directive tokens are consumed from the source; they are
-    /// not streamed as [`Event::Token`].
+    /// The table update is visible through
+    /// [`crate::Preprocessor::macros`] before this event is
+    /// returned. The payload is the definition that was inserted.
+    MacroDefined(MacroDefinition),
+
+    /// A `-undef(...)` was applied to the macro table.
     ///
-    /// State effects that the preprocessor owns internally
-    /// (`-define` / `-undef` updates to the macro table) are applied
-    /// **before** the event is emitted, so a caller matching
-    /// `Event::Directive` observes the post-update macro table via
-    /// [`crate::Preprocessor::macros`]. Effects that require a
-    /// response from the caller (include resolution, conditional
-    /// selection, diagnostic emission) still return through their own
-    /// dedicated events in later work.
-    Directive(Directive),
+    /// Every entry matching the name is already gone when this
+    /// event is returned, including the case where the name was
+    /// not defined. See [`UndefinedMacro`].
+    MacroUndefined(UndefinedMacro),
 
     /// The preprocessor is awaiting an include resolution from the
     /// caller.
@@ -98,6 +97,22 @@ pub enum Event {
     Complete,
 }
 
+/// Data of an [`Event::MacroUndefined`].
+///
+/// Names the macro that `-undef` removed. The preprocessor has
+/// already dropped every arity of `name` from the table; this
+/// event is the observation of that directive, including when
+/// `name` was not defined.
+#[derive(Debug, Clone)]
+pub struct UndefinedMacro {
+    /// Decoded name passed to `-undef`.
+    pub name: SourceString,
+    /// Span of the whole `-undef(...)` directive.
+    pub directive_span: SourceSpan,
+    /// Origin at the directive's site.
+    pub parent_origin: Arc<Origin>,
+}
+
 /// Data of an [`Event::AwaitingInclude`].
 ///
 /// Describes the include the caller must resolve. The preprocessor
@@ -111,7 +126,9 @@ pub struct IncludeRequest {
     /// Whether this is `-include` or `-include_lib`.
     pub kind: IncludeKind,
     /// Decoded, concatenated contents of the include's string
-    /// literals (matches [`crate::Directive::Include`]'s `path`).
+    /// literals. Environment-variable expansion (`$FOO`),
+    /// relative-path resolution, and filesystem lookup are the
+    /// caller's job.
     pub path: SourceString,
     /// Span of the whole directive from the leading `-` through the
     /// terminating `.`. The include's parent source is
@@ -250,11 +267,9 @@ pub struct Diagnostic {
     pub arguments: Vec<PreprocessedToken>,
     /// Span of the whole directive (`-` through `.`).
     pub directive_span: SourceSpan,
-    /// Span of the argument tokens. Kept as-is from the underlying
-    /// [`crate::Directive::Error`] / [`crate::Directive::Warning`],
-    /// which set it to run from the first lexical token's start to
-    /// the last lexical token's end (hidden token edges are not
-    /// included).
+    /// Span of the argument tokens, from the first lexical token's
+    /// start to the last lexical token's end (hidden token edges
+    /// are not included).
     pub arg_span: SourceSpan,
     /// Origin at the directive's site.
     pub parent_origin: Arc<Origin>,

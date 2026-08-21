@@ -115,7 +115,8 @@ fn deterministic_replay_of_simple_program() -> TestResult {
                     );
                 }
                 (Event::Complete, Event::Complete) => {}
-                (Event::Directive(_), Event::Directive(_)) => {}
+                (Event::MacroDefined(_), Event::MacroDefined(_))
+                | (Event::MacroUndefined(_), Event::MacroUndefined(_)) => {}
                 _ => panic!("event[{i}] kinds differ: {ea:?} vs {eb:?}"),
             }
         }
@@ -285,7 +286,7 @@ fn ifdef_then_and_else_select_effective_branch() -> TestResult {
                     BranchBoundaryKind::Endif => saw_endif_boundary.hit(),
                 },
                 Event::Complete => break,
-                Event::Token(_) | Event::Directive(_) => {}
+                Event::Token(_) | Event::MacroDefined(_) | Event::MacroUndefined(_) => {}
                 other => panic!("unexpected event: {other:?}"),
             }
         }
@@ -347,7 +348,10 @@ fn conditional_fork_yields_independent_macro_tables() -> TestResult {
         loop {
             match step_expect_ok(&mut pp) {
                 Event::AwaitingConditional(_) => break,
-                Event::Token(_) | Event::Directive(_) | Event::BranchBoundary(_) => {}
+                Event::Token(_)
+                | Event::MacroDefined(_)
+                | Event::MacroUndefined(_)
+                | Event::BranchBoundary(_) => {}
                 other => panic!("unexpected event before fork: {other:?}"),
             }
         }
@@ -526,7 +530,7 @@ fn include_scoped_define_reaches_parent() -> TestResult {
                         expanded = true;
                     }
                 }
-                Event::Token(_) | Event::Directive(_) => {}
+                Event::Token(_) | Event::MacroDefined(_) | Event::MacroUndefined(_) => {}
                 Event::Complete => break,
                 other => panic!("unexpected event: {other:?}"),
             }
@@ -578,7 +582,7 @@ fn nested_include_forms_origin_chain() -> TestResult {
                         deepest_depth = depth;
                     }
                 }
-                Event::Token(_) | Event::Directive(_) => {}
+                Event::Token(_) | Event::MacroDefined(_) | Event::MacroUndefined(_) => {}
                 Event::Complete => break,
                 other => panic!("unexpected event: {other:?}"),
             }
@@ -639,7 +643,10 @@ fn nested_conditional_selects_inner_branch_correctly() -> TestResult {
                     // Always take Then so both -ifdef enter their bodies.
                     pp.resume_conditional(Branch::Then).expect("resume");
                 }
-                Event::BranchBoundary(_) | Event::Token(_) | Event::Directive(_) => {}
+                Event::BranchBoundary(_)
+                | Event::Token(_)
+                | Event::MacroDefined(_)
+                | Event::MacroUndefined(_) => {}
                 Event::Complete => break,
                 other => panic!("unexpected event: {other:?}"),
             }
@@ -849,7 +856,7 @@ fn wrong_response_kind_returns_protocol_error_without_state_damage() -> TestResu
                     awaiting = true;
                     break;
                 }
-                Event::Token(_) | Event::Directive(_) => {}
+                Event::Token(_) | Event::MacroDefined(_) | Event::MacroUndefined(_) => {}
                 other => panic!("unexpected event before AwaitingConditional: {other:?}"),
             }
         }

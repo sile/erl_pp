@@ -126,7 +126,7 @@ fn run_one(
         events += 1;
         match event {
             erl_pp::Event::Token(_) => token_count += 1,
-            erl_pp::Event::Directive(_) => {}
+            erl_pp::Event::MacroDefined(_) | erl_pp::Event::MacroUndefined(_) => {}
             erl_pp::Event::AwaitingInclude(req) => {
                 let (included_source, load_failure) =
                     resolve_include(&req, include_paths, erl_libs);

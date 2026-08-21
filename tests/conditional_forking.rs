@@ -32,7 +32,10 @@ fn lexical_texts(pp: &mut Preprocessor) -> Vec<String> {
             Event::Token(ppt) if ppt.token().kind().is_lexical() => {
                 out.push(ppt.text().to_owned());
             }
-            Event::Token(_) | Event::Directive(_) | Event::BranchBoundary(_) => {}
+            Event::Token(_)
+            | Event::MacroDefined(_)
+            | Event::MacroUndefined(_)
+            | Event::BranchBoundary(_) => {}
             Event::Complete => return out,
             other => panic!("unexpected event: {other:?}"),
         }
@@ -46,7 +49,7 @@ fn lexical_texts(pp: &mut Preprocessor) -> Vec<String> {
 fn ifdef_defined_recommends_then() {
     let mut pp = make("-define(FOO, 1).\n-ifdef(FOO).\nthen_side.\n-endif.\n");
     // consume -define
-    assert!(matches!(step(&mut pp), Event::Directive(_)));
+    assert!(matches!(step(&mut pp), Event::MacroDefined(_)));
     let request = match step(&mut pp) {
         Event::AwaitingConditional(r) => r,
         other => panic!("expected AwaitingConditional, got {other:?}"),
@@ -77,8 +80,8 @@ fn ifndef_undefined_recommends_then() {
 }
 
 // ---------------------------------------------------------------------
-// 3. `-ifdef` does not emit `Event::Directive` (folded into
-//    AwaitingConditional, like AwaitingMacroExpansion).
+// 3. `-ifdef` folds into AwaitingConditional (like
+//    AwaitingMacroExpansion).
 #[test]
 fn ifdef_does_not_emit_event_directive() {
     let mut pp = make("-ifdef(FOO).\n-endif.\n");
@@ -535,7 +538,7 @@ fn if_elif_chain_first_inactive_awaits_elif() {
          b.\n\
          -endif.\n",
     );
-    assert!(matches!(step(&mut pp), Event::Directive(_)));
+    assert!(matches!(step(&mut pp), Event::MacroDefined(_)));
     let req = match step(&mut pp) {
         Event::AwaitingConditional(r) => r,
         other => panic!("expected -if, got {other:?}"),
@@ -661,7 +664,7 @@ fn if_fork_independent_branches() {
 #[test]
 fn if_condition_expands_defined_macro() {
     let mut pp = make("-define(V, 27).\n-if(?V >= 27).\nok.\n-endif.\n");
-    assert!(matches!(step(&mut pp), Event::Directive(_)));
+    assert!(matches!(step(&mut pp), Event::MacroDefined(_)));
     let req = match step(&mut pp) {
         Event::AwaitingConditional(r) => r,
         other => panic!("expected -if, got {other:?}"),

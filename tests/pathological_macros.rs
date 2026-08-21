@@ -31,7 +31,7 @@ fn collect_lexical_texts(pp: &mut Preprocessor) -> Vec<String> {
             Event::Token(ppt) if ppt.token().kind().is_lexical() => {
                 out.push(ppt.text().to_owned());
             }
-            Event::Token(_) | Event::Directive(_) => {}
+            Event::Token(_) | Event::MacroDefined(_) | Event::MacroUndefined(_) => {}
             Event::Complete => return out,
             other => panic!("unexpected event: {other:?}"),
         }

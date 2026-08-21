@@ -64,7 +64,7 @@ impl MacroKey {
 
 /// A macro definition, ready to be looked up and expanded.
 ///
-/// Built by the preprocessor from a parsed [`Directive::Define`] with
+/// Built by the preprocessor from a parsed `-define(...)` with
 /// the parameter list validated (duplicate parameter names are
 /// rejected as [`PreprocessError::DuplicateParameter`]).
 ///

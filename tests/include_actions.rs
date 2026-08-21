@@ -31,7 +31,8 @@ fn step(pp: &mut Preprocessor) -> Event {
 
 // ---------------------------------------------------------------------
 // 1. `-include("foo.hrl").` fires AwaitingInclude with the right kind
-//    and path, and does NOT emit Event::Directive for the include.
+//    and path. The include is not also reported as MacroDefined /
+//    MacroUndefined.
 #[test]
 fn include_fires_awaiting_include_with_kind_and_path() {
     let mut pp = make(r#"-include("foo.hrl")."#);
@@ -202,7 +203,7 @@ fn macro_defined_in_include_visible_in_parent() {
                 saw_42 = true;
                 break;
             }
-            Event::Token(_) | Event::Directive(_) => {}
+            Event::Token(_) | Event::MacroDefined(_) | Event::MacroUndefined(_) => {}
             Event::Complete => break,
             other => panic!("unexpected event: {other:?}"),
         }

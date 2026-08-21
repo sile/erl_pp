@@ -184,7 +184,7 @@ fn parse_define_body(body: &str) -> Result<usize, DriveError> {
     let source = Source::new("prop.erl", text, tokens);
     let mut pp = Preprocessor::new(source);
     match pp.step().map_err(DriveError::Protocol)? {
-        Event::Directive(erl_pp::Directive::Define { replacement, .. }) => Ok(replacement.len()),
+        Event::MacroDefined(def) => Ok(def.replacement.len()),
         Event::PreprocessError(err) => Err(DriveError::Preprocess(Box::new(err))),
         other => Err(DriveError::UnexpectedEvent(format!("{other:?}"))),
     }

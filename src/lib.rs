@@ -3,16 +3,16 @@
 //! The crate is built around a Sans-I/O state machine. The caller feeds
 //! a [`Source`] into [`Preprocessor`] and drives it by calling
 //! [`Preprocessor::step`] in a loop; each call returns one [`Event`]
-//! describing the next transition (a scanned token, a directive, a
-//! caller-driven include / conditional / macro-expansion response, a
-//! diagnostic, an error, or completion).
+//! describing the next transition (a scanned token, a macro
+//! definition or undef, a caller-driven include / conditional /
+//! macro-expansion response, a diagnostic, an error, or completion).
 //!
 //! # Minimal event loop
 //!
 //! Trivial input with no directives, includes, conditionals, macros, or
-//! `-error` / `-warning`. All `Awaiting*` / `Directive` / `Diagnostic` /
-//! `PreprocessError` branches are unreachable and fall into the
-//! `unreachable!` arm.
+//! `-error` / `-warning`. All `Awaiting*` / `MacroDefined` /
+//! `MacroUndefined` / `Diagnostic` / `PreprocessError` branches are
+//! unreachable and fall into the `unreachable!` arm.
 //!
 //! ```
 //! use erl_pp::{Event, Preprocessor, Source};
@@ -48,11 +48,11 @@
 #![warn(missing_docs)]
 #![forbid(unsafe_code)]
 
-pub use crate::directive::{Directive, Param};
+pub use crate::directive::Param;
 pub use crate::error::{PreprocessError, ProtocolError};
 pub use crate::event::{
     Branch, BranchBoundary, BranchBoundaryKind, ConditionalRequest, DefinedConditional, Diagnostic,
-    Event, ExpressionConditional, IncludeRequest, MacroExpansionRequest, Severity,
+    Event, ExpressionConditional, IncludeRequest, MacroExpansionRequest, Severity, UndefinedMacro,
 };
 pub use crate::include_path::{OpenIncludeError, open_include};
 pub use crate::macros::{MacroDefinition, MacroKey, MacroTable};

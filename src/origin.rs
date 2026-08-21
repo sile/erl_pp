@@ -11,8 +11,7 @@ use crate::source::SourceSpan;
 use crate::source_string::SourceString;
 
 /// Distinguishes `-include` from `-include_lib` in
-/// [`crate::Directive::Include`], [`crate::IncludeRequest`], and
-/// [`Origin::Include`].
+/// [`crate::IncludeRequest`] and [`Origin::Include`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IncludeKind {
     /// `-include("path").`

@@ -129,18 +129,18 @@ fn diagnostic_does_not_pend_the_state_machine() {
 }
 
 // ---------------------------------------------------------------------
-// 6. `-error` / `-warning` do not emit Event::Directive (folded into
-//    Diagnostic, same shape as AwaitingInclude / AwaitingConditional).
+// 6. `-error` / `-warning` fold into Diagnostic (same shape as
+//    AwaitingInclude / AwaitingConditional).
 #[test]
-fn error_directive_does_not_emit_event_directive() {
+fn error_directive_does_not_emit_macro_events() {
     let mut pp = make("-error(oops).");
     let event = step(&mut pp);
     assert!(matches!(event, Event::Diagnostic(_)));
-    // Sanity: exhaust remaining events, no Event::Directive should surface.
     loop {
         match step(&mut pp) {
             Event::Complete => break,
-            Event::Directive(d) => panic!("unexpected Event::Directive: {d:?}"),
+            Event::MacroDefined(d) => panic!("unexpected MacroDefined: {d:?}"),
+            Event::MacroUndefined(u) => panic!("unexpected MacroUndefined: {u:?}"),
             _ => {}
         }
     }

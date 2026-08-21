@@ -34,7 +34,7 @@ use crate::source_string::SourceString;
 /// field, plus decoded values for each constituent that the parser
 /// recognises.
 #[derive(Debug, Clone)]
-pub enum Directive {
+pub(crate) enum Directive {
     /// `-include(...)` or `-include_lib(...)`.
     ///
     /// `path` is the decoded, concatenated contents of the include's
@@ -75,6 +75,14 @@ pub enum Directive {
         replacement: Vec<Token>,
         /// Span covering the replacement tokens. `None` when the
         /// replacement is empty.
+        #[cfg_attr(
+            not(test),
+            expect(
+                dead_code,
+                reason = "parser IR kept so tests can assert replacement extent; \
+                          the state machine currently uses the replacement tokens only"
+            )
+        )]
         replacement_span: Option<SourceSpan>,
     },
     /// `-undef(NAME).`
@@ -109,6 +117,11 @@ pub enum Directive {
         /// Raw token list inside the parentheses.
         arg_tokens: Vec<Token>,
         /// Span covering the argument tokens.
+        #[expect(
+            dead_code,
+            reason = "parser IR kept for the raw expression extent; \
+                      the state machine currently uses arg_tokens and the whole-directive span"
+        )]
         arg_span: SourceSpan,
     },
     /// `-elif(Expression).`
@@ -120,6 +133,11 @@ pub enum Directive {
         /// Raw token list inside the parentheses.
         arg_tokens: Vec<Token>,
         /// Span covering the argument tokens.
+        #[expect(
+            dead_code,
+            reason = "parser IR kept for the raw expression extent; \
+                      the state machine currently uses arg_tokens and the whole-directive span"
+        )]
         arg_span: SourceSpan,
     },
     /// `-else.`
@@ -156,7 +174,7 @@ pub enum Directive {
 impl Directive {
     /// Returns the span that covers the whole directive from `-`
     /// through `.`.
-    pub fn span(&self) -> SourceSpan {
+    pub(crate) fn span(&self) -> SourceSpan {
         match self {
             Directive::Include { span, .. }
             | Directive::Define { span, .. }

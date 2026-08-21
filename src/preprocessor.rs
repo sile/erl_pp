@@ -38,7 +38,7 @@ use crate::directive::{Directive, parse_directive};
 use crate::error::{MacroCallErrorKind, PreprocessError, ProtocolError};
 use crate::event::{
     Branch, BranchBoundary, BranchBoundaryKind, ConditionalRequest, DefinedConditional, Diagnostic,
-    Event, ExpressionConditional, MacroExpansionRequest, Severity,
+    Event, ExpressionConditional, MacroExpansionRequest, Severity, UndefinedMacro,
 };
 use crate::macros::{MacroDefinition, MacroKey, MacroTable};
 use crate::origin::{IncludeKind, Origin, SourceInfoMacroKind};
@@ -301,8 +301,9 @@ impl Preprocessor {
     /// `-undef(...)` directives observed on the current source, and by
     /// [`Preprocessor::define_initial`]. Once a directive is applied
     /// the table update is visible from this method before the
-    /// caller receives the matching [`Event::Directive`] — the
-    /// state-then-event ordering is fixed (see [`step`](Self::step)).
+    /// caller receives the matching [`Event::MacroDefined`] or
+    /// [`Event::MacroUndefined`] — the state-then-event ordering is
+    /// fixed (see [`step`](Self::step)).
     pub fn macros(&self) -> &MacroTable {
         &self.macros
     }
@@ -750,52 +751,49 @@ impl Preprocessor {
         if inactive {
             return StepAction::Retry;
         }
-        // `-include` / `-include_lib` are folded into
-        // Event::AwaitingInclude — we do not emit an Event::Directive
-        // for them, matching how Event::AwaitingMacroExpansion
-        // swallows the observation event. `-error` / `-warning` are
-        // folded into Event::Diagnostic for the same reason.
-        match &directive {
+        // `-include` / `-include_lib` fold into Event::AwaitingInclude;
+        // `-error` / `-warning` fold into Event::Diagnostic;
+        // `-define` / `-undef` update the table then emit
+        // MacroDefined / MacroUndefined.
+        match directive {
             Directive::Include { kind, path, span } => {
-                return StepAction::Emit(Box::new(self.fire_awaiting_include(
-                    *kind,
-                    path.clone(),
-                    *span,
-                )));
+                StepAction::Emit(Box::new(self.fire_awaiting_include(kind, path, span)))
             }
             Directive::Error {
                 arg_tokens,
                 span,
                 arg_span,
-            } => {
-                return StepAction::Emit(Box::new(self.fire_diagnostic(
-                    Severity::Error,
-                    arg_tokens,
-                    *span,
-                    *arg_span,
-                )));
-            }
+            } => StepAction::Emit(Box::new(self.fire_diagnostic(
+                Severity::Error,
+                &arg_tokens,
+                span,
+                arg_span,
+            ))),
             Directive::Warning {
                 arg_tokens,
                 span,
                 arg_span,
-            } => {
-                return StepAction::Emit(Box::new(self.fire_diagnostic(
-                    Severity::Warning,
-                    arg_tokens,
-                    *span,
-                    *arg_span,
-                )));
+            } => StepAction::Emit(Box::new(self.fire_diagnostic(
+                Severity::Warning,
+                &arg_tokens,
+                span,
+                arg_span,
+            ))),
+            Directive::Define { .. } | Directive::Undef { .. } => {
+                match self.apply_macro_directive(directive) {
+                    Ok(event) => StepAction::Emit(Box::new(event)),
+                    Err(e) => StepAction::Emit(Box::new(Event::PreprocessError(e))),
+                }
             }
-            _ => {}
+            Directive::Ifdef { .. }
+            | Directive::Ifndef { .. }
+            | Directive::If { .. }
+            | Directive::Elif { .. }
+            | Directive::Else { .. }
+            | Directive::Endif { .. } => {
+                unreachable!("conditionals already returned above")
+            }
         }
-        // Apply state effects (macro table updates) BEFORE emitting
-        // the event so the caller observes the post-update table
-        // state when matching Event::Directive.
-        if let Err(e) = self.apply_directive_effects(&directive) {
-            return StepAction::Emit(Box::new(Event::PreprocessError(e)));
-        }
-        StepAction::Emit(Box::new(Event::Directive(directive)))
     }
 
     /// Pushes a `BranchFrame` for a nested `-if` / `-ifdef` / `-ifndef`
@@ -1521,25 +1519,29 @@ impl Preprocessor {
         )
     }
 
-    fn apply_directive_effects(&mut self, directive: &Directive) -> Result<(), PreprocessError> {
+    fn apply_macro_directive(&mut self, directive: Directive) -> Result<Event, PreprocessError> {
         match directive {
-            Directive::Define { .. } => {
+            Directive::Undef { name, span } => {
+                self.macros.remove_all_by_name(name.as_str());
+                Ok(Event::MacroUndefined(UndefinedMacro {
+                    name,
+                    directive_span: span,
+                    parent_origin: Arc::clone(&self.current_origin),
+                }))
+            }
+            define @ Directive::Define { .. } => {
                 let source = Arc::clone(self.cursor.source());
                 let source_id = self.cursor.source_id();
                 let def = MacroDefinition::from_directive(
-                    directive,
+                    &define,
                     source,
                     source_id,
                     (*self.current_origin).clone(),
                 )?;
-                self.macros.insert(def);
-                Ok(())
+                self.macros.insert(def.clone());
+                Ok(Event::MacroDefined(def))
             }
-            Directive::Undef { name, .. } => {
-                self.macros.remove_all_by_name(name.as_str());
-                Ok(())
-            }
-            _ => Ok(()),
+            _ => unreachable!("only define/undef reach apply_macro_directive"),
         }
     }
 
@@ -2201,7 +2203,6 @@ impl std::fmt::Debug for Preprocessor {
 mod tests {
     use super::*;
 
-    use crate::directive::Directive;
     use crate::error::PreprocessError;
 
     fn make(text: &str) -> Preprocessor {
@@ -2282,7 +2283,7 @@ mod tests {
         loop {
             match pp.step().expect("no protocol errors") {
                 Event::Token(ppt) => texts.push(ppt.text().to_owned()),
-                Event::Directive(Directive::Define { .. }) => {}
+                Event::MacroDefined(_) => {}
                 Event::Complete => break,
                 other => panic!("unexpected event: {other:?}"),
             }
@@ -2537,7 +2538,9 @@ mod tests {
             match pp.step().expect("no protocol error") {
                 Event::Token(ppt) => kinds.push(ppt.token().kind()),
                 Event::Complete => break,
-                Event::Directive(_) => panic!("should not recognise -module"),
+                Event::MacroDefined(_) | Event::MacroUndefined(_) => {
+                    panic!("should not recognise -module")
+                }
                 other => panic!("unexpected event: {other:?}"),
             }
         }
@@ -2555,7 +2558,11 @@ mod tests {
     fn recognised_directive_becomes_event() {
         let mut pp = make("-undef(foo).");
         let first = pp.step().expect("no protocol error");
-        assert!(matches!(first, Event::Directive(Directive::Undef { .. })));
+        let Event::MacroUndefined(undef) = first else {
+            panic!("expected MacroUndefined, got {first:?}");
+        };
+        assert_eq!(undef.name.as_str(), "foo");
+        assert!(pp.macros().is_empty());
         // Directive tokens are consumed by the parser, not streamed.
         let complete = pp.step().expect("no protocol error");
         assert!(matches!(complete, Event::Complete));
@@ -2568,9 +2575,7 @@ mod tests {
         loop {
             match pp.step().expect("no protocol error") {
                 Event::Token(ppt) => description.push(format!("token:{}", ppt.text())),
-                Event::Directive(Directive::Undef { .. }) => {
-                    description.push("directive:undef".into())
-                }
+                Event::MacroUndefined(_) => description.push("directive:undef".into()),
                 Event::Complete => {
                     description.push("complete".into());
                     break;
@@ -2622,10 +2627,15 @@ mod tests {
         let mut pp = make("-define(FOO, 1).");
         assert!(pp.macros().is_empty());
         let event = pp.step().expect("no protocol error");
-        assert!(matches!(event, Event::Directive(Directive::Define { .. })));
+        let Event::MacroDefined(def) = event else {
+            panic!("expected MacroDefined, got {event:?}");
+        };
+        assert_eq!(def.key.name, "FOO");
         // State-then-event contract: when the caller observes the
         // event, the macro table already contains the definition.
-        assert!(pp.macros().get_constant("FOO").is_some());
+        let table = pp.macros().get_constant("FOO").expect("defined");
+        assert_eq!(table.key.name, def.key.name);
+        assert_eq!(table.key.arity, def.key.arity);
         assert_eq!(pp.macros().len(), 1);
     }
 
@@ -2635,8 +2645,8 @@ mod tests {
         // Drain define/undef; the table should end empty.
         loop {
             match pp.step().expect("no protocol error") {
-                Event::Directive(Directive::Define { .. }) => {}
-                Event::Directive(Directive::Undef { .. }) => {
+                Event::MacroDefined(_) => {}
+                Event::MacroUndefined(_) => {
                     // At the moment we observe the Undef event, all
                     // FOO entries are already gone.
                     assert!(pp.macros().is_empty());
@@ -2716,7 +2726,7 @@ mod tests {
                     texts.push(ppt.text().to_owned());
                 }
                 Event::Token(_) => {}
-                Event::Directive(_) => {}
+                Event::MacroDefined(_) => {}
                 Event::Complete => break,
                 other => panic!("unexpected event: {other:?}"),
             }
@@ -2757,7 +2767,7 @@ mod tests {
                     assert_eq!(req.name.as_str(), "UNKNOWN");
                     return;
                 }
-                Event::Directive(_) | Event::Token(_) => {}
+                Event::MacroDefined(_) | Event::Token(_) => {}
                 other => panic!("unexpected event: {other:?}"),
             }
         }
@@ -2774,7 +2784,7 @@ mod tests {
                     assert_eq!(req.name.as_str(), "FOO");
                     break;
                 }
-                Event::Directive(_) | Event::Token(_) => {}
+                Event::MacroDefined(_) | Event::Token(_) => {}
                 other => panic!("unexpected event before AwaitingMacroExpansion: {other:?}"),
             }
         }
@@ -2804,7 +2814,7 @@ mod tests {
                 Event::Token(ppt) if ppt.token().kind().is_lexical() => {
                     out.push(ppt.text().to_owned());
                 }
-                Event::Token(_) | Event::Directive(_) => {}
+                Event::Token(_) | Event::MacroDefined(_) => {}
                 Event::Complete => break,
                 other => panic!("unexpected event: {other:?}"),
             }
@@ -2919,7 +2929,7 @@ mod tests {
                     chain,
                     ..
                 }) => return (name, arity, chain),
-                Event::Directive(_) | Event::Token(_) => {}
+                Event::MacroDefined(_) | Event::Token(_) => {}
                 other => panic!("expected CircularExpansion, got {other:?}"),
             }
         }
