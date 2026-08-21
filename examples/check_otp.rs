@@ -140,9 +140,8 @@ fn run_one(
             }
             erl_pp::Event::AwaitingConditional(req) => {
                 let branch = match req {
-                    erl_pp::ConditionalRequest::Ifdef(d)
-                    | erl_pp::ConditionalRequest::Ifndef(d) => d.recommended,
-                    erl_pp::ConditionalRequest::If(_) | erl_pp::ConditionalRequest::Elif(_) => {
+                    erl_pp::Conditional::Ifdef(d) | erl_pp::Conditional::Ifndef(d) => d.recommended,
+                    erl_pp::Conditional::If(_) | erl_pp::Conditional::Elif(_) => {
                         erl_pp::Branch::Else
                     }
                 };
@@ -194,12 +193,12 @@ fn scan_source(text: &str) -> Result<Vec<erl_tokenize::Token>, String> {
 }
 
 fn resolve_include(
-    request: &erl_pp::IncludeRequest,
+    include: &erl_pp::IncludeDirective,
     include_paths: &[PathBuf],
     erl_libs: &[PathBuf],
 ) -> (erl_pp::Source, Option<String>) {
-    let raw_path = request.path.as_str();
-    match erl_pp::open_include(request, include_paths, erl_libs) {
+    let raw_path = include.path.as_str();
+    match erl_pp::open_include(include, include_paths, erl_libs) {
         Ok(path) => match fs::read_to_string(&path) {
             Ok(text) => match scan_source(&text) {
                 Ok(tokens) => (

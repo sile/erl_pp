@@ -51,8 +51,8 @@
 pub use crate::directive::Param;
 pub use crate::error::{PreprocessError, ProtocolError};
 pub use crate::event::{
-    Branch, BranchBoundary, ConditionalRequest, DefinedConditional, Diagnostic, Event,
-    ExpressionConditional, IncludeRequest, MacroExpansionRequest, Severity, UndefinedMacro,
+    Branch, BranchBoundary, Conditional, DefinedConditional, Diagnostic, Event,
+    ExpressionConditional, IncludeDirective, MacroCall, Severity, UndefinedMacro,
 };
 pub use crate::include_path::{OpenIncludeError, open_include};
 pub use crate::macros::{MacroDefinition, MacroTable};

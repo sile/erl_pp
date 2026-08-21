@@ -36,11 +36,11 @@ fn step(pp: &mut erl_pp::Preprocessor) -> erl_pp::Event {
 fn include_fires_awaiting_include_with_kind_and_path() {
     let mut pp = make(r#"-include("foo.hrl")."#);
     let event = step(&mut pp);
-    let erl_pp::Event::AwaitingInclude(request) = event else {
+    let erl_pp::Event::AwaitingInclude(include) = event else {
         panic!("expected AwaitingInclude, got {event:?}");
     };
-    assert_eq!(request.kind, erl_pp::IncludeKind::Include);
-    assert_eq!(request.path.as_str(), "foo.hrl");
+    assert_eq!(include.kind, erl_pp::IncludeKind::Include);
+    assert_eq!(include.path.as_str(), "foo.hrl");
     assert!(matches!(
         pp.status(),
         erl_pp::Status::AwaitingIncludeResolution
@@ -54,11 +54,11 @@ fn include_fires_awaiting_include_with_kind_and_path() {
 fn include_lib_fires_awaiting_include_with_lib_kind() {
     let mut pp = make(r#"-include_lib("kernel/include/file.hrl")."#);
     let event = step(&mut pp);
-    let erl_pp::Event::AwaitingInclude(request) = event else {
+    let erl_pp::Event::AwaitingInclude(include) = event else {
         panic!("expected AwaitingInclude, got {event:?}");
     };
-    assert_eq!(request.kind, erl_pp::IncludeKind::IncludeLib);
-    assert_eq!(request.path.as_str(), "kernel/include/file.hrl");
+    assert_eq!(include.kind, erl_pp::IncludeKind::IncludeLib);
+    assert_eq!(include.path.as_str(), "kernel/include/file.hrl");
 }
 
 // ---------------------------------------------------------------------
@@ -71,10 +71,10 @@ fn directive_span_points_at_parent_not_include() {
         r#"-include("x.hrl").
 "#,
     );
-    let erl_pp::Event::AwaitingInclude(request) = step(&mut pp) else {
+    let erl_pp::Event::AwaitingInclude(include) = step(&mut pp) else {
         panic!("expected AwaitingInclude");
     };
-    let parent_id = request.directive_span.source_id;
+    let parent_id = include.directive_span.source_id;
     pp.resume_include(build_source("x.hrl", "inside."))
         .expect("resume ok");
     let erl_pp::Event::Token(t) = step(&mut pp) else {
@@ -162,11 +162,11 @@ fn include_source_tokens_carry_origin_include_chain() {
         r#"-include("h.hrl").
 "#,
     );
-    let erl_pp::Event::AwaitingInclude(request) = step(&mut pp) else {
+    let erl_pp::Event::AwaitingInclude(include) = step(&mut pp) else {
         panic!("expected AwaitingInclude");
     };
-    let directive_span = request.directive_span;
-    let expected_kind = request.kind;
+    let directive_span = include.directive_span;
+    let expected_kind = include.kind;
     pp.resume_include(build_source("h.hrl", "inside."))
         .expect("resume ok");
     let erl_pp::Event::Token(ppt) = step(&mut pp) else {
@@ -218,7 +218,7 @@ fn macro_defined_in_include_visible_in_parent() {
 // ---------------------------------------------------------------------
 // 8. Nested include: parent → child → grandchild → child → parent.
 #[test]
-fn nested_include_request_and_return_order() {
+fn nested_include_and_return_order() {
     let mut pp = make(
         r#"-include("a.hrl").
 parent_after."#,
@@ -365,12 +365,12 @@ parent_tail."#,
 // 13. The awaiting event's `parent_origin` is what becomes the parent
 //     of the child source's `erl_pp::Origin::Include`.
 #[test]
-fn request_parent_origin_matches_child_include_parent() {
+fn include_parent_origin_matches_child_include_parent() {
     let mut pp = make(r#"-include("h.hrl")."#);
     let erl_pp::Event::AwaitingInclude(req) = step(&mut pp) else {
         panic!("expected AwaitingInclude");
     };
-    let request_parent = Arc::clone(&req.parent_origin);
+    let include_parent = Arc::clone(&req.parent_origin);
     pp.resume_include(build_source("h.hrl", "x."))
         .expect("resume ok");
     let erl_pp::Event::Token(t) = step(&mut pp) else {
@@ -379,5 +379,5 @@ fn request_parent_origin_matches_child_include_parent() {
     let erl_pp::Origin::Include { parent, .. } = t.origin() else {
         panic!("expected erl_pp::Origin::Include");
     };
-    assert!(Arc::ptr_eq(parent, &request_parent));
+    assert!(Arc::ptr_eq(parent, &include_parent));
 }

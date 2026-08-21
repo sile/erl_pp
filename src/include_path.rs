@@ -52,7 +52,7 @@ use std::fs::File;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
-use crate::event::IncludeRequest;
+use crate::event::IncludeDirective;
 use crate::origin::IncludeKind;
 
 /// Failure modes of [`open_include`].
@@ -60,7 +60,7 @@ use crate::origin::IncludeKind;
 /// Flat five-variant enum. The caller inspects the variant to decide
 /// how to render or act on the failure — this module does not embed
 /// source-span information in its error messages (that is the
-/// caller's responsibility, using [`IncludeRequest::directive_span`]).
+/// caller's responsibility, using [`IncludeDirective::directive_span`]).
 #[derive(Debug)]
 pub enum OpenIncludeError {
     /// Ordinary include path search exhausted every candidate with
@@ -123,7 +123,7 @@ impl std::error::Error for OpenIncludeError {
     }
 }
 
-/// Resolve an [`IncludeRequest`] against `include_paths` and, for
+/// Resolve an [`IncludeDirective`] against `include_paths` and, for
 /// `include_lib`, `erl_libs` (a list of `ERL_LIBS`-style library
 /// directories). Returns the path that successfully opened.
 ///
@@ -166,24 +166,24 @@ impl std::error::Error for OpenIncludeError {
 /// See the module docs for what this function deliberately does not
 /// do (canonicalization, cycle detection, encoding conversion, etc.).
 pub fn open_include(
-    request: &IncludeRequest,
+    include: &IncludeDirective,
     include_paths: &[PathBuf],
     erl_libs: &[PathBuf],
 ) -> Result<PathBuf, OpenIncludeError> {
-    if let Some(rest) = request.path.as_str().strip_prefix('$') {
+    if let Some(rest) = include.path.as_str().strip_prefix('$') {
         let (name, _tail) = split_var_ident(rest);
         if !name.is_empty() {
             match std::env::var(name) {
                 Ok(_) | Err(VarError::NotPresent) => {}
                 Err(VarError::NotUnicode(_)) => {
                     return Err(OpenIncludeError::InvalidPath {
-                        path: PathBuf::from(request.path.as_str()),
+                        path: PathBuf::from(include.path.as_str()),
                     });
                 }
             }
         }
     }
-    open_include_with_env(request, include_paths, erl_libs, |name| {
+    open_include_with_env(include, include_paths, erl_libs, |name| {
         std::env::var(name).ok()
     })
 }
@@ -193,7 +193,7 @@ pub fn open_include(
 /// crate-visible so unit tests can drive environment expansion
 /// without touching `std::env::set_var` (unsafe in Rust 2024).
 pub(crate) fn open_include_with_env<EnvLookup>(
-    request: &IncludeRequest,
+    include: &IncludeDirective,
     include_paths: &[PathBuf],
     erl_libs: &[PathBuf],
     env_lookup: EnvLookup,
@@ -201,12 +201,12 @@ pub(crate) fn open_include_with_env<EnvLookup>(
 where
     EnvLookup: Fn(&str) -> Option<String>,
 {
-    let expanded = expand_var(request.path.as_str(), &env_lookup);
+    let expanded = expand_var(include.path.as_str(), &env_lookup);
     let candidate = PathBuf::from(&expanded);
 
     match path_type(&candidate) {
         PathType::Absolute | PathType::VolumeRelative => open_direct(&candidate),
-        PathType::Relative => match request.kind {
+        PathType::Relative => match include.kind {
             IncludeKind::Include => {
                 match search_relative(&candidate, include_paths, /* fallback_on_io = */ false)? {
                     Some(path) => Ok(path),
@@ -409,7 +409,7 @@ mod tests {
 
     use erl_tokenize::Position;
 
-    use crate::event::IncludeRequest;
+    use crate::event::IncludeDirective;
     use crate::origin::IncludeKind;
     use crate::origin::Origin;
     use crate::source::{Source, SourceSpan, SourceStore};
@@ -454,11 +454,11 @@ mod tests {
         }
     }
 
-    fn dummy_request(kind: IncludeKind, path: &str) -> IncludeRequest {
+    fn dummy_include(kind: IncludeKind, path: &str) -> IncludeDirective {
         let store = SourceStore::new();
         let id = store.append(Source::from_text("m.erl", "-include(...)."));
         let span = SourceSpan::new(id, Position::new(), Position::new());
-        IncludeRequest {
+        IncludeDirective {
             kind,
             path: SourceString::new(path, span),
             directive_span: span,
@@ -536,7 +536,7 @@ mod tests {
     fn absolute_path_ignores_include_paths() {
         let tmp = TempDir::new("abs");
         let target = tmp.write("hdr.hrl", b"c");
-        let req = dummy_request(
+        let req = dummy_include(
             IncludeKind::Include,
             target.to_str().expect("temp path is valid UTF-8"),
         );
@@ -548,7 +548,7 @@ mod tests {
     fn absolute_path_missing_returns_not_found() {
         let tmp = TempDir::new("abs-missing");
         let missing = tmp.path.join("missing.hrl");
-        let req = dummy_request(
+        let req = dummy_include(
             IncludeKind::Include,
             missing.to_str().expect("temp path is valid UTF-8"),
         );
@@ -564,7 +564,7 @@ mod tests {
         let tmp1 = TempDir::new("rel1");
         let tmp2 = TempDir::new("rel2");
         let target = tmp2.write("hdr.hrl", b"c");
-        let req = dummy_request(IncludeKind::Include, "hdr.hrl");
+        let req = dummy_include(IncludeKind::Include, "hdr.hrl");
         let path =
             open_include_with_env(&req, &[tmp1.path.clone(), tmp2.path.clone()], &[], |_| None)
                 .expect("resolve relative");
@@ -577,7 +577,7 @@ mod tests {
         let tmp2 = TempDir::new("rel-second");
         let target = tmp1.write("hdr.hrl", b"c");
         let _shadow = tmp2.write("hdr.hrl", b"c");
-        let req = dummy_request(IncludeKind::Include, "hdr.hrl");
+        let req = dummy_include(IncludeKind::Include, "hdr.hrl");
         let path =
             open_include_with_env(&req, &[tmp1.path.clone(), tmp2.path.clone()], &[], |_| None)
                 .expect("resolve");
@@ -587,7 +587,7 @@ mod tests {
     #[test]
     fn not_found_when_no_candidate_matches() {
         let tmp = TempDir::new("nf");
-        let req = dummy_request(IncludeKind::Include, "missing.hrl");
+        let req = dummy_include(IncludeKind::Include, "missing.hrl");
         let e = open_include_with_env(&req, std::slice::from_ref(&tmp.path), &[], |_| None)
             .expect_err("missing relative path should not resolve");
         assert!(matches!(e, OpenIncludeError::NotFound));
@@ -599,7 +599,7 @@ mod tests {
         tmp1.write("sub", b"i-am-a-file");
         let tmp2 = TempDir::new("nad-dir");
         let target = tmp2.write("sub/hdr.hrl", b"c");
-        let req = dummy_request(IncludeKind::Include, "sub/hdr.hrl");
+        let req = dummy_include(IncludeKind::Include, "sub/hdr.hrl");
         let path =
             open_include_with_env(&req, &[tmp1.path.clone(), tmp2.path.clone()], &[], |_| None)
                 .expect("resolve");
@@ -614,7 +614,7 @@ mod tests {
         let tmp = TempDir::new("io-err");
         let link = tmp.path.join("hdr.hrl");
         std::os::unix::fs::symlink(&link, &link).expect("create symlink loop");
-        let req = dummy_request(IncludeKind::Include, "hdr.hrl");
+        let req = dummy_include(IncludeKind::Include, "hdr.hrl");
         let e = open_include_with_env(&req, std::slice::from_ref(&tmp.path), &[], |_| None)
             .expect_err("symlink loop should surface as an I/O error");
         assert!(matches!(e, OpenIncludeError::Io(_)), "got {e:?}");
@@ -628,7 +628,7 @@ mod tests {
         // erl_libs would resolve to a non-existent app root, but
         // normal include_paths search must win first.
         bogus_lib.mkdir("myapp");
-        let req = dummy_request(IncludeKind::IncludeLib, "myapp/include/hdr.hrl");
+        let req = dummy_include(IncludeKind::IncludeLib, "myapp/include/hdr.hrl");
         let path = open_include_with_env(
             &req,
             std::slice::from_ref(&tmp.path),
@@ -643,7 +643,7 @@ mod tests {
     fn include_lib_falls_back_via_erl_libs_exact_match() {
         let lib = TempDir::new("lib-exact");
         let target = lib.write("myapp/include/hdr.hrl", b"c");
-        let req = dummy_request(IncludeKind::IncludeLib, "myapp/include/hdr.hrl");
+        let req = dummy_include(IncludeKind::IncludeLib, "myapp/include/hdr.hrl");
         let path = open_include_with_env(&req, &[], std::slice::from_ref(&lib.path), |_| None)
             .expect("exact-match app dir");
         assert_eq!(path, target);
@@ -655,7 +655,7 @@ mod tests {
         let target = lib.write("myapp/include/hdr.hrl", b"c");
         // decoy versioned dir that would otherwise win the fallback.
         lib.write("myapp-9.0/include/hdr.hrl", b"decoy");
-        let req = dummy_request(IncludeKind::IncludeLib, "myapp/include/hdr.hrl");
+        let req = dummy_include(IncludeKind::IncludeLib, "myapp/include/hdr.hrl");
         let path = open_include_with_env(&req, &[], std::slice::from_ref(&lib.path), |_| None)
             .expect("exact match preferred");
         assert_eq!(path, target);
@@ -672,7 +672,7 @@ mod tests {
         let target = lib.write("myapp-2.0/include/hdr.hrl", b"newest");
         // Also 1.2 sits between numerically to confirm natural order
         lib.write("myapp-1.2/include/hdr.hrl", b"middle");
-        let req = dummy_request(IncludeKind::IncludeLib, "myapp/include/hdr.hrl");
+        let req = dummy_include(IncludeKind::IncludeLib, "myapp/include/hdr.hrl");
         let path = open_include_with_env(&req, &[], std::slice::from_ref(&lib.path), |_| None)
             .expect("highest version wins");
         assert_eq!(path, target);
@@ -685,7 +685,7 @@ mod tests {
         let lib2 = TempDir::new("lib-second");
         // A higher-version match in a later lib dir must not win.
         lib2.write("myapp-9.9/include/hdr.hrl", b"ignored");
-        let req = dummy_request(IncludeKind::IncludeLib, "myapp/include/hdr.hrl");
+        let req = dummy_include(IncludeKind::IncludeLib, "myapp/include/hdr.hrl");
         let path =
             open_include_with_env(&req, &[], &[lib1.path.clone(), lib2.path.clone()], |_| None)
                 .expect("first lib wins");
@@ -704,7 +704,7 @@ mod tests {
         std::os::unix::fs::symlink(&link, &link).expect("symlink loop");
         let lib = TempDir::new("lib-io-libs");
         let target = lib.write("myapp/include/hdr.hrl", b"c");
-        let req = dummy_request(IncludeKind::IncludeLib, "myapp/include/hdr.hrl");
+        let req = dummy_include(IncludeKind::IncludeLib, "myapp/include/hdr.hrl");
         let path = open_include_with_env(
             &req,
             std::slice::from_ref(&bad.path),
@@ -717,7 +717,7 @@ mod tests {
 
     #[test]
     fn include_lib_app_not_found_returns_app_not_found() {
-        let req = dummy_request(IncludeKind::IncludeLib, "myapp/include/hdr.hrl");
+        let req = dummy_include(IncludeKind::IncludeLib, "myapp/include/hdr.hrl");
         let e = open_include_with_env(&req, &[], &[], |_| None)
             .expect_err("unknown application should not resolve");
         match e {
@@ -730,7 +730,7 @@ mod tests {
     fn include_lib_app_file_not_found() {
         let lib = TempDir::new("lib-nofile");
         lib.mkdir("myapp");
-        let req = dummy_request(IncludeKind::IncludeLib, "myapp/include/missing.hrl");
+        let req = dummy_include(IncludeKind::IncludeLib, "myapp/include/missing.hrl");
         let e = open_include_with_env(&req, &[], std::slice::from_ref(&lib.path), |_| None)
             .expect_err("missing file under an existing app dir should not resolve");
         match e {
@@ -748,7 +748,7 @@ mod tests {
     fn does_not_canonicalize_dotdot() {
         let tmp = TempDir::new("nocanon");
         tmp.write("sub/hdr.hrl", b"c");
-        let req = dummy_request(IncludeKind::Include, "sub/../sub/hdr.hrl");
+        let req = dummy_include(IncludeKind::Include, "sub/../sub/hdr.hrl");
         let path = open_include_with_env(&req, std::slice::from_ref(&tmp.path), &[], |_| None)
             .expect("resolve");
         let expected = tmp.path.join("sub/../sub/hdr.hrl");

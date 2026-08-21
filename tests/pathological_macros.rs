@@ -70,11 +70,11 @@ fn fun_type_inside_arguments() {
 #[test]
 fn fun_arity_form_then_comma() {
     let mut pp = make("?F(fun bar/1, X).");
-    let request = drive_until(&mut pp, |e| match e {
+    let call = drive_until(&mut pp, |e| match e {
         erl_pp::Event::AwaitingMacroExpansion(req) => Some(req),
         other => panic!("unexpected event: {other:?}"),
     });
-    assert_eq!(request.arity, Some(2));
+    assert_eq!(call.arity, Some(2));
 }
 
 // ---------------------------------------------------------------------
@@ -82,11 +82,11 @@ fn fun_arity_form_then_comma() {
 #[test]
 fn nested_delimiters_binary_and_comment_in_arg() {
     let mut pp = make("?F(<<X:8, Y/binary>>, [1, % inner\n                       2, 3]).");
-    let request = drive_until(&mut pp, |e| match e {
+    let call = drive_until(&mut pp, |e| match e {
         erl_pp::Event::AwaitingMacroExpansion(req) => Some(req),
         other => panic!("unexpected event: {other:?}"),
     });
-    assert_eq!(request.arity, Some(2));
+    assert_eq!(call.arity, Some(2));
 }
 
 // ---------------------------------------------------------------------
@@ -95,13 +95,13 @@ fn nested_delimiters_binary_and_comment_in_arg() {
 #[test]
 fn comma_inside_string_literal_argument() {
     let mut pp = make(r#"?F("a,b", 42)."#);
-    let request = drive_until(&mut pp, |e| match e {
+    let call = drive_until(&mut pp, |e| match e {
         erl_pp::Event::AwaitingMacroExpansion(req) => Some(req),
         other => panic!("unexpected event: {other:?}"),
     });
-    assert_eq!(request.arity, Some(2));
+    assert_eq!(call.arity, Some(2));
     // The first argument's single lexical token is the whole string.
-    let first_arg_lex_count = request.arguments[0]
+    let first_arg_lex_count = call.arguments[0]
         .iter()
         .filter(|t| t.token().kind().is_lexical())
         .count();
@@ -156,13 +156,13 @@ fn function_like_rescan_detects_cycle() {
 #[test]
 fn function_like_rescan_fires_event_on_table_miss() {
     let mut pp = make("-define(FOO, ?UNKNOWN(1, 2)).\n?FOO.");
-    let request = drive_until(&mut pp, |e| match e {
+    let call = drive_until(&mut pp, |e| match e {
         erl_pp::Event::AwaitingMacroExpansion(req) => Some(req),
         erl_pp::Event::Complete => panic!("expected AwaitingMacroExpansion"),
         _ => None,
     });
-    assert_eq!(request.name.as_str(), "UNKNOWN");
-    assert_eq!(request.arity, Some(2));
+    assert_eq!(call.name.as_str(), "UNKNOWN");
+    assert_eq!(call.arity, Some(2));
 }
 
 // ---------------------------------------------------------------------

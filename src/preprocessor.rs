@@ -37,8 +37,8 @@ use crate::cursor::Cursor;
 use crate::directive::{Directive, parse_directive};
 use crate::error::{MacroCallErrorKind, PreprocessError, ProtocolError};
 use crate::event::{
-    Branch, BranchBoundary, ConditionalRequest, DefinedConditional, Diagnostic, Event,
-    ExpressionConditional, MacroExpansionRequest, Severity, UndefinedMacro,
+    Branch, BranchBoundary, Conditional, DefinedConditional, Diagnostic, Event,
+    ExpressionConditional, IncludeDirective, MacroCall, Severity, UndefinedMacro,
 };
 use crate::macros::{MacroDefinition, MacroKey, MacroTable};
 use crate::origin::{IncludeKind, Origin, SourceInfoMacroKind};
@@ -207,9 +207,9 @@ struct BranchFrame {
     is_if_chain: bool,
 }
 
-/// Distinguishes `-ifdef` from `-ifndef` when firing a defined-macro
-/// request. Not part of the public request type; that split lives on
-/// [`ConditionalRequest::Ifdef`] / [`ConditionalRequest::Ifndef`].
+/// Distinguishes `-ifdef` from `-ifndef` when assembling a
+/// [`Conditional`]. That split lives on
+/// [`Conditional::Ifdef`] / [`Conditional::Ifndef`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DefinedKind {
     Ifdef,
@@ -217,8 +217,8 @@ enum DefinedKind {
 }
 
 /// Distinguishes `-if` from `-elif` while a condition expression is
-/// being expanded. Not part of the public request type; that split
-/// lives on [`ConditionalRequest::If`] / [`ConditionalRequest::Elif`].
+/// being expanded. That split lives on
+/// [`Conditional::If`] / [`Conditional::Elif`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ExprKind {
     If,
@@ -229,7 +229,7 @@ enum ExprKind {
 #[derive(Debug, Clone)]
 struct ConditionCollect {
     kind: ExprKind,
-    /// Span of the `-if` / `-elif` directive itself (request payload).
+    /// Span of the `-if` / `-elif` directive itself (event payload).
     directive_span: SourceSpan,
     pending: PendingConditional,
     collected: Vec<SourceToken>,
@@ -821,7 +821,7 @@ impl Preprocessor {
         directive_span: SourceSpan,
     ) -> Event {
         let parent_origin = Arc::clone(&self.current_origin);
-        let request = crate::event::IncludeRequest {
+        let include = IncludeDirective {
             kind,
             path,
             directive_span,
@@ -832,7 +832,7 @@ impl Preprocessor {
             directive_span,
             kind,
         });
-        Event::AwaitingInclude(request)
+        Event::AwaitingInclude(include)
     }
 
     fn fire_diagnostic(
@@ -1014,15 +1014,15 @@ impl Preprocessor {
             directive_span,
             parent_origin: Arc::clone(&self.current_origin),
         };
-        let request = match kind {
-            DefinedKind::Ifdef => ConditionalRequest::Ifdef(payload),
-            DefinedKind::Ifndef => ConditionalRequest::Ifndef(payload),
+        let conditional = match kind {
+            DefinedKind::Ifdef => Conditional::Ifdef(payload),
+            DefinedKind::Ifndef => Conditional::Ifndef(payload),
         };
         self.state = State::AwaitingConditionalDecision(PendingConditional::OpenNew {
             directive_span,
             is_if_chain: false,
         });
-        Event::AwaitingConditional(request)
+        Event::AwaitingConditional(conditional)
     }
 
     fn fire_awaiting_conditional_expr(&mut self, collect: ConditionCollect) -> Event {
@@ -1031,12 +1031,12 @@ impl Preprocessor {
             directive_span: collect.directive_span,
             parent_origin: Arc::clone(&self.current_origin),
         };
-        let request = match collect.kind {
-            ExprKind::If => ConditionalRequest::If(payload),
-            ExprKind::Elif => ConditionalRequest::Elif(payload),
+        let conditional = match collect.kind {
+            ExprKind::If => Conditional::If(payload),
+            ExprKind::Elif => Conditional::Elif(payload),
         };
         self.state = State::AwaitingConditionalDecision(collect.pending);
-        Event::AwaitingConditional(request)
+        Event::AwaitingConditional(conditional)
     }
 
     fn try_scan_macro_call(&mut self) -> StepAction {
@@ -1277,7 +1277,7 @@ impl Preprocessor {
             return fire_circular(name_text, arity, call_site, chain);
         }
 
-        let request = MacroExpansionRequest {
+        let call = MacroCall {
             name: name_ss.clone(),
             arity,
             call_site,
@@ -1288,7 +1288,7 @@ impl Preprocessor {
             call_site,
             parent_origin,
         });
-        MacroCallOutcome::Fire(Box::new(Event::AwaitingMacroExpansion(request)))
+        MacroCallOutcome::Fire(Box::new(Event::AwaitingMacroExpansion(call)))
     }
 
     /// Splices `tokens` in front of the current expansion queue so
@@ -2323,20 +2323,20 @@ mod tests {
     fn constant_like_call_without_table_fires_awaiting_event() {
         let mut pp = make("?UNKNOWN.");
         let event = pp.step().expect("no protocol errors");
-        let request = match event {
+        let call = match event {
             Event::AwaitingMacroExpansion(req) => req,
             other => panic!("expected AwaitingMacroExpansion, got {other:?}"),
         };
-        assert_eq!(request.name.as_str(), "UNKNOWN");
-        assert_eq!(request.arity, None);
-        assert!(request.arguments.is_empty());
+        assert_eq!(call.name.as_str(), "UNKNOWN");
+        assert_eq!(call.arity, None);
+        assert!(call.arguments.is_empty());
         assert!(matches!(pp.status(), Status::AwaitingMacroExpansion));
     }
 
     #[test]
     fn resume_macro_expansion_enqueues_response_tokens() {
         let mut pp = make("?UNKNOWN.");
-        let request = match pp.step().expect("no protocol errors") {
+        let call = match pp.step().expect("no protocol errors") {
             Event::AwaitingMacroExpansion(req) => req,
             other => panic!("expected AwaitingMacroExpansion, got {other:?}"),
         };
@@ -2356,14 +2356,14 @@ mod tests {
         else {
             panic!("expected CallerExpansion origin, got {:?}", ppt.origin());
         };
-        assert_eq!(*origin_call_site, request.call_site);
+        assert_eq!(*origin_call_site, call.call_site);
         assert_eq!(name.as_str(), "UNKNOWN");
     }
 
     #[test]
     fn resume_macro_expansion_with_empty_source_skips_call() {
         let mut pp = make("?UNKNOWN.");
-        let _request = match pp.step().expect("no protocol errors") {
+        let _call = match pp.step().expect("no protocol errors") {
             Event::AwaitingMacroExpansion(req) => req,
             other => panic!("expected AwaitingMacroExpansion, got {other:?}"),
         };
@@ -2388,7 +2388,7 @@ mod tests {
         );
     }
 
-    fn expect_awaiting(pp: &mut Preprocessor) -> MacroExpansionRequest {
+    fn expect_awaiting(pp: &mut Preprocessor) -> MacroCall {
         match pp.step().expect("no protocol errors") {
             Event::AwaitingMacroExpansion(req) => req,
             other => panic!("expected AwaitingMacroExpansion, got {other:?}"),
@@ -2405,19 +2405,19 @@ mod tests {
     #[test]
     fn function_like_call_arity_zero() {
         let mut pp = make("?FOO().");
-        let request = expect_awaiting(&mut pp);
-        assert_eq!(request.name.as_str(), "FOO");
-        assert_eq!(request.arity, Some(0));
-        assert!(request.arguments.is_empty());
+        let call = expect_awaiting(&mut pp);
+        assert_eq!(call.name.as_str(), "FOO");
+        assert_eq!(call.arity, Some(0));
+        assert!(call.arguments.is_empty());
     }
 
     #[test]
     fn function_like_call_single_argument() {
         let mut pp = make("?FOO(bar).");
-        let request = expect_awaiting(&mut pp);
-        assert_eq!(request.arity, Some(1));
-        assert_eq!(request.arguments.len(), 1);
-        let arg_texts: Vec<_> = request.arguments[0]
+        let call = expect_awaiting(&mut pp);
+        assert_eq!(call.arity, Some(1));
+        assert_eq!(call.arguments.len(), 1);
+        let arg_texts: Vec<_> = call.arguments[0]
             .iter()
             .map(|t| t.text().to_owned())
             .collect();
@@ -2427,9 +2427,9 @@ mod tests {
     #[test]
     fn function_like_call_multiple_arguments() {
         let mut pp = make("?FOO(a, b, c).");
-        let request = expect_awaiting(&mut pp);
-        assert_eq!(request.arity, Some(3));
-        let names: Vec<_> = request
+        let call = expect_awaiting(&mut pp);
+        assert_eq!(call.arity, Some(3));
+        let names: Vec<_> = call
             .arguments
             .iter()
             .map(|arg| {
@@ -2446,24 +2446,24 @@ mod tests {
     #[test]
     fn function_like_call_nested_parens_do_not_split_arguments() {
         let mut pp = make("?FOO((a, b), c).");
-        let request = expect_awaiting(&mut pp);
-        assert_eq!(request.arity, Some(2));
+        let call = expect_awaiting(&mut pp);
+        assert_eq!(call.arity, Some(2));
     }
 
     #[test]
     fn function_like_call_nested_brackets_and_braces() {
         let mut pp = make("?FOO([a, b], {c, d}, <<1, 2>>).");
-        let request = expect_awaiting(&mut pp);
-        assert_eq!(request.arity, Some(3));
+        let call = expect_awaiting(&mut pp);
+        assert_eq!(call.arity, Some(3));
     }
 
     #[test]
     fn function_like_call_middle_empty_is_valid() {
         let mut pp = make("?FOO(a, , b).");
-        let request = expect_awaiting(&mut pp);
-        assert_eq!(request.arity, Some(3));
+        let call = expect_awaiting(&mut pp);
+        assert_eq!(call.arity, Some(3));
         // The middle argument has no lexical token, only hidden or empty.
-        let middle_has_lexical = request.arguments[1]
+        let middle_has_lexical = call.arguments[1]
             .iter()
             .any(|t| t.token().kind().is_lexical());
         assert!(!middle_has_lexical);
@@ -2493,16 +2493,16 @@ mod tests {
     #[test]
     fn function_like_call_keyword_block_balancing() {
         let mut pp = make("?FOO(case X of Y -> Z end, W).");
-        let request = expect_awaiting(&mut pp);
+        let call = expect_awaiting(&mut pp);
         // The commas inside case ... end are not top-level.
-        assert_eq!(request.arity, Some(2));
+        assert_eq!(call.arity, Some(2));
     }
 
     #[test]
     fn function_like_call_fun_expression() {
         let mut pp = make("?FOO(fun() -> ok end, a).");
-        let request = expect_awaiting(&mut pp);
-        assert_eq!(request.arity, Some(2));
+        let call = expect_awaiting(&mut pp);
+        assert_eq!(call.arity, Some(2));
     }
 
     #[test]
@@ -2510,8 +2510,8 @@ mod tests {
         // `fun((atom()) -> ok)` ends with `)`, not `end`; the FunEnd
         // sentinel must drain when the outer macro `)` is reached.
         let mut pp = make("?FOO(fun((atom()) -> ok), b).");
-        let request = expect_awaiting(&mut pp);
-        assert_eq!(request.arity, Some(2));
+        let call = expect_awaiting(&mut pp);
+        assert_eq!(call.arity, Some(2));
     }
 
     #[test]

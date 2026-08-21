@@ -52,28 +52,28 @@ pub enum Event {
     /// The preprocessor is awaiting an include resolution from the
     /// caller.
     ///
-    /// Payload struct name is preserved for now; details are filled
-    /// in by later work on include resolution.
-    AwaitingInclude(IncludeRequest),
+    /// Payload is [`IncludeDirective`]. Resume with
+    /// [`crate::Preprocessor::resume_include`].
+    AwaitingInclude(IncludeDirective),
 
     /// The preprocessor is awaiting a conditional-branch decision
     /// from the caller.
     ///
     /// `-ifdef` / `-ifndef` and `-if` / `-elif` share this event
     /// and [`crate::Preprocessor::resume_conditional`], but their
-    /// payloads differ: see [`ConditionalRequest`].
-    AwaitingConditional(ConditionalRequest),
+    /// payloads differ: see [`Conditional`].
+    AwaitingConditional(Conditional),
 
     /// The preprocessor is awaiting a caller-driven macro expansion.
     ///
     /// Fires for every `?NAME` (or `?NAME(...)`) that is neither
     /// `?FILE` / `?LINE` nor present in the current macro table. The
-    /// caller inspects the request and responds via
+    /// caller inspects the [`MacroCall`] and resumes via
     /// [`crate::Preprocessor::resume_macro_expansion`] with a
     /// [`crate::Source`] whose token stream is spliced in as the
     /// expansion result. An empty [`crate::Source`] effectively
     /// skips the call.
-    AwaitingMacroExpansion(MacroExpansionRequest),
+    AwaitingMacroExpansion(MacroCall),
 
     /// The preprocessor is crossing a conditional branch boundary
     /// (`-else` / `-endif`).
@@ -122,7 +122,7 @@ pub struct UndefinedMacro {
 /// include, then hands the resulting [`crate::Source`] back through
 /// [`crate::Preprocessor::resume_include`].
 #[derive(Debug, Clone)]
-pub struct IncludeRequest {
+pub struct IncludeDirective {
     /// Whether this is `-include` or `-include_lib`.
     pub kind: IncludeKind,
     /// Decoded, concatenated contents of the include's string
@@ -165,7 +165,7 @@ pub enum Branch {
 /// the caller needs is different, so the variants carry distinct
 /// payloads instead of sharing optional fields.
 #[derive(Debug, Clone)]
-pub enum ConditionalRequest {
+pub enum Conditional {
     /// `-ifdef(NAME).`
     Ifdef(DefinedConditional),
     /// `-ifndef(NAME).`
@@ -178,8 +178,8 @@ pub enum ConditionalRequest {
     Elif(ExpressionConditional),
 }
 
-/// Payload of [`ConditionalRequest::Ifdef`] and
-/// [`ConditionalRequest::Ifndef`].
+/// Payload of [`Conditional::Ifdef`] and
+/// [`Conditional::Ifndef`].
 #[derive(Debug, Clone)]
 pub struct DefinedConditional {
     /// Decoded name of the target macro.
@@ -198,8 +198,8 @@ pub struct DefinedConditional {
     pub parent_origin: Arc<Origin>,
 }
 
-/// Payload of [`ConditionalRequest::If`] and
-/// [`ConditionalRequest::Elif`].
+/// Payload of [`Conditional::If`] and
+/// [`Conditional::Elif`].
 #[derive(Debug, Clone)]
 pub struct ExpressionConditional {
     /// Macro-expanded expression tokens. Evaluating them is the
@@ -276,7 +276,7 @@ pub struct Diagnostic {
     /// Argument tokens inside the parentheses, kept as a flat
     /// stream that includes hidden tokens (whitespace / comments)
     /// — same convention as
-    /// [`MacroExpansionRequest::arguments`]'s inner streams. Each
+    /// [`MacroCall::arguments`]'s inner streams. Each
     /// token's `Origin` is the directive site's origin (the
     /// `parent_origin` on this same struct); no macro expansion is
     /// applied inside the arguments.
@@ -301,7 +301,7 @@ pub struct Diagnostic {
 /// empty `arguments`, distinct from a constant-like `?NAME` where
 /// `arity` is `None` and `arguments` is also empty.
 #[derive(Debug, Clone)]
-pub struct MacroExpansionRequest {
+pub struct MacroCall {
     /// Decoded name of the macro (the token following `?`).
     pub name: SourceString,
     /// Arity of the call: `None` for constant-like `?NAME`, `Some(n)`

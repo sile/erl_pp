@@ -11,7 +11,7 @@ use crate::source::SourceSpan;
 use crate::source_string::SourceString;
 
 /// Distinguishes `-include` from `-include_lib` in
-/// [`crate::IncludeRequest`] and [`Origin::Include`].
+/// [`crate::IncludeDirective`] and [`Origin::Include`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IncludeKind {
     /// `-include("path").`
@@ -126,8 +126,8 @@ pub enum Origin {
     },
 
     /// Token came from a [`crate::Source`] the caller supplied through
-    /// `Preprocessor::resume_macro_expansion` in response to an
-    /// `Event::AwaitingMacroExpansion` request.
+    /// `Preprocessor::resume_macro_expansion` after an
+    /// `Event::AwaitingMacroExpansion`.
     ///
     /// Distinct from [`Origin::MacroBody`] (which is reserved for the
     /// replacement body of a `-define` directive) because caller-driven

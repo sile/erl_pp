@@ -270,7 +270,7 @@ fn ifdef_then_and_else_select_effective_branch() -> TestResult {
             match step_expect_ok(&mut pp) {
                 erl_pp::Event::AwaitingConditional(req) => {
                     assert!(!resumed, "double AwaitingConditional");
-                    let erl_pp::ConditionalRequest::Ifdef(d) = req else {
+                    let erl_pp::Conditional::Ifdef(d) = req else {
                         panic!("expected Ifdef, got {req:?}");
                     };
                     assert_eq!(d.name.as_str(), cond);

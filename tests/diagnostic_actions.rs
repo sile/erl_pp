@@ -80,7 +80,7 @@ fn multi_token_argument_is_preserved() {
 
 // ---------------------------------------------------------------------
 // 4. Hidden tokens (whitespace) inside the argument are preserved as
-//    part of `arguments` (matches MacroExpansionRequest convention).
+//    part of `arguments` (matches MacroCall convention).
 #[test]
 fn argument_preserves_hidden_tokens() {
     let mut pp = make(r#"-error( "hi" )."#);
