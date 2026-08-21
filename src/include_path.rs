@@ -536,7 +536,10 @@ mod tests {
     fn absolute_path_ignores_include_paths() {
         let tmp = TempDir::new("abs");
         let target = tmp.write("hdr.hrl", b"c");
-        let req = dummy_request(IncludeKind::Include, target.to_str().unwrap());
+        let req = dummy_request(
+            IncludeKind::Include,
+            target.to_str().expect("temp path is valid UTF-8"),
+        );
         let path = open_include_with_env(&req, &[], &[], |_| None).expect("resolve absolute");
         assert_eq!(path, target);
     }
@@ -545,7 +548,10 @@ mod tests {
     fn absolute_path_missing_returns_not_found() {
         let tmp = TempDir::new("abs-missing");
         let missing = tmp.path.join("missing.hrl");
-        let req = dummy_request(IncludeKind::Include, missing.to_str().unwrap());
+        let req = dummy_request(
+            IncludeKind::Include,
+            missing.to_str().expect("temp path is valid UTF-8"),
+        );
         let e = open_include_with_env(&req, &[], &[], |_| None)
             .expect_err("missing absolute path should not resolve");
         assert!(matches!(e, OpenIncludeError::NotFound));

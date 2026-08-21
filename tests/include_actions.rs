@@ -3,29 +3,28 @@
 //!
 //! Covers the polished contract: kind + path payload, no source
 //! read before the response, parent-source resume after include EOF,
-//! nested include order, `Origin::Include` chain, empty-`Source`
+//! nested include order, `erl_pp::Origin::Include` chain, empty-`erl_pp::Source`
 //! skip, and protocol-error paths.
 
 use std::sync::Arc;
 
-use erl_pp::{Event, IncludeKind, Origin, Preprocessor, ProtocolError, Source, Status};
-use erl_tokenize::{Position, scan_token};
-
-fn build_source(name: &str, text: &str) -> Source {
+fn build_source(name: &str, text: &str) -> erl_pp::Source {
     let mut tokens = Vec::new();
-    let mut position = Position::new();
-    while let Some(t) = scan_token(text, position).expect("test input scans without lex errors") {
+    let mut position = erl_tokenize::Position::new();
+    while let Some(t) =
+        erl_tokenize::scan_token(text, position).expect("test input scans without lex errors")
+    {
         position = t.end();
         tokens.push(t);
     }
-    Source::new(name, text.to_string(), tokens)
+    erl_pp::Source::new(name, text.to_string(), tokens)
 }
 
-fn make(text: &str) -> Preprocessor {
-    Preprocessor::new([build_source("m.erl", text)])
+fn make(text: &str) -> erl_pp::Preprocessor {
+    erl_pp::Preprocessor::new([build_source("m.erl", text)])
 }
 
-fn step(pp: &mut Preprocessor) -> Event {
+fn step(pp: &mut erl_pp::Preprocessor) -> erl_pp::Event {
     pp.step().expect("no protocol error")
 }
 
@@ -37,12 +36,15 @@ fn step(pp: &mut Preprocessor) -> Event {
 fn include_fires_awaiting_include_with_kind_and_path() {
     let mut pp = make(r#"-include("foo.hrl")."#);
     let event = step(&mut pp);
-    let Event::AwaitingInclude(request) = event else {
+    let erl_pp::Event::AwaitingInclude(request) = event else {
         panic!("expected AwaitingInclude, got {event:?}");
     };
-    assert_eq!(request.kind, IncludeKind::Include);
+    assert_eq!(request.kind, erl_pp::IncludeKind::Include);
     assert_eq!(request.path.as_str(), "foo.hrl");
-    assert!(matches!(pp.status(), Status::AwaitingIncludeResolution));
+    assert!(matches!(
+        pp.status(),
+        erl_pp::Status::AwaitingIncludeResolution
+    ));
 }
 
 // ---------------------------------------------------------------------
@@ -52,10 +54,10 @@ fn include_fires_awaiting_include_with_kind_and_path() {
 fn include_lib_fires_awaiting_include_with_lib_kind() {
     let mut pp = make(r#"-include_lib("kernel/include/file.hrl")."#);
     let event = step(&mut pp);
-    let Event::AwaitingInclude(request) = event else {
+    let erl_pp::Event::AwaitingInclude(request) = event else {
         panic!("expected AwaitingInclude, got {event:?}");
     };
-    assert_eq!(request.kind, IncludeKind::IncludeLib);
+    assert_eq!(request.kind, erl_pp::IncludeKind::IncludeLib);
     assert_eq!(request.path.as_str(), "kernel/include/file.hrl");
 }
 
@@ -69,13 +71,13 @@ fn directive_span_points_at_parent_not_include() {
         r#"-include("x.hrl").
 "#,
     );
-    let Event::AwaitingInclude(request) = step(&mut pp) else {
+    let erl_pp::Event::AwaitingInclude(request) = step(&mut pp) else {
         panic!("expected AwaitingInclude");
     };
     let parent_id = request.directive_span.source_id;
     pp.resume_include(build_source("x.hrl", "inside."))
         .expect("resume ok");
-    let Event::Token(t) = step(&mut pp) else {
+    let erl_pp::Event::Token(t) = step(&mut pp) else {
         panic!("expected token from include source");
     };
     assert_ne!(t.source_span().source_id, parent_id);
@@ -91,30 +93,30 @@ fn resume_include_splices_include_before_parent_resumes() {
 after."#,
     );
     let event = step(&mut pp);
-    assert!(matches!(event, Event::AwaitingInclude(_)));
+    assert!(matches!(event, erl_pp::Event::AwaitingInclude(_)));
     pp.resume_include(build_source("h.hrl", "inside."))
         .expect("resume ok");
     // Include source: `inside.`
     let e = step(&mut pp);
-    let Event::Token(t) = e else {
-        panic!("expected Token, got {e:?}");
+    let erl_pp::Event::Token(t) = e else {
+        panic!("expected erl_tokenize::Token, got {e:?}");
     };
     assert_eq!(t.text(), "inside");
     let e = step(&mut pp);
-    let Event::Token(t) = e else {
-        panic!("expected Token, got {e:?}");
+    let erl_pp::Event::Token(t) = e else {
+        panic!("expected erl_tokenize::Token, got {e:?}");
     };
     assert_eq!(t.text(), ".");
     // Parent source resumes at the next lexical token `after`.
     let mut found_after = false;
     loop {
         match step(&mut pp) {
-            Event::Token(t) if t.text() == "after" => {
+            erl_pp::Event::Token(t) if t.text() == "after" => {
                 found_after = true;
                 break;
             }
-            Event::Token(_) => {}
-            Event::Complete => break,
+            erl_pp::Event::Token(_) => {}
+            erl_pp::Event::Complete => break,
             other => panic!("unexpected event: {other:?}"),
         }
     }
@@ -122,9 +124,9 @@ after."#,
 }
 
 // ---------------------------------------------------------------------
-// 5. An empty include Source skips content and jumps straight to the
+// 5. An empty include erl_pp::Source skips content and jumps straight to the
 //    parent's next token (same idiom as `resume_macro_expansion` with
-//    a token-free Source).
+//    a token-free erl_pp::Source).
 #[test]
 fn resume_include_with_empty_source_skips_content() {
     let mut pp = make(
@@ -132,19 +134,19 @@ fn resume_include_with_empty_source_skips_content() {
 after."#,
     );
     let event = step(&mut pp);
-    assert!(matches!(event, Event::AwaitingInclude(_)));
+    assert!(matches!(event, erl_pp::Event::AwaitingInclude(_)));
     pp.resume_include(build_source("h.hrl", ""))
         .expect("resume ok");
     // Parent source next lexical token should be `after`.
     let mut found_after = false;
     loop {
         match step(&mut pp) {
-            Event::Token(t) if t.text() == "after" => {
+            erl_pp::Event::Token(t) if t.text() == "after" => {
                 found_after = true;
                 break;
             }
-            Event::Token(_) => {}
-            Event::Complete => break,
+            erl_pp::Event::Token(_) => {}
+            erl_pp::Event::Complete => break,
             other => panic!("unexpected event: {other:?}"),
         }
     }
@@ -152,7 +154,7 @@ after."#,
 }
 
 // ---------------------------------------------------------------------
-// 6. Include source's tokens carry `Origin::Include { include_site, kind }`
+// 6. Include source's tokens carry `erl_pp::Origin::Include { include_site, kind }`
 //    chained under the parent origin.
 #[test]
 fn include_source_tokens_carry_origin_include_chain() {
@@ -160,27 +162,27 @@ fn include_source_tokens_carry_origin_include_chain() {
         r#"-include("h.hrl").
 "#,
     );
-    let Event::AwaitingInclude(request) = step(&mut pp) else {
+    let erl_pp::Event::AwaitingInclude(request) = step(&mut pp) else {
         panic!("expected AwaitingInclude");
     };
     let directive_span = request.directive_span;
     let expected_kind = request.kind;
     pp.resume_include(build_source("h.hrl", "inside."))
         .expect("resume ok");
-    let Event::Token(ppt) = step(&mut pp) else {
-        panic!("expected Token from include");
+    let erl_pp::Event::Token(ppt) = step(&mut pp) else {
+        panic!("expected erl_tokenize::Token from include");
     };
-    let Origin::Include {
+    let erl_pp::Origin::Include {
         parent,
         include_site,
         kind,
     } = ppt.origin()
     else {
-        panic!("expected Origin::Include, got {:?}", ppt.origin());
+        panic!("expected erl_pp::Origin::Include, got {:?}", ppt.origin());
     };
     assert_eq!(*include_site, directive_span);
     assert_eq!(*kind, expected_kind);
-    assert!(matches!(**parent, Origin::Source));
+    assert!(matches!(**parent, erl_pp::Origin::Source));
 }
 
 // ---------------------------------------------------------------------
@@ -199,12 +201,14 @@ fn macro_defined_in_include_visible_in_parent() {
     let mut saw_42 = false;
     loop {
         match step(&mut pp) {
-            Event::Token(t) if t.text() == "42" => {
+            erl_pp::Event::Token(t) if t.text() == "42" => {
                 saw_42 = true;
                 break;
             }
-            Event::Token(_) | Event::MacroDefined(_) | Event::MacroUndefined(_) => {}
-            Event::Complete => break,
+            erl_pp::Event::Token(_)
+            | erl_pp::Event::MacroDefined(_)
+            | erl_pp::Event::MacroUndefined(_) => {}
+            erl_pp::Event::Complete => break,
             other => panic!("unexpected event: {other:?}"),
         }
     }
@@ -219,7 +223,7 @@ fn nested_include_request_and_return_order() {
         r#"-include("a.hrl").
 parent_after."#,
     );
-    let Event::AwaitingInclude(req1) = step(&mut pp) else {
+    let erl_pp::Event::AwaitingInclude(req1) = step(&mut pp) else {
         panic!("expected AwaitingInclude for a.hrl");
     };
     assert_eq!(req1.path.as_str(), "a.hrl");
@@ -229,7 +233,7 @@ parent_after."#,
 a_after."#,
     ))
     .expect("resume a");
-    let Event::AwaitingInclude(req2) = step(&mut pp) else {
+    let erl_pp::Event::AwaitingInclude(req2) = step(&mut pp) else {
         panic!("expected AwaitingInclude for b.hrl");
     };
     assert_eq!(req2.path.as_str(), "b.hrl");
@@ -239,11 +243,11 @@ a_after."#,
     let mut order = Vec::new();
     loop {
         match step(&mut pp) {
-            Event::Token(t) if t.token().kind().is_lexical() && t.text() != "." => {
+            erl_pp::Event::Token(t) if t.token().kind().is_lexical() && t.text() != "." => {
                 order.push(t.text().to_owned());
             }
-            Event::Token(_) => {}
-            Event::Complete => break,
+            erl_pp::Event::Token(_) => {}
+            erl_pp::Event::Complete => break,
             other => panic!("unexpected event: {other:?}"),
         }
     }
@@ -251,16 +255,16 @@ a_after."#,
 }
 
 // ---------------------------------------------------------------------
-// 9. Protocol error: resume_include in Status::Scanning.
+// 9. Protocol error: resume_include in erl_pp::Status::Scanning.
 #[test]
 fn resume_include_in_scanning_is_protocol_error() {
     let mut pp = make("just_a_token.");
     let err = pp
         .resume_include(build_source("x.hrl", "x."))
         .expect_err("resume_include in Scanning should fail");
-    assert_eq!(err, ProtocolError);
+    assert_eq!(err, erl_pp::ProtocolError);
     // Caller checks the exact case via status() — still Scanning here.
-    assert!(matches!(pp.status(), Status::Scanning));
+    assert!(matches!(pp.status(), erl_pp::Status::Scanning));
 }
 
 // ---------------------------------------------------------------------
@@ -269,18 +273,21 @@ fn resume_include_in_scanning_is_protocol_error() {
 fn resume_include_while_awaiting_macro_is_protocol_error() {
     let mut pp = make("?UNKNOWN.");
     let event = step(&mut pp);
-    assert!(matches!(event, Event::AwaitingMacroExpansion(_)));
+    assert!(matches!(event, erl_pp::Event::AwaitingMacroExpansion(_)));
     let err = pp
         .resume_include(build_source("x.hrl", "x."))
         .expect_err("resume_include while awaiting macro should fail");
-    assert_eq!(err, ProtocolError);
+    assert_eq!(err, erl_pp::ProtocolError);
     // Macro pending state was not consumed — caller sees this via status().
-    assert!(matches!(pp.status(), Status::AwaitingMacroExpansion));
+    assert!(matches!(
+        pp.status(),
+        erl_pp::Status::AwaitingMacroExpansion
+    ));
 }
 
 // ---------------------------------------------------------------------
 // 11. Same include source pulled from two sites keeps distinct
-//     `include_site` on each token's `Origin::Include`.
+//     `include_site` on each token's `erl_pp::Origin::Include`.
 #[test]
 fn same_source_from_two_sites_gets_distinct_include_site() {
     let mut pp = make(
@@ -288,50 +295,50 @@ fn same_source_from_two_sites_gets_distinct_include_site() {
 -include("h.hrl")."#,
     );
     // First include.
-    let Event::AwaitingInclude(req1) = step(&mut pp) else {
+    let erl_pp::Event::AwaitingInclude(req1) = step(&mut pp) else {
         panic!("expected first AwaitingInclude");
     };
     let site1 = req1.directive_span;
     pp.resume_include(build_source("h.hrl", "one."))
         .expect("resume 1");
-    let Event::Token(t1) = step(&mut pp) else {
+    let erl_pp::Event::Token(t1) = step(&mut pp) else {
         panic!("expected token from first include");
     };
-    let Origin::Include {
+    let erl_pp::Origin::Include {
         include_site: s1, ..
     } = t1.origin()
     else {
-        panic!("expected Origin::Include");
+        panic!("expected erl_pp::Origin::Include");
     };
     assert_eq!(*s1, site1);
     // Drain first include to EOF, arrive at second directive.
     loop {
         match step(&mut pp) {
-            Event::AwaitingInclude(req2) => {
+            erl_pp::Event::AwaitingInclude(req2) => {
                 let site2 = req2.directive_span;
                 assert_ne!(site2, site1);
                 pp.resume_include(build_source("h.hrl", "two."))
                     .expect("resume 2");
-                let Event::Token(t2) = step(&mut pp) else {
+                let erl_pp::Event::Token(t2) = step(&mut pp) else {
                     panic!("expected token from second include");
                 };
-                let Origin::Include {
+                let erl_pp::Origin::Include {
                     include_site: s2, ..
                 } = t2.origin()
                 else {
-                    panic!("expected Origin::Include");
+                    panic!("expected erl_pp::Origin::Include");
                 };
                 assert_eq!(*s2, site2);
                 return;
             }
-            Event::Token(_) => {}
+            erl_pp::Event::Token(_) => {}
             other => panic!("unexpected event: {other:?}"),
         }
     }
 }
 
 // ---------------------------------------------------------------------
-// 12. Include source EOF does not surface as top-level Event::Complete
+// 12. Include source EOF does not surface as top-level erl_pp::Event::Complete
 //     — only when the parent stack is fully drained.
 #[test]
 fn include_eof_is_not_top_level_complete() {
@@ -345,9 +352,9 @@ parent_tail."#,
     let mut seen_parent_tail = false;
     loop {
         match step(&mut pp) {
-            Event::Token(t) if t.text() == "parent_tail" => seen_parent_tail = true,
-            Event::Token(_) => {}
-            Event::Complete => break,
+            erl_pp::Event::Token(t) if t.text() == "parent_tail" => seen_parent_tail = true,
+            erl_pp::Event::Token(_) => {}
+            erl_pp::Event::Complete => break,
             other => panic!("unexpected event: {other:?}"),
         }
     }
@@ -356,21 +363,21 @@ parent_tail."#,
 
 // ---------------------------------------------------------------------
 // 13. The awaiting event's `parent_origin` is what becomes the parent
-//     of the child source's `Origin::Include`.
+//     of the child source's `erl_pp::Origin::Include`.
 #[test]
 fn request_parent_origin_matches_child_include_parent() {
     let mut pp = make(r#"-include("h.hrl")."#);
-    let Event::AwaitingInclude(req) = step(&mut pp) else {
+    let erl_pp::Event::AwaitingInclude(req) = step(&mut pp) else {
         panic!("expected AwaitingInclude");
     };
     let request_parent = Arc::clone(&req.parent_origin);
     pp.resume_include(build_source("h.hrl", "x."))
         .expect("resume ok");
-    let Event::Token(t) = step(&mut pp) else {
+    let erl_pp::Event::Token(t) = step(&mut pp) else {
         panic!("expected token");
     };
-    let Origin::Include { parent, .. } = t.origin() else {
-        panic!("expected Origin::Include");
+    let erl_pp::Origin::Include { parent, .. } = t.origin() else {
+        panic!("expected erl_pp::Origin::Include");
     };
     assert!(Arc::ptr_eq(parent, &request_parent));
 }

@@ -1,11 +1,11 @@
-//! Integration tests for the public `open_include` resolver.
+//! Integration tests for the public `erl_pp::open_include` resolver.
 //!
-//! `IncludeRequest` values are obtained through the real
-//! `Preprocessor` event loop rather than constructed by hand, so
+//! `erl_pp::IncludeRequest` values are obtained through the real
+//! `erl_pp::Preprocessor` event loop rather than constructed by hand, so
 //! the integration test exercises the actual caller path.
 //!
 //! Environment-variable expansion goes through `std::env::var`
-//! inside `open_include`. Because `std::env::set_var` is `unsafe`
+//! inside `erl_pp::open_include`. Because `std::env::set_var` is `unsafe`
 //! in Rust 2024, `$VAR` behavior is covered by unit tests via the
 //! internal `open_include_with_env` closure form; this integration
 //! surface only walks paths that do not touch the process
@@ -13,11 +13,6 @@
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-
-use erl_pp::{
-    Event, IncludeKind, IncludeRequest, OpenIncludeError, Preprocessor, Source, open_include,
-};
-use erl_tokenize::{Position, Token, scan_token};
 
 struct TempDir {
     path: PathBuf,
@@ -50,24 +45,24 @@ impl Drop for TempDir {
     }
 }
 
-fn scan_all(text: &str) -> Vec<Token> {
+fn scan_all(text: &str) -> Vec<erl_tokenize::Token> {
     let mut tokens = Vec::new();
-    let mut position = Position::new();
-    while let Some(t) = scan_token(text, position).expect("tokenize test input") {
+    let mut position = erl_tokenize::Position::new();
+    while let Some(t) = erl_tokenize::scan_token(text, position).expect("tokenize test input") {
         position = t.end();
         tokens.push(t);
     }
     tokens
 }
 
-fn take_include_request(source_text: &str) -> IncludeRequest {
+fn take_include_request(source_text: &str) -> erl_pp::IncludeRequest {
     let tokens = scan_all(source_text);
-    let source = Source::new("caller.erl", source_text.to_string(), tokens);
-    let mut pp = Preprocessor::new([source]);
+    let source = erl_pp::Source::new("caller.erl", source_text.to_string(), tokens);
+    let mut pp = erl_pp::Preprocessor::new([source]);
     loop {
         match pp.step().expect("no protocol error") {
-            Event::AwaitingInclude(req) => return req,
-            Event::Token(_) => continue,
+            erl_pp::Event::AwaitingInclude(req) => return req,
+            erl_pp::Event::Token(_) => continue,
             other => panic!("unexpected event before AwaitingInclude: {other:?}"),
         }
     }
@@ -79,8 +74,8 @@ fn absolute_path_opens_directly() {
     let target = tmp.write("hdr.hrl", b"c");
     let path_str = target.to_str().expect("utf8 path");
     let request = take_include_request(&format!(r#"-include("{path_str}")."#));
-    assert_eq!(request.kind, IncludeKind::Include);
-    let path = open_include(&request, &[], &[]).expect("resolve");
+    assert_eq!(request.kind, erl_pp::IncludeKind::Include);
+    let path = erl_pp::open_include(&request, &[], &[]).expect("resolve");
     assert_eq!(path, target);
 }
 
@@ -91,7 +86,7 @@ fn relative_path_walks_include_paths_in_order() {
     let target = tmp2.write("hdr.hrl", b"c");
     let request = take_include_request(r#"-include("hdr.hrl")."#);
     let include_paths = vec![tmp1.path.clone(), tmp2.path.clone()];
-    let path = open_include(&request, &include_paths, &[]).expect("resolve");
+    let path = erl_pp::open_include(&request, &include_paths, &[]).expect("resolve");
     assert_eq!(path, target);
 }
 
@@ -99,9 +94,12 @@ fn relative_path_walks_include_paths_in_order() {
 fn missing_relative_include_returns_not_found() {
     let tmp = TempDir::new("nf");
     let request = take_include_request(r#"-include("missing.hrl")."#);
-    let err = open_include(&request, std::slice::from_ref(&tmp.path), &[])
+    let err = erl_pp::open_include(&request, std::slice::from_ref(&tmp.path), &[])
         .expect_err("missing include should not resolve");
-    assert!(matches!(err, OpenIncludeError::NotFound), "got {err:?}");
+    assert!(
+        matches!(err, erl_pp::OpenIncludeError::NotFound),
+        "got {err:?}"
+    );
 }
 
 #[test]
@@ -109,8 +107,9 @@ fn include_lib_falls_back_via_erl_libs() {
     let lib = TempDir::new("lib-app");
     let target = lib.write("myapp/include/hdr.hrl", b"c");
     let request = take_include_request(r#"-include_lib("myapp/include/hdr.hrl")."#);
-    assert_eq!(request.kind, IncludeKind::IncludeLib);
-    let path = open_include(&request, &[], std::slice::from_ref(&lib.path)).expect("resolve");
+    assert_eq!(request.kind, erl_pp::IncludeKind::IncludeLib);
+    let path =
+        erl_pp::open_include(&request, &[], std::slice::from_ref(&lib.path)).expect("resolve");
     assert_eq!(path, target);
 }
 
@@ -121,16 +120,17 @@ fn include_lib_picks_highest_version_from_erl_libs() {
     lib.write("myapp-1.10/include/hdr.hrl", b"middle-natural");
     let target = lib.write("myapp-2.0/include/hdr.hrl", b"newest");
     let request = take_include_request(r#"-include_lib("myapp/include/hdr.hrl")."#);
-    let path = open_include(&request, &[], std::slice::from_ref(&lib.path)).expect("resolve");
+    let path =
+        erl_pp::open_include(&request, &[], std::slice::from_ref(&lib.path)).expect("resolve");
     assert_eq!(path, target);
 }
 
 #[test]
 fn include_lib_unknown_app_returns_app_not_found() {
     let request = take_include_request(r#"-include_lib("unknown_app/include/hdr.hrl")."#);
-    let err = open_include(&request, &[], &[]).expect_err("unknown app should not resolve");
+    let err = erl_pp::open_include(&request, &[], &[]).expect_err("unknown app should not resolve");
     match err {
-        OpenIncludeError::AppNotFound { app } => assert_eq!(app, "unknown_app"),
+        erl_pp::OpenIncludeError::AppNotFound { app } => assert_eq!(app, "unknown_app"),
         other => panic!("expected AppNotFound, got {other:?}"),
     }
 }

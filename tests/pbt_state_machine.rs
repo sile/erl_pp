@@ -1,4 +1,4 @@
-//! Property-based tests for the Sans-I/O `Preprocessor` state machine.
+//! Property-based tests for the Sans-I/O `erl_pp::Preprocessor` state machine.
 //!
 //! Complements the macro-body-focused PBT in `tests/pbt_macro_body.rs`
 //! by exercising the wider state machine: include push/pop,
@@ -8,10 +8,6 @@
 #[expect(dead_code)]
 mod pbt_harness;
 
-use erl_pp::{
-    Branch, BranchBoundaryKind, ConditionalRequest, Event, IncludeKind, Origin, Preprocessor,
-    Severity, Source, SourceInfoMacroKind, Status,
-};
 use noprop::{Ratio, Runner, TestCaseContext, TestResult};
 
 use pbt_harness::{
@@ -69,18 +65,18 @@ fn sample_simple_program(ctx: &mut TestCaseContext) -> String {
     buf
 }
 
-fn run_simple(source: Source) -> Vec<Event> {
-    let mut pp = Preprocessor::new([source]);
+fn run_simple(source: erl_pp::Source) -> Vec<erl_pp::Event> {
+    let mut pp = erl_pp::Preprocessor::new([source]);
     let mut events = Vec::new();
     for _ in 0..MAX_STEPS {
         let ev = step_expect_ok(&mut pp);
-        let done = matches!(ev, Event::Complete);
+        let done = matches!(ev, erl_pp::Event::Complete);
         assert!(
             !matches!(
                 ev,
-                Event::AwaitingInclude(_)
-                    | Event::AwaitingConditional(_)
-                    | Event::AwaitingMacroExpansion(_)
+                erl_pp::Event::AwaitingInclude(_)
+                    | erl_pp::Event::AwaitingConditional(_)
+                    | erl_pp::Event::AwaitingMacroExpansion(_)
             ),
             "simple program generator produced an Awaiting event: {ev:?}"
         );
@@ -107,16 +103,16 @@ fn deterministic_replay_of_simple_program() -> TestResult {
         assert_eq!(a.len(), b.len(), "event count differs (text={text:?})");
         for (i, (ea, eb)) in a.iter().zip(b.iter()).enumerate() {
             match (ea, eb) {
-                (Event::Token(ta), Event::Token(tb)) => {
+                (erl_pp::Event::Token(ta), erl_pp::Event::Token(tb)) => {
                     assert_eq!(
                         ta.text(),
                         tb.text(),
                         "token[{i}] text differs (text={text:?})"
                     );
                 }
-                (Event::Complete, Event::Complete) => {}
-                (Event::MacroDefined(_), Event::MacroDefined(_))
-                | (Event::MacroUndefined(_), Event::MacroUndefined(_)) => {}
+                (erl_pp::Event::Complete, erl_pp::Event::Complete) => {}
+                (erl_pp::Event::MacroDefined(_), erl_pp::Event::MacroDefined(_))
+                | (erl_pp::Event::MacroUndefined(_), erl_pp::Event::MacroUndefined(_)) => {}
                 _ => panic!("event[{i}] kinds differ: {ea:?} vs {eb:?}"),
             }
         }
@@ -141,10 +137,10 @@ fn complete_after_step_is_stable() -> TestResult {
     let mut runner = Runner::new(seed);
     runner.run(CASES, |ctx| {
         let text = sample_simple_program(ctx);
-        let mut pp = Preprocessor::new([build_source("stable.erl", &text)]);
+        let mut pp = erl_pp::Preprocessor::new([build_source("stable.erl", &text)]);
         loop {
             let ev = step_expect_ok(&mut pp);
-            if matches!(ev, Event::Complete) {
+            if matches!(ev, erl_pp::Event::Complete) {
                 break;
             }
         }
@@ -152,12 +148,12 @@ fn complete_after_step_is_stable() -> TestResult {
         for _ in 0..4 {
             let ev = step_expect_ok(&mut pp);
             assert!(
-                matches!(ev, Event::Complete),
+                matches!(ev, erl_pp::Event::Complete),
                 "step after Complete returned {ev:?}"
             );
         }
         assert_eq!(pp.macros().len(), len_before);
-        assert_eq!(pp.status(), Status::Completed);
+        assert_eq!(pp.status(), erl_pp::Status::Completed);
         Ok(())
     })?;
     Ok(())
@@ -191,7 +187,7 @@ fn hidden_tokens_survive_the_event_stream() -> TestResult {
         let events = run_simple(source);
         let seen_hidden = events
             .iter()
-            .filter(|e| matches!(e, Event::Token(t) if !t.token().kind().is_lexical()))
+            .filter(|e| matches!(e, erl_pp::Event::Token(t) if !t.token().kind().is_lexical()))
             .count();
         assert_eq!(
             seen_hidden, expected_hidden,
@@ -222,7 +218,7 @@ fn simple_program_reaches_complete_within_bounded_steps() -> TestResult {
         let text = sample_simple_program(ctx);
         let events = run_simple(build_source("b.erl", &text));
         assert!(events.len() < MAX_STEPS);
-        assert!(matches!(events.last(), Some(Event::Complete)));
+        assert!(matches!(events.last(), Some(erl_pp::Event::Complete)));
         if events.len() > 1 {
             saw_nonempty.hit();
         }
@@ -257,9 +253,9 @@ fn ifdef_then_and_else_select_effective_branch() -> TestResult {
         let else_def = noprop::sample_choice(ctx, &MACROS);
         let choose_then = noprop::sample_bool(ctx);
         let branch = if choose_then {
-            Branch::Then
+            erl_pp::Branch::Then
         } else {
-            Branch::Else
+            erl_pp::Branch::Else
         };
         let text = format!(
             "-ifdef({cond}).\n\
@@ -268,25 +264,27 @@ fn ifdef_then_and_else_select_effective_branch() -> TestResult {
              -define({else_def}, ok).\n\
              -endif.\n"
         );
-        let mut pp = Preprocessor::new([build_source("c.erl", &text)]);
+        let mut pp = erl_pp::Preprocessor::new([build_source("c.erl", &text)]);
         let mut resumed = false;
         for _ in 0..MAX_STEPS {
             match step_expect_ok(&mut pp) {
-                Event::AwaitingConditional(req) => {
+                erl_pp::Event::AwaitingConditional(req) => {
                     assert!(!resumed, "double AwaitingConditional");
-                    let ConditionalRequest::Ifdef(d) = req else {
+                    let erl_pp::ConditionalRequest::Ifdef(d) = req else {
                         panic!("expected Ifdef, got {req:?}");
                     };
                     assert_eq!(d.name.as_str(), cond);
                     pp.resume_conditional(branch).expect("resume");
                     resumed = true;
                 }
-                Event::BranchBoundary(b) => match b.kind {
-                    BranchBoundaryKind::Else => saw_else_boundary.hit(),
-                    BranchBoundaryKind::Endif => saw_endif_boundary.hit(),
+                erl_pp::Event::BranchBoundary(b) => match b.kind {
+                    erl_pp::BranchBoundaryKind::Else => saw_else_boundary.hit(),
+                    erl_pp::BranchBoundaryKind::Endif => saw_endif_boundary.hit(),
                 },
-                Event::Complete => break,
-                Event::Token(_) | Event::MacroDefined(_) | Event::MacroUndefined(_) => {}
+                erl_pp::Event::Complete => break,
+                erl_pp::Event::Token(_)
+                | erl_pp::Event::MacroDefined(_)
+                | erl_pp::Event::MacroUndefined(_) => {}
                 other => panic!("unexpected event: {other:?}"),
             }
         }
@@ -344,23 +342,25 @@ fn conditional_fork_yields_independent_macro_tables() -> TestResult {
              -define({else_def}, ok).\n\
              -endif.\n"
         );
-        let mut pp = Preprocessor::new([build_source("fork.erl", &text)]);
+        let mut pp = erl_pp::Preprocessor::new([build_source("fork.erl", &text)]);
         loop {
             match step_expect_ok(&mut pp) {
-                Event::AwaitingConditional(_) => break,
-                Event::Token(_)
-                | Event::MacroDefined(_)
-                | Event::MacroUndefined(_)
-                | Event::BranchBoundary(_) => {}
+                erl_pp::Event::AwaitingConditional(_) => break,
+                erl_pp::Event::Token(_)
+                | erl_pp::Event::MacroDefined(_)
+                | erl_pp::Event::MacroUndefined(_)
+                | erl_pp::Event::BranchBoundary(_) => {}
                 other => panic!("unexpected event before fork: {other:?}"),
             }
         }
         let mut pp_else = pp.clone();
-        pp.resume_conditional(Branch::Then).expect("then");
-        pp_else.resume_conditional(Branch::Else).expect("else");
-        let drain = |mut p: Preprocessor| -> Preprocessor {
+        pp.resume_conditional(erl_pp::Branch::Then).expect("then");
+        pp_else
+            .resume_conditional(erl_pp::Branch::Else)
+            .expect("else");
+        let drain = |mut p: erl_pp::Preprocessor| -> erl_pp::Preprocessor {
             for _ in 0..MAX_STEPS {
-                if let Event::Complete = step_expect_ok(&mut p) {
+                if let erl_pp::Event::Complete = step_expect_ok(&mut p) {
                     return p;
                 }
             }
@@ -395,36 +395,36 @@ fn include_response_streams_include_tokens_before_parent_resume() -> TestResult 
     let mut runner = Runner::new(seed);
     runner.run(CASES, |ctx| {
         let kind = if noprop::sample_bool(ctx) {
-            IncludeKind::Include
+            erl_pp::IncludeKind::Include
         } else {
-            IncludeKind::IncludeLib
+            erl_pp::IncludeKind::IncludeLib
         };
         let inner_atom = noprop::sample_choice(ctx, &ATOMS);
         let outer_atom = noprop::sample_choice(ctx, &ATOMS);
         let include_directive = match kind {
-            IncludeKind::Include => r#"-include("hdr.hrl")."#.to_owned(),
-            IncludeKind::IncludeLib => r#"-include_lib("app/include/hdr.hrl")."#.to_owned(),
+            erl_pp::IncludeKind::Include => r#"-include("hdr.hrl")."#.to_owned(),
+            erl_pp::IncludeKind::IncludeLib => r#"-include_lib("app/include/hdr.hrl")."#.to_owned(),
         };
         let text = format!("{include_directive}\n{outer_atom}.\n");
-        let mut pp = Preprocessor::new([build_source("main.erl", &text)]);
+        let mut pp = erl_pp::Preprocessor::new([build_source("main.erl", &text)]);
         let mut inner_first_atom: Option<String> = None;
         let mut outer_atom_after: Option<String> = None;
         for _ in 0..MAX_STEPS {
             match step_expect_ok(&mut pp) {
-                Event::AwaitingInclude(req) => {
+                erl_pp::Event::AwaitingInclude(req) => {
                     assert_eq!(req.kind, kind);
                     let inner = build_source("hdr.hrl", &format!("{inner_atom}.\n"));
                     pp.resume_include(inner).expect("resume include");
                     saw_include.hit();
                 }
-                Event::Token(t) if t.token().kind().is_lexical() => match t.origin() {
-                    Origin::Include { .. } => {
+                erl_pp::Event::Token(t) if t.token().kind().is_lexical() => match t.origin() {
+                    erl_pp::Origin::Include { .. } => {
                         seen_origin_kinds.hit("include");
                         if inner_first_atom.is_none() && t.text() == inner_atom {
                             inner_first_atom = Some(t.text().to_owned());
                         }
                     }
-                    Origin::Source => {
+                    erl_pp::Origin::Source => {
                         seen_origin_kinds.hit("source");
                         if inner_first_atom.is_some()
                             && outer_atom_after.is_none()
@@ -435,8 +435,8 @@ fn include_response_streams_include_tokens_before_parent_resume() -> TestResult 
                     }
                     _ => {}
                 },
-                Event::Token(_) => {}
-                Event::Complete => break,
+                erl_pp::Event::Token(_) => {}
+                erl_pp::Event::Complete => break,
                 other => panic!("unexpected event: {other:?}"),
             }
         }
@@ -453,13 +453,13 @@ fn include_response_streams_include_tokens_before_parent_resume() -> TestResult 
     assert!(saw_include.get() > 0, "no include exercised\n{runner}");
     assert!(
         seen_origin_kinds.contains("include") && seen_origin_kinds.contains("source"),
-        "did not observe both Origin::Include and Origin::Source token flows\n{runner}"
+        "did not observe both erl_pp::Origin::Include and erl_pp::Origin::Source token flows\n{runner}"
     );
     Ok(())
 }
 
 // ------------------------------------------------------------
-// Property: rejecting an include (empty Source) surfaces the parent
+// Property: rejecting an include (empty erl_pp::Source) surfaces the parent
 // source's next token immediately.
 // ------------------------------------------------------------
 #[test]
@@ -470,26 +470,28 @@ fn include_reject_returns_directly_to_parent() -> TestResult {
     runner.run(CASES, |ctx| {
         let outer_atom = noprop::sample_choice(ctx, &ATOMS);
         let text = format!("-include(\"hdr.hrl\").\n{outer_atom}.\n");
-        let mut pp = Preprocessor::new([build_source("main.erl", &text)]);
+        let mut pp = erl_pp::Preprocessor::new([build_source("main.erl", &text)]);
         let mut got_outer = false;
         for _ in 0..MAX_STEPS {
             match step_expect_ok(&mut pp) {
-                Event::AwaitingInclude(_) => {
+                erl_pp::Event::AwaitingInclude(_) => {
                     let empty = build_source("hdr.hrl", "");
                     pp.resume_include(empty).expect("empty include");
                     saw_reject.hit();
                 }
-                Event::Token(t) if t.token().kind().is_lexical() && t.text() == outer_atom => {
-                    // Must be from the parent source (Origin::Source).
+                erl_pp::Event::Token(t)
+                    if t.token().kind().is_lexical() && t.text() == outer_atom =>
+                {
+                    // Must be from the parent source (erl_pp::Origin::Source).
                     assert!(
-                        matches!(t.origin(), Origin::Source),
+                        matches!(t.origin(), erl_pp::Origin::Source),
                         "outer atom appeared with unexpected origin: {:?}",
                         t.origin()
                     );
                     got_outer = true;
                 }
-                Event::Token(_) => {}
-                Event::Complete => break,
+                erl_pp::Event::Token(_) => {}
+                erl_pp::Event::Complete => break,
                 other => panic!("unexpected event: {other:?}"),
             }
         }
@@ -514,24 +516,27 @@ fn include_scoped_define_reaches_parent() -> TestResult {
         let atom = noprop::sample_choice(ctx, &ATOMS);
         let text = format!("-include(\"hdr.hrl\").\n?{name}.\n");
         let inner_text = format!("-define({name}, {atom}).\n");
-        let mut pp = Preprocessor::new([build_source("main.erl", &text)]);
+        let mut pp = erl_pp::Preprocessor::new([build_source("main.erl", &text)]);
         let mut expanded = false;
         for _ in 0..MAX_STEPS {
             match step_expect_ok(&mut pp) {
-                Event::AwaitingInclude(_) => {
+                erl_pp::Event::AwaitingInclude(_) => {
                     pp.resume_include(build_source("hdr.hrl", &inner_text))
                         .expect("resume");
                 }
-                Event::Token(t) if t.token().kind().is_lexical() && t.text() == atom => {
+                erl_pp::Event::Token(t) if t.token().kind().is_lexical() && t.text() == atom => {
                     // Must reach the expanded macro value.
-                    if let Origin::Source | Origin::Include { .. } | Origin::MacroBody { .. } =
-                        t.origin()
+                    if let erl_pp::Origin::Source
+                    | erl_pp::Origin::Include { .. }
+                    | erl_pp::Origin::MacroBody { .. } = t.origin()
                     {
                         expanded = true;
                     }
                 }
-                Event::Token(_) | Event::MacroDefined(_) | Event::MacroUndefined(_) => {}
-                Event::Complete => break,
+                erl_pp::Event::Token(_)
+                | erl_pp::Event::MacroDefined(_)
+                | erl_pp::Event::MacroUndefined(_) => {}
+                erl_pp::Event::Complete => break,
                 other => panic!("unexpected event: {other:?}"),
             }
         }
@@ -548,8 +553,8 @@ fn include_scoped_define_reaches_parent() -> TestResult {
 }
 
 // ------------------------------------------------------------
-// Property: nested include produces an Origin::Include chain whose
-// parent is another Origin::Include (not Origin::Source).
+// Property: nested include produces an erl_pp::Origin::Include chain whose
+// parent is another erl_pp::Origin::Include (not erl_pp::Origin::Source).
 // ------------------------------------------------------------
 #[test]
 fn nested_include_forms_origin_chain() -> TestResult {
@@ -561,12 +566,12 @@ fn nested_include_forms_origin_chain() -> TestResult {
         let outer = format!(r#"-include("mid.hrl").{atom}."#);
         let mid = format!(r#"-include("inner.hrl").{atom}."#);
         let inner = format!("{atom}.");
-        let mut pp = Preprocessor::new([build_source("outer.erl", &outer)]);
+        let mut pp = erl_pp::Preprocessor::new([build_source("outer.erl", &outer)]);
         let mut awaiting_stack = vec![mid.clone(), inner.clone()];
         let mut deepest_depth = 0usize;
         for _ in 0..MAX_STEPS {
             match step_expect_ok(&mut pp) {
-                Event::AwaitingInclude(_) => {
+                erl_pp::Event::AwaitingInclude(_) => {
                     let next = awaiting_stack.remove(0);
                     let name = if awaiting_stack.is_empty() {
                         "inner.hrl"
@@ -576,20 +581,22 @@ fn nested_include_forms_origin_chain() -> TestResult {
                     pp.resume_include(build_source(name, &next))
                         .expect("resume");
                 }
-                Event::Token(t) if t.token().kind().is_lexical() => {
+                erl_pp::Event::Token(t) if t.token().kind().is_lexical() => {
                     let depth = origin_include_depth(t.origin());
                     if depth > deepest_depth {
                         deepest_depth = depth;
                     }
                 }
-                Event::Token(_) | Event::MacroDefined(_) | Event::MacroUndefined(_) => {}
-                Event::Complete => break,
+                erl_pp::Event::Token(_)
+                | erl_pp::Event::MacroDefined(_)
+                | erl_pp::Event::MacroUndefined(_) => {}
+                erl_pp::Event::Complete => break,
                 other => panic!("unexpected event: {other:?}"),
             }
         }
         assert!(
             deepest_depth >= 2,
-            "expected Origin::Include chain depth >= 2, got {deepest_depth}"
+            "expected erl_pp::Origin::Include chain depth >= 2, got {deepest_depth}"
         );
         saw_nested.hit();
         Ok(())
@@ -601,10 +608,10 @@ fn nested_include_forms_origin_chain() -> TestResult {
     Ok(())
 }
 
-fn origin_include_depth(origin: &Origin) -> usize {
+fn origin_include_depth(origin: &erl_pp::Origin) -> usize {
     let mut depth = 0;
     let mut cur = origin;
-    while let Origin::Include { parent, .. } = cur {
+    while let erl_pp::Origin::Include { parent, .. } = cur {
         depth += 1;
         cur = parent;
     }
@@ -634,20 +641,20 @@ fn nested_conditional_selects_inner_branch_correctly() -> TestResult {
              -endif.\n\
              -endif.\n"
         );
-        let mut pp = Preprocessor::new([build_source("n.erl", &text)]);
+        let mut pp = erl_pp::Preprocessor::new([build_source("n.erl", &text)]);
         let mut await_count = 0usize;
         for _ in 0..MAX_STEPS {
             match step_expect_ok(&mut pp) {
-                Event::AwaitingConditional(_) => {
+                erl_pp::Event::AwaitingConditional(_) => {
                     await_count += 1;
                     // Always take Then so both -ifdef enter their bodies.
-                    pp.resume_conditional(Branch::Then).expect("resume");
+                    pp.resume_conditional(erl_pp::Branch::Then).expect("resume");
                 }
-                Event::BranchBoundary(_)
-                | Event::Token(_)
-                | Event::MacroDefined(_)
-                | Event::MacroUndefined(_) => {}
-                Event::Complete => break,
+                erl_pp::Event::BranchBoundary(_)
+                | erl_pp::Event::Token(_)
+                | erl_pp::Event::MacroDefined(_)
+                | erl_pp::Event::MacroUndefined(_) => {}
+                erl_pp::Event::Complete => break,
                 other => panic!("unexpected event: {other:?}"),
             }
         }
@@ -684,22 +691,24 @@ fn caller_macro_expansion_substitutes_response_source() -> TestResult {
         let substitute = noprop::sample_choice(ctx, &ATOMS);
         // Undefined macro forces AwaitingMacroExpansion.
         let text = format!("?{name}.\n");
-        let mut pp = Preprocessor::new([build_source("m.erl", &text)]);
+        let mut pp = erl_pp::Preprocessor::new([build_source("m.erl", &text)]);
         let mut saw_substitute = false;
         for _ in 0..MAX_STEPS {
             match step_expect_ok(&mut pp) {
-                Event::AwaitingMacroExpansion(req) => {
+                erl_pp::Event::AwaitingMacroExpansion(req) => {
                     assert_eq!(req.name.as_str(), name);
                     let sub = build_source("<expansion>", substitute);
                     pp.resume_macro_expansion(sub).expect("expand");
                     saw_expansion.hit();
                 }
-                Event::Token(t) if t.token().kind().is_lexical() && t.text() == substitute => {
-                    assert!(matches!(t.origin(), Origin::CallerExpansion { .. }));
+                erl_pp::Event::Token(t)
+                    if t.token().kind().is_lexical() && t.text() == substitute =>
+                {
+                    assert!(matches!(t.origin(), erl_pp::Origin::CallerExpansion { .. }));
                     saw_substitute = true;
                 }
-                Event::Token(_) => {}
-                Event::Complete => break,
+                erl_pp::Event::Token(_) => {}
+                erl_pp::Event::Complete => break,
                 other => panic!("unexpected event: {other:?}"),
             }
         }
@@ -714,11 +723,11 @@ fn caller_macro_expansion_substitutes_response_source() -> TestResult {
 }
 
 // ============================================================
-// Diagnostic property
+// erl_pp::Diagnostic property
 // ============================================================
 
 // ------------------------------------------------------------
-// Property: -error / -warning surface as Event::Diagnostic with the
+// Property: -error / -warning surface as erl_pp::Event::Diagnostic with the
 // expected severity; state machine keeps advancing.
 // ------------------------------------------------------------
 #[test]
@@ -729,22 +738,22 @@ fn error_and_warning_surface_as_diagnostics() -> TestResult {
     let mut runner = Runner::new(seed);
     runner.run(CASES, |ctx| {
         let severity = if noprop::sample_bool(ctx) {
-            Severity::Error
+            erl_pp::Severity::Error
         } else {
-            Severity::Warning
+            erl_pp::Severity::Warning
         };
         let directive = match severity {
-            Severity::Error => "-error",
-            Severity::Warning => "-warning",
+            erl_pp::Severity::Error => "-error",
+            erl_pp::Severity::Warning => "-warning",
         };
         let atom = noprop::sample_choice(ctx, &ATOMS);
         let text = format!("{directive}({atom}).\n{atom}.\n");
-        let mut pp = Preprocessor::new([build_source("d.erl", &text)]);
+        let mut pp = erl_pp::Preprocessor::new([build_source("d.erl", &text)]);
         let mut got_diag = false;
         let mut got_post_diag_atom = false;
         for _ in 0..MAX_STEPS {
             match step_expect_ok(&mut pp) {
-                Event::Diagnostic(d) => {
+                erl_pp::Event::Diagnostic(d) => {
                     assert_eq!(d.severity, severity);
                     assert!(
                         d.arguments
@@ -752,20 +761,20 @@ fn error_and_warning_surface_as_diagnostics() -> TestResult {
                             .any(|t| t.token().kind().is_lexical() && t.text() == atom),
                         "diagnostic did not carry the atom argument"
                     );
-                    assert!(matches!(*d.parent_origin, Origin::Source));
+                    assert!(matches!(*d.parent_origin, erl_pp::Origin::Source));
                     got_diag = true;
                     match severity {
-                        Severity::Error => saw_error.hit(),
-                        Severity::Warning => saw_warning.hit(),
+                        erl_pp::Severity::Error => saw_error.hit(),
+                        erl_pp::Severity::Warning => saw_warning.hit(),
                     }
                 }
-                Event::Token(t) if t.token().kind().is_lexical() && t.text() == atom => {
+                erl_pp::Event::Token(t) if t.token().kind().is_lexical() && t.text() == atom => {
                     if got_diag {
                         got_post_diag_atom = true;
                     }
                 }
-                Event::Token(_) => {}
-                Event::Complete => break,
+                erl_pp::Event::Token(_) => {}
+                erl_pp::Event::Complete => break,
                 other => panic!("unexpected event: {other:?}"),
             }
         }
@@ -798,19 +807,19 @@ fn source_info_macros_emit_synthesized_tokens() -> TestResult {
     runner.run(CASES, |ctx| {
         let use_file = noprop::sample_bool(ctx);
         let text = if use_file { "?FILE.\n" } else { "?LINE.\n" };
-        let mut pp = Preprocessor::new([build_source("info.erl", text)]);
+        let mut pp = erl_pp::Preprocessor::new([build_source("info.erl", text)]);
         for _ in 0..MAX_STEPS {
             match step_expect_ok(&mut pp) {
-                Event::Token(t) if t.token().kind().is_lexical() => {
-                    if let Origin::SourceInfo { kind, .. } = t.origin() {
+                erl_pp::Event::Token(t) if t.token().kind().is_lexical() => {
+                    if let erl_pp::Origin::SourceInfo { kind, .. } = t.origin() {
                         match kind {
-                            SourceInfoMacroKind::File => saw_file.hit(),
-                            SourceInfoMacroKind::Line => saw_line.hit(),
+                            erl_pp::SourceInfoMacroKind::File => saw_file.hit(),
+                            erl_pp::SourceInfoMacroKind::Line => saw_line.hit(),
                         }
                     }
                 }
-                Event::Token(_) => {}
-                Event::Complete => break,
+                erl_pp::Event::Token(_) => {}
+                erl_pp::Event::Complete => break,
                 other => panic!("unexpected event: {other:?}"),
             }
         }
@@ -832,7 +841,7 @@ fn source_info_macros_emit_synthesized_tokens() -> TestResult {
 // ============================================================
 
 // ------------------------------------------------------------
-// Property: wrong response kind returns ProtocolError but does not
+// Property: wrong response kind returns erl_pp::ProtocolError but does not
 // corrupt the pending state (subsequent correct response works).
 // ------------------------------------------------------------
 #[test]
@@ -843,20 +852,22 @@ fn wrong_response_kind_returns_protocol_error_without_state_damage() -> TestResu
     runner.run(CASES, |ctx| {
         let name = noprop::sample_choice(ctx, &MACROS);
         let branch = if noprop::sample_bool(ctx) {
-            Branch::Then
+            erl_pp::Branch::Then
         } else {
-            Branch::Else
+            erl_pp::Branch::Else
         };
         let text = format!("-ifdef({name}).\nfoo.\n-else.\nbar.\n-endif.\n");
-        let mut pp = Preprocessor::new([build_source("t.erl", &text)]);
+        let mut pp = erl_pp::Preprocessor::new([build_source("t.erl", &text)]);
         let mut awaiting = false;
         for _ in 0..MAX_STEPS {
             match step_expect_ok(&mut pp) {
-                Event::AwaitingConditional(_) => {
+                erl_pp::Event::AwaitingConditional(_) => {
                     awaiting = true;
                     break;
                 }
-                Event::Token(_) | Event::MacroDefined(_) | Event::MacroUndefined(_) => {}
+                erl_pp::Event::Token(_)
+                | erl_pp::Event::MacroDefined(_)
+                | erl_pp::Event::MacroUndefined(_) => {}
                 other => panic!("unexpected event before AwaitingConditional: {other:?}"),
             }
         }
@@ -864,14 +875,14 @@ fn wrong_response_kind_returns_protocol_error_without_state_damage() -> TestResu
         // Feed the wrong response kind: include instead of conditional.
         let wrong = pp.resume_include(build_source("dummy.hrl", ""));
         assert!(wrong.is_err(), "wrong resume_include should error");
-        // Status must still be AwaitingConditionalDecision.
-        assert_eq!(pp.status(), Status::AwaitingConditionalDecision);
+        // erl_pp::Status must still be AwaitingConditionalDecision.
+        assert_eq!(pp.status(), erl_pp::Status::AwaitingConditionalDecision);
         // Correct response now works.
         pp.resume_conditional(branch)
             .expect("recover after protocol error");
         // Drain to Complete.
         for _ in 0..MAX_STEPS {
-            if matches!(step_expect_ok(&mut pp), Event::Complete) {
+            if matches!(step_expect_ok(&mut pp), erl_pp::Event::Complete) {
                 break;
             }
         }

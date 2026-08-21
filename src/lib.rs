@@ -15,31 +15,31 @@
 //! unreachable and fall into the `unreachable!` arm.
 //!
 //! ```
-//! use erl_pp::{Event, Preprocessor, Source};
-//! use erl_tokenize::{Position, Token, scan_token};
-//!
+//! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let text = "atom, foo, bar.";
 //! let mut tokens = Vec::new();
-//! let mut position = Position::new();
-//! while let Some(t) = scan_token(text, position).unwrap() {
+//! let mut position = erl_tokenize::Position::new();
+//! while let Some(t) = erl_tokenize::scan_token(text, position)? {
 //!     position = t.end();
 //!     tokens.push(t);
 //! }
-//! let source = Source::new("example.erl", text.to_string(), tokens);
-//! let mut pp = Preprocessor::new([source]);
+//! let source = erl_pp::Source::new("example.erl", text.to_string(), tokens);
+//! let mut pp = erl_pp::Preprocessor::new([source]);
 //!
 //! let mut lexical = Vec::<String>::new();
 //! loop {
 //!     match pp.step().expect("no protocol error on trivial input") {
-//!         Event::Token(t) if t.token().kind().is_lexical() => {
+//!         erl_pp::Event::Token(t) if t.token().kind().is_lexical() => {
 //!             lexical.push(t.text().to_owned());
 //!         }
-//!         Event::Token(_) => {} // hidden (whitespace / comments)
-//!         Event::Complete => break,
+//!         erl_pp::Event::Token(_) => {} // hidden (whitespace / comments)
+//!         erl_pp::Event::Complete => break,
 //!         other => unreachable!("unexpected event: {other:?}"),
 //!     }
 //! }
 //! assert_eq!(lexical, ["atom", ",", "foo", ",", "bar", "."]);
+//! # Ok(())
+//! # }
 //! ```
 //!
 //! # References

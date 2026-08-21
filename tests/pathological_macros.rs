@@ -7,40 +7,41 @@
 //! test either locks a currently-working behaviour or documents a
 //! known limitation that a follow-up change will lift.
 
-use erl_pp::{Event, Origin, PreprocessError, Preprocessor, Source, SourceInfoMacroKind};
-use erl_tokenize::{Position, TokenKind, TokenValue, scan_token};
-
-fn build_source(name: &str, text: &str) -> Source {
+fn build_source(name: &str, text: &str) -> erl_pp::Source {
     let mut tokens = Vec::new();
-    let mut position = Position::new();
-    while let Some(t) = scan_token(text, position).expect("test input scans without lex errors") {
+    let mut position = erl_tokenize::Position::new();
+    while let Some(t) =
+        erl_tokenize::scan_token(text, position).expect("test input scans without lex errors")
+    {
         position = t.end();
         tokens.push(t);
     }
-    Source::new(name, text.to_string(), tokens)
+    erl_pp::Source::new(name, text.to_string(), tokens)
 }
 
-fn make(text: &str) -> Preprocessor {
-    Preprocessor::new([build_source("m.erl", text)])
+fn make(text: &str) -> erl_pp::Preprocessor {
+    erl_pp::Preprocessor::new([build_source("m.erl", text)])
 }
 
-fn collect_lexical_texts(pp: &mut Preprocessor) -> Vec<String> {
+fn collect_lexical_texts(pp: &mut erl_pp::Preprocessor) -> Vec<String> {
     let mut out = Vec::new();
     loop {
         match pp.step().expect("no protocol errors") {
-            Event::Token(ppt) if ppt.token().kind().is_lexical() => {
+            erl_pp::Event::Token(ppt) if ppt.token().kind().is_lexical() => {
                 out.push(ppt.text().to_owned());
             }
-            Event::Token(_) | Event::MacroDefined(_) | Event::MacroUndefined(_) => {}
-            Event::Complete => return out,
+            erl_pp::Event::Token(_)
+            | erl_pp::Event::MacroDefined(_)
+            | erl_pp::Event::MacroUndefined(_) => {}
+            erl_pp::Event::Complete => return out,
             other => panic!("unexpected event: {other:?}"),
         }
     }
 }
 
-fn drive_until<F, T>(pp: &mut Preprocessor, mut probe: F) -> T
+fn drive_until<F, T>(pp: &mut erl_pp::Preprocessor, mut probe: F) -> T
 where
-    F: FnMut(Event) -> Option<T>,
+    F: FnMut(erl_pp::Event) -> Option<T>,
 {
     loop {
         let event = pp.step().expect("no protocol errors");
@@ -57,9 +58,9 @@ fn fun_type_inside_arguments() {
     let mut pp =
         make("-define(F(A, B), A).\n?F(fun((atom()) -> ok), fun((integer()) -> integer())).");
     drive_until(&mut pp, |e| match e {
-        Event::AwaitingMacroExpansion(_) => panic!("F is defined, no event expected"),
-        Event::PreprocessError(err) => panic!("unexpected preprocess error: {err:?}"),
-        Event::Complete => Some(()),
+        erl_pp::Event::AwaitingMacroExpansion(_) => panic!("F is defined, no event expected"),
+        erl_pp::Event::PreprocessError(err) => panic!("unexpected preprocess error: {err:?}"),
+        erl_pp::Event::Complete => Some(()),
         _ => None,
     });
 }
@@ -70,7 +71,7 @@ fn fun_type_inside_arguments() {
 fn fun_arity_form_then_comma() {
     let mut pp = make("?F(fun bar/1, X).");
     let request = drive_until(&mut pp, |e| match e {
-        Event::AwaitingMacroExpansion(req) => Some(req),
+        erl_pp::Event::AwaitingMacroExpansion(req) => Some(req),
         other => panic!("unexpected event: {other:?}"),
     });
     assert_eq!(request.arity, Some(2));
@@ -82,7 +83,7 @@ fn fun_arity_form_then_comma() {
 fn nested_delimiters_binary_and_comment_in_arg() {
     let mut pp = make("?F(<<X:8, Y/binary>>, [1, % inner\n                       2, 3]).");
     let request = drive_until(&mut pp, |e| match e {
-        Event::AwaitingMacroExpansion(req) => Some(req),
+        erl_pp::Event::AwaitingMacroExpansion(req) => Some(req),
         other => panic!("unexpected event: {other:?}"),
     });
     assert_eq!(request.arity, Some(2));
@@ -95,7 +96,7 @@ fn nested_delimiters_binary_and_comment_in_arg() {
 fn comma_inside_string_literal_argument() {
     let mut pp = make(r#"?F("a,b", 42)."#);
     let request = drive_until(&mut pp, |e| match e {
-        Event::AwaitingMacroExpansion(req) => Some(req),
+        erl_pp::Event::AwaitingMacroExpansion(req) => Some(req),
         other => panic!("unexpected event: {other:?}"),
     });
     assert_eq!(request.arity, Some(2));
@@ -140,8 +141,10 @@ fn function_like_in_constant_body_rescans_to_expanded_tokens() {
 fn function_like_rescan_detects_cycle() {
     let mut pp = make("-define(A, ?B(x)).\n-define(B(X), ?A).\n?A.");
     drive_until(&mut pp, |e| match e {
-        Event::PreprocessError(PreprocessError::CircularExpansion { .. }) => Some(()),
-        Event::Complete => panic!("expected CircularExpansion"),
+        erl_pp::Event::PreprocessError(erl_pp::PreprocessError::CircularExpansion { .. }) => {
+            Some(())
+        }
+        erl_pp::Event::Complete => panic!("expected CircularExpansion"),
         _ => None,
     });
 }
@@ -154,8 +157,8 @@ fn function_like_rescan_detects_cycle() {
 fn function_like_rescan_fires_event_on_table_miss() {
     let mut pp = make("-define(FOO, ?UNKNOWN(1, 2)).\n?FOO.");
     let request = drive_until(&mut pp, |e| match e {
-        Event::AwaitingMacroExpansion(req) => Some(req),
-        Event::Complete => panic!("expected AwaitingMacroExpansion"),
+        erl_pp::Event::AwaitingMacroExpansion(req) => Some(req),
+        erl_pp::Event::Complete => panic!("expected AwaitingMacroExpansion"),
         _ => None,
     });
     assert_eq!(request.name.as_str(), "UNKNOWN");
@@ -168,8 +171,10 @@ fn function_like_rescan_fires_event_on_table_miss() {
 fn direct_constant_like_recursion_is_circular() {
     let mut pp = make("-define(X, ?X).\n?X.");
     drive_until(&mut pp, |e| match e {
-        Event::PreprocessError(PreprocessError::CircularExpansion { .. }) => Some(()),
-        Event::Complete => panic!("expected CircularExpansion"),
+        erl_pp::Event::PreprocessError(erl_pp::PreprocessError::CircularExpansion { .. }) => {
+            Some(())
+        }
+        erl_pp::Event::Complete => panic!("expected CircularExpansion"),
         _ => None,
     });
 }
@@ -180,8 +185,10 @@ fn direct_constant_like_recursion_is_circular() {
 fn indirect_cycle_across_arity_boundary_is_circular() {
     let mut pp = make("-define(X, ?Y(1)).\n-define(Y(A), ?X).\n?X.");
     drive_until(&mut pp, |e| match e {
-        Event::PreprocessError(PreprocessError::CircularExpansion { .. }) => Some(()),
-        Event::Complete => panic!("expected CircularExpansion"),
+        erl_pp::Event::PreprocessError(erl_pp::PreprocessError::CircularExpansion { .. }) => {
+            Some(())
+        }
+        erl_pp::Event::Complete => panic!("expected CircularExpansion"),
         _ => None,
     });
 }
@@ -193,14 +200,16 @@ fn caller_response_direct_recursion_is_circular() {
     let mut pp = make("?UNKNOWN.");
     let event = pp.step().expect("no protocol error");
     match event {
-        Event::AwaitingMacroExpansion(req) => assert_eq!(req.name.as_str(), "UNKNOWN"),
+        erl_pp::Event::AwaitingMacroExpansion(req) => assert_eq!(req.name.as_str(), "UNKNOWN"),
         other => panic!("expected AwaitingMacroExpansion, got {other:?}"),
     }
     let response = build_source("<synth:UNKNOWN>", "?UNKNOWN");
     pp.resume_macro_expansion(response).expect("resume ok");
     drive_until(&mut pp, |e| match e {
-        Event::PreprocessError(PreprocessError::CircularExpansion { .. }) => Some(()),
-        Event::Complete => panic!("expected CircularExpansion"),
+        erl_pp::Event::PreprocessError(erl_pp::PreprocessError::CircularExpansion { .. }) => {
+            Some(())
+        }
+        erl_pp::Event::Complete => panic!("expected CircularExpansion"),
         _ => None,
     });
 }
@@ -213,11 +222,13 @@ fn caller_response_direct_recursion_is_circular() {
 fn stringification_collapses_source_whitespace() {
     let mut pp = make("-define(S(A), ??A).\n?S(x   +   1).");
     let value = drive_until(&mut pp, |e| match e {
-        Event::Token(ppt) if ppt.token().kind() == TokenKind::String => match ppt.value() {
-            TokenValue::String(cow) => Some(cow.into_owned()),
-            other => panic!("expected String value, got {other:?}"),
-        },
-        Event::Complete => panic!("expected string token"),
+        erl_pp::Event::Token(ppt) if ppt.token().kind() == erl_tokenize::TokenKind::String => {
+            match ppt.value() {
+                erl_tokenize::TokenValue::String(cow) => Some(cow.into_owned()),
+                other => panic!("expected String value, got {other:?}"),
+            }
+        }
+        erl_pp::Event::Complete => panic!("expected string token"),
         _ => None,
     });
     assert_eq!(value, "x + 1");
@@ -233,11 +244,13 @@ fn stringification_of_string_literal_argument() {
 ?S("hi")."#,
     );
     let value = drive_until(&mut pp, |e| match e {
-        Event::Token(ppt) if ppt.token().kind() == TokenKind::String => match ppt.value() {
-            TokenValue::String(cow) => Some(cow.into_owned()),
-            other => panic!("expected String value, got {other:?}"),
-        },
-        Event::Complete => panic!("expected string token"),
+        erl_pp::Event::Token(ppt) if ppt.token().kind() == erl_tokenize::TokenKind::String => {
+            match ppt.value() {
+                erl_tokenize::TokenValue::String(cow) => Some(cow.into_owned()),
+                other => panic!("expected String value, got {other:?}"),
+            }
+        }
+        erl_pp::Event::Complete => panic!("expected string token"),
         _ => None,
     });
     assert_eq!(value, "\"hi\"");
@@ -249,11 +262,13 @@ fn stringification_of_string_literal_argument() {
 fn stringification_of_whitespace_only_argument() {
     let mut pp = make("-define(S(A), ??A).\n?S(  ).");
     let value = drive_until(&mut pp, |e| match e {
-        Event::Token(ppt) if ppt.token().kind() == TokenKind::String => match ppt.value() {
-            TokenValue::String(cow) => Some(cow.into_owned()),
-            other => panic!("expected String value, got {other:?}"),
-        },
-        Event::Complete => panic!("expected string token"),
+        erl_pp::Event::Token(ppt) if ppt.token().kind() == erl_tokenize::TokenKind::String => {
+            match ppt.value() {
+                erl_tokenize::TokenValue::String(cow) => Some(cow.into_owned()),
+                other => panic!("expected String value, got {other:?}"),
+            }
+        }
+        erl_pp::Event::Complete => panic!("expected string token"),
         _ => None,
     });
     assert_eq!(value, "");
@@ -265,8 +280,10 @@ fn stringification_of_whitespace_only_argument() {
 fn stringification_of_non_parameter_is_invalid() {
     let mut pp = make("-define(S(A), ??Foo).\n?S(x).");
     drive_until(&mut pp, |e| match e {
-        Event::PreprocessError(PreprocessError::InvalidStringificationTarget { .. }) => Some(()),
-        Event::Complete => panic!("expected InvalidStringificationTarget"),
+        erl_pp::Event::PreprocessError(erl_pp::PreprocessError::InvalidStringificationTarget {
+            ..
+        }) => Some(()),
+        erl_pp::Event::Complete => panic!("expected InvalidStringificationTarget"),
         _ => None,
     });
 }
@@ -281,14 +298,14 @@ fn line_inside_macro_body_uses_outer_caller_line() {
     // sits on line 1.
     let mut pp = make("-define(HERE, ?LINE).\n\n?HERE.");
     let ppt = drive_until(&mut pp, |e| match e {
-        Event::Token(ppt) if ppt.text() == "3" => Some(ppt),
-        Event::Complete => panic!("expected integer synth token `3`"),
+        erl_pp::Event::Token(ppt) if ppt.text() == "3" => Some(ppt),
+        erl_pp::Event::Complete => panic!("expected integer synth token `3`"),
         _ => None,
     });
     assert!(matches!(
         ppt.origin(),
-        Origin::SourceInfo {
-            kind: SourceInfoMacroKind::Line,
+        erl_pp::Origin::SourceInfo {
+            kind: erl_pp::SourceInfoMacroKind::Line,
             ..
         }
     ));

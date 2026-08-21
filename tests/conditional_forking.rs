@@ -1,42 +1,38 @@
 //! Integration tests for `-ifdef` / `-ifndef` / `-else` / `-endif`
 //! and the Sans-I/O fork / resume_conditional protocol.
 
-use erl_pp::{
-    Branch, BranchBoundaryKind, ConditionalRequest, Event, IncludeKind, PreprocessError,
-    Preprocessor, ProtocolError, Source, Status,
-};
-use erl_tokenize::{Position, scan_token};
-
-fn build_source(name: &str, text: &str) -> Source {
+fn build_source(name: &str, text: &str) -> erl_pp::Source {
     let mut tokens = Vec::new();
-    let mut position = Position::new();
-    while let Some(t) = scan_token(text, position).expect("test input scans without lex errors") {
+    let mut position = erl_tokenize::Position::new();
+    while let Some(t) =
+        erl_tokenize::scan_token(text, position).expect("test input scans without lex errors")
+    {
         position = t.end();
         tokens.push(t);
     }
-    Source::new(name, text.to_string(), tokens)
+    erl_pp::Source::new(name, text.to_string(), tokens)
 }
 
-fn make(text: &str) -> Preprocessor {
-    Preprocessor::new([build_source("m.erl", text)])
+fn make(text: &str) -> erl_pp::Preprocessor {
+    erl_pp::Preprocessor::new([build_source("m.erl", text)])
 }
 
-fn step(pp: &mut Preprocessor) -> Event {
+fn step(pp: &mut erl_pp::Preprocessor) -> erl_pp::Event {
     pp.step().expect("no protocol error")
 }
 
-fn lexical_texts(pp: &mut Preprocessor) -> Vec<String> {
+fn lexical_texts(pp: &mut erl_pp::Preprocessor) -> Vec<String> {
     let mut out = Vec::new();
     loop {
         match step(pp) {
-            Event::Token(ppt) if ppt.token().kind().is_lexical() => {
+            erl_pp::Event::Token(ppt) if ppt.token().kind().is_lexical() => {
                 out.push(ppt.text().to_owned());
             }
-            Event::Token(_)
-            | Event::MacroDefined(_)
-            | Event::MacroUndefined(_)
-            | Event::BranchBoundary(_) => {}
-            Event::Complete => return out,
+            erl_pp::Event::Token(_)
+            | erl_pp::Event::MacroDefined(_)
+            | erl_pp::Event::MacroUndefined(_)
+            | erl_pp::Event::BranchBoundary(_) => {}
+            erl_pp::Event::Complete => return out,
             other => panic!("unexpected event: {other:?}"),
         }
     }
@@ -49,18 +45,21 @@ fn lexical_texts(pp: &mut Preprocessor) -> Vec<String> {
 fn ifdef_defined_recommends_then() {
     let mut pp = make("-define(FOO, 1).\n-ifdef(FOO).\nthen_side.\n-endif.\n");
     // consume -define
-    assert!(matches!(step(&mut pp), Event::MacroDefined(_)));
+    assert!(matches!(step(&mut pp), erl_pp::Event::MacroDefined(_)));
     let request = match step(&mut pp) {
-        Event::AwaitingConditional(r) => r,
+        erl_pp::Event::AwaitingConditional(r) => r,
         other => panic!("expected AwaitingConditional, got {other:?}"),
     };
-    let ConditionalRequest::Ifdef(d) = request else {
+    let erl_pp::ConditionalRequest::Ifdef(d) = request else {
         panic!("expected Ifdef, got {request:?}");
     };
     assert_eq!(d.name.as_str(), "FOO");
     assert!(d.defined);
-    assert_eq!(d.recommended, Branch::Then);
-    assert!(matches!(pp.status(), Status::AwaitingConditionalDecision));
+    assert_eq!(d.recommended, erl_pp::Branch::Then);
+    assert!(matches!(
+        pp.status(),
+        erl_pp::Status::AwaitingConditionalDecision
+    ));
 }
 
 // ---------------------------------------------------------------------
@@ -69,14 +68,14 @@ fn ifdef_defined_recommends_then() {
 fn ifndef_undefined_recommends_then() {
     let mut pp = make("-ifndef(NOPE).\nthen_side.\n-endif.\n");
     let request = match step(&mut pp) {
-        Event::AwaitingConditional(r) => r,
+        erl_pp::Event::AwaitingConditional(r) => r,
         other => panic!("expected AwaitingConditional, got {other:?}"),
     };
-    let ConditionalRequest::Ifndef(d) = request else {
+    let erl_pp::ConditionalRequest::Ifndef(d) = request else {
         panic!("expected Ifndef, got {request:?}");
     };
     assert!(!d.defined);
-    assert_eq!(d.recommended, Branch::Then);
+    assert_eq!(d.recommended, erl_pp::Branch::Then);
 }
 
 // ---------------------------------------------------------------------
@@ -86,7 +85,7 @@ fn ifndef_undefined_recommends_then() {
 fn ifdef_does_not_emit_event_directive() {
     let mut pp = make("-ifdef(FOO).\n-endif.\n");
     let first = step(&mut pp);
-    assert!(matches!(first, Event::AwaitingConditional(_)));
+    assert!(matches!(first, erl_pp::Event::AwaitingConditional(_)));
 }
 
 // ---------------------------------------------------------------------
@@ -96,18 +95,19 @@ fn ifdef_does_not_emit_event_directive() {
 fn resume_conditional_then_scans_then_side() {
     let mut pp = make("-ifdef(FOO).\nthen_side.\n-endif.\n");
     let _ = step(&mut pp); // AwaitingConditional
-    pp.resume_conditional(Branch::Then).expect("resume ok");
+    pp.resume_conditional(erl_pp::Branch::Then)
+        .expect("resume ok");
     let mut saw_then = false;
     let mut saw_endif_boundary = false;
     loop {
         match step(&mut pp) {
-            Event::Token(t) if t.text() == "then_side" => saw_then = true,
-            Event::Token(_) => {}
-            Event::BranchBoundary(b) => {
-                assert_eq!(b.kind, BranchBoundaryKind::Endif);
+            erl_pp::Event::Token(t) if t.text() == "then_side" => saw_then = true,
+            erl_pp::Event::Token(_) => {}
+            erl_pp::Event::BranchBoundary(b) => {
+                assert_eq!(b.kind, erl_pp::BranchBoundaryKind::Endif);
                 saw_endif_boundary = true;
             }
-            Event::Complete => break,
+            erl_pp::Event::Complete => break,
             other => panic!("unexpected event: {other:?}"),
         }
     }
@@ -123,17 +123,18 @@ fn resume_conditional_then_scans_then_side() {
 fn resume_conditional_else_skips_then_and_scans_else_side() {
     let mut pp = make("-ifdef(FOO).\nthen_side.\n-else.\nelse_side.\n-endif.\n");
     let _ = step(&mut pp);
-    pp.resume_conditional(Branch::Else).expect("resume ok");
+    pp.resume_conditional(erl_pp::Branch::Else)
+        .expect("resume ok");
     let mut saw_else = false;
     let mut saw_then = false;
     let mut boundaries = Vec::new();
     loop {
         match step(&mut pp) {
-            Event::Token(t) if t.text() == "then_side" => saw_then = true,
-            Event::Token(t) if t.text() == "else_side" => saw_else = true,
-            Event::Token(_) => {}
-            Event::BranchBoundary(b) => boundaries.push(b.kind),
-            Event::Complete => break,
+            erl_pp::Event::Token(t) if t.text() == "then_side" => saw_then = true,
+            erl_pp::Event::Token(t) if t.text() == "else_side" => saw_else = true,
+            erl_pp::Event::Token(_) => {}
+            erl_pp::Event::BranchBoundary(b) => boundaries.push(b.kind),
+            erl_pp::Event::Complete => break,
             other => panic!("unexpected event: {other:?}"),
         }
     }
@@ -141,7 +142,10 @@ fn resume_conditional_else_skips_then_and_scans_else_side() {
     assert!(!saw_then, "Then side should have been skipped");
     assert_eq!(
         boundaries,
-        vec![BranchBoundaryKind::Else, BranchBoundaryKind::Endif]
+        vec![
+            erl_pp::BranchBoundaryKind::Else,
+            erl_pp::BranchBoundaryKind::Endif
+        ]
     );
 }
 
@@ -152,17 +156,18 @@ fn resume_conditional_else_skips_then_and_scans_else_side() {
 fn resume_conditional_then_fires_else_boundary_and_skips_else_side() {
     let mut pp = make("-ifdef(FOO).\nthen_side.\n-else.\nelse_side.\n-endif.\n");
     let _ = step(&mut pp);
-    pp.resume_conditional(Branch::Then).expect("resume ok");
+    pp.resume_conditional(erl_pp::Branch::Then)
+        .expect("resume ok");
     let mut saw_then = false;
     let mut saw_else = false;
     let mut boundaries = Vec::new();
     loop {
         match step(&mut pp) {
-            Event::Token(t) if t.text() == "then_side" => saw_then = true,
-            Event::Token(t) if t.text() == "else_side" => saw_else = true,
-            Event::Token(_) => {}
-            Event::BranchBoundary(b) => boundaries.push(b.kind),
-            Event::Complete => break,
+            erl_pp::Event::Token(t) if t.text() == "then_side" => saw_then = true,
+            erl_pp::Event::Token(t) if t.text() == "else_side" => saw_else = true,
+            erl_pp::Event::Token(_) => {}
+            erl_pp::Event::BranchBoundary(b) => boundaries.push(b.kind),
+            erl_pp::Event::Complete => break,
             other => panic!("unexpected event: {other:?}"),
         }
     }
@@ -170,7 +175,10 @@ fn resume_conditional_then_fires_else_boundary_and_skips_else_side() {
     assert!(!saw_else);
     assert_eq!(
         boundaries,
-        vec![BranchBoundaryKind::Else, BranchBoundaryKind::Endif]
+        vec![
+            erl_pp::BranchBoundaryKind::Else,
+            erl_pp::BranchBoundaryKind::Endif
+        ]
     );
 }
 
@@ -182,20 +190,21 @@ fn resume_conditional_then_fires_else_boundary_and_skips_else_side() {
 fn resume_conditional_else_without_else_is_empty_branch() {
     let mut pp = make("-ifdef(FOO).\nthen_side.\n-endif.\n");
     let _ = step(&mut pp);
-    pp.resume_conditional(Branch::Else).expect("resume ok");
+    pp.resume_conditional(erl_pp::Branch::Else)
+        .expect("resume ok");
     let mut saw_then = false;
     let mut boundaries = Vec::new();
     loop {
         match step(&mut pp) {
-            Event::Token(t) if t.text() == "then_side" => saw_then = true,
-            Event::Token(_) => {}
-            Event::BranchBoundary(b) => boundaries.push(b.kind),
-            Event::Complete => break,
+            erl_pp::Event::Token(t) if t.text() == "then_side" => saw_then = true,
+            erl_pp::Event::Token(_) => {}
+            erl_pp::Event::BranchBoundary(b) => boundaries.push(b.kind),
+            erl_pp::Event::Complete => break,
             other => panic!("unexpected event: {other:?}"),
         }
     }
     assert!(!saw_then);
-    assert_eq!(boundaries, vec![BranchBoundaryKind::Endif]);
+    assert_eq!(boundaries, vec![erl_pp::BranchBoundaryKind::Endif]);
 }
 
 // ---------------------------------------------------------------------
@@ -204,13 +213,14 @@ fn resume_conditional_else_without_else_is_empty_branch() {
 fn inactive_branch_does_not_apply_define() {
     let mut pp = make("-ifdef(FOO).\n-define(BAR, 1).\n-endif.\n?BAR.\n");
     let _ = step(&mut pp);
-    pp.resume_conditional(Branch::Else).expect("resume ok");
+    pp.resume_conditional(erl_pp::Branch::Else)
+        .expect("resume ok");
     // BAR was defined inside the inactive Then side, so ?BAR should
     // trigger AwaitingMacroExpansion (unknown macro).
     loop {
         match step(&mut pp) {
-            Event::BranchBoundary(_) | Event::Token(_) => {}
-            Event::AwaitingMacroExpansion(req) => {
+            erl_pp::Event::BranchBoundary(_) | erl_pp::Event::Token(_) => {}
+            erl_pp::Event::AwaitingMacroExpansion(req) => {
                 assert_eq!(req.name.as_str(), "BAR");
                 return;
             }
@@ -230,13 +240,14 @@ fn inactive_branch_does_not_fire_include_request() {
 "#,
     );
     let _ = step(&mut pp);
-    pp.resume_conditional(Branch::Else).expect("resume ok");
+    pp.resume_conditional(erl_pp::Branch::Else)
+        .expect("resume ok");
     // Drain to completion — no AwaitingInclude should appear.
     loop {
         match step(&mut pp) {
-            Event::BranchBoundary(_) | Event::Token(_) => {}
-            Event::Complete => return,
-            Event::AwaitingInclude(_) => {
+            erl_pp::Event::BranchBoundary(_) | erl_pp::Event::Token(_) => {}
+            erl_pp::Event::Complete => return,
+            erl_pp::Event::AwaitingInclude(_) => {
                 panic!("include request fired inside an inactive branch");
             }
             other => panic!("unexpected event: {other:?}"),
@@ -250,12 +261,13 @@ fn inactive_branch_does_not_fire_include_request() {
 fn inactive_branch_does_not_recognize_macro_calls() {
     let mut pp = make("-ifdef(FOO).\n?UNKNOWN.\n-endif.\n");
     let _ = step(&mut pp);
-    pp.resume_conditional(Branch::Else).expect("resume ok");
+    pp.resume_conditional(erl_pp::Branch::Else)
+        .expect("resume ok");
     loop {
         match step(&mut pp) {
-            Event::BranchBoundary(_) | Event::Token(_) => {}
-            Event::Complete => return,
-            Event::AwaitingMacroExpansion(_) => {
+            erl_pp::Event::BranchBoundary(_) | erl_pp::Event::Token(_) => {}
+            erl_pp::Event::Complete => return,
+            erl_pp::Event::AwaitingMacroExpansion(_) => {
                 panic!("macro expansion fired inside an inactive branch");
             }
             other => panic!("unexpected event: {other:?}"),
@@ -279,22 +291,23 @@ fn nested_conditional_inside_inactive_is_silent() {
          -endif.\n",
     );
     let _ = step(&mut pp);
-    pp.resume_conditional(Branch::Else).expect("resume ok");
+    pp.resume_conditional(erl_pp::Branch::Else)
+        .expect("resume ok");
     let mut requests = 0;
     let mut boundaries = Vec::new();
     loop {
         match step(&mut pp) {
-            Event::AwaitingConditional(_) => requests += 1,
-            Event::BranchBoundary(b) => boundaries.push(b.kind),
-            Event::Token(_) => {}
-            Event::Complete => break,
+            erl_pp::Event::AwaitingConditional(_) => requests += 1,
+            erl_pp::Event::BranchBoundary(b) => boundaries.push(b.kind),
+            erl_pp::Event::Token(_) => {}
+            erl_pp::Event::Complete => break,
             other => panic!("unexpected event: {other:?}"),
         }
     }
     assert_eq!(requests, 0, "no nested request should have fired");
     assert_eq!(
         boundaries,
-        vec![BranchBoundaryKind::Endif],
+        vec![erl_pp::BranchBoundaryKind::Endif],
         "only the outer endif boundary should have fired"
     );
 }
@@ -309,8 +322,12 @@ fn clone_then_and_else_share_source_but_diverge_state() {
     let _ = step(&mut base); // AwaitingConditional
     let mut then_pp = base.clone();
     let mut else_pp = base;
-    then_pp.resume_conditional(Branch::Then).expect("then");
-    else_pp.resume_conditional(Branch::Else).expect("else");
+    then_pp
+        .resume_conditional(erl_pp::Branch::Then)
+        .expect("then");
+    else_pp
+        .resume_conditional(erl_pp::Branch::Else)
+        .expect("else");
     let _ = lexical_texts(&mut then_pp);
     let _ = lexical_texts(&mut else_pp);
     // then_pp saw -define(FROM_THEN, 1). only.
@@ -321,13 +338,13 @@ fn clone_then_and_else_share_source_but_diverge_state() {
 }
 
 // ---------------------------------------------------------------------
-// 13. Stray -endif at top level is a PreprocessError::StrayEndif.
+// 13. Stray -endif at top level is a erl_pp::PreprocessError::StrayEndif.
 #[test]
 fn stray_endif_is_conditional_error() {
     let mut pp = make("-endif.\n");
     let event = step(&mut pp);
     match event {
-        Event::PreprocessError(err @ PreprocessError::StrayEndif { span }) => {
+        erl_pp::Event::PreprocessError(err @ erl_pp::PreprocessError::StrayEndif { span }) => {
             assert_eq!(err.span(), span);
         }
         other => panic!("expected StrayEndif error, got {other:?}"),
@@ -335,30 +352,31 @@ fn stray_endif_is_conditional_error() {
 }
 
 // ---------------------------------------------------------------------
-// 14. Stray -else at top level is a PreprocessError::StrayElse.
+// 14. Stray -else at top level is a erl_pp::PreprocessError::StrayElse.
 #[test]
 fn stray_else_is_conditional_error() {
     let mut pp = make("-else.\n");
     let event = step(&mut pp);
     match event {
-        Event::PreprocessError(PreprocessError::StrayElse { .. }) => {}
+        erl_pp::Event::PreprocessError(erl_pp::PreprocessError::StrayElse { .. }) => {}
         other => panic!("expected StrayElse error, got {other:?}"),
     }
 }
 
 // ---------------------------------------------------------------------
 // 15. Double -else in the same conditional is a
-//     PreprocessError::DoubleElse.
+//     erl_pp::PreprocessError::DoubleElse.
 #[test]
 fn double_else_is_conditional_error() {
     let mut pp = make("-ifdef(FOO).\n-else.\n-else.\n-endif.\n");
     let _ = step(&mut pp);
-    pp.resume_conditional(Branch::Then).expect("resume ok");
+    pp.resume_conditional(erl_pp::Branch::Then)
+        .expect("resume ok");
     // Drain until we hit the second -else.
     loop {
         match step(&mut pp) {
-            Event::BranchBoundary(_) | Event::Token(_) => {}
-            Event::PreprocessError(PreprocessError::DoubleElse { .. }) => {
+            erl_pp::Event::BranchBoundary(_) | erl_pp::Event::Token(_) => {}
+            erl_pp::Event::PreprocessError(erl_pp::PreprocessError::DoubleElse { .. }) => {
                 return;
             }
             other => panic!("expected DoubleElse error, got {other:?}"),
@@ -368,17 +386,20 @@ fn double_else_is_conditional_error() {
 
 // ---------------------------------------------------------------------
 // 16. Unclosed conditional at EOF fires
-//     PreprocessError::UnclosedConditional pointing at
+//     erl_pp::PreprocessError::UnclosedConditional pointing at
 //     the opening directive.
 #[test]
 fn unclosed_conditional_at_eof_is_error() {
     let mut pp = make("-ifdef(FOO).\nsomething.\n");
     let _ = step(&mut pp);
-    pp.resume_conditional(Branch::Then).expect("resume ok");
+    pp.resume_conditional(erl_pp::Branch::Then)
+        .expect("resume ok");
     loop {
         match step(&mut pp) {
-            Event::Token(_) | Event::BranchBoundary(_) => {}
-            Event::PreprocessError(PreprocessError::UnclosedConditional { .. }) => {
+            erl_pp::Event::Token(_) | erl_pp::Event::BranchBoundary(_) => {}
+            erl_pp::Event::PreprocessError(erl_pp::PreprocessError::UnclosedConditional {
+                ..
+            }) => {
                 return;
             }
             other => panic!("expected UnclosedConditional error, got {other:?}"),
@@ -392,10 +413,10 @@ fn unclosed_conditional_at_eof_is_error() {
 fn resume_conditional_in_scanning_is_protocol_error() {
     let mut pp = make("foo.");
     let err = pp
-        .resume_conditional(Branch::Then)
+        .resume_conditional(erl_pp::Branch::Then)
         .expect_err("should fail");
-    assert_eq!(err, ProtocolError);
-    assert!(matches!(pp.status(), Status::Scanning));
+    assert_eq!(err, erl_pp::ProtocolError);
+    assert!(matches!(pp.status(), erl_pp::Status::Scanning));
 }
 
 // ---------------------------------------------------------------------
@@ -404,12 +425,15 @@ fn resume_conditional_in_scanning_is_protocol_error() {
 fn resume_conditional_while_awaiting_include_is_protocol_error() {
     let mut pp = make(r#"-include("h.hrl")."#);
     let event = step(&mut pp);
-    assert!(matches!(event, Event::AwaitingInclude(_)));
+    assert!(matches!(event, erl_pp::Event::AwaitingInclude(_)));
     let err = pp
-        .resume_conditional(Branch::Then)
+        .resume_conditional(erl_pp::Branch::Then)
         .expect_err("should fail");
-    assert_eq!(err, ProtocolError);
-    assert!(matches!(pp.status(), Status::AwaitingIncludeResolution));
+    assert_eq!(err, erl_pp::ProtocolError);
+    assert!(matches!(
+        pp.status(),
+        erl_pp::Status::AwaitingIncludeResolution
+    ));
 }
 
 // ---------------------------------------------------------------------
@@ -421,7 +445,7 @@ fn active_branch_parse_error_still_fires() {
     // Malformed directive parses fail in the active branch.
     let mut pp = make("-include.\n");
     let event = step(&mut pp);
-    assert!(matches!(event, Event::PreprocessError(_)));
+    assert!(matches!(event, erl_pp::Event::PreprocessError(_)));
 }
 
 // ---------------------------------------------------------------------
@@ -436,15 +460,16 @@ fn include_in_active_branch_still_fires_awaiting_include() {
 "#,
     );
     let _ = step(&mut pp);
-    pp.resume_conditional(Branch::Then).expect("resume ok");
+    pp.resume_conditional(erl_pp::Branch::Then)
+        .expect("resume ok");
     loop {
         match step(&mut pp) {
-            Event::AwaitingInclude(req) => {
-                assert_eq!(req.kind, IncludeKind::Include);
+            erl_pp::Event::AwaitingInclude(req) => {
+                assert_eq!(req.kind, erl_pp::IncludeKind::Include);
                 assert_eq!(req.path.as_str(), "h.hrl");
                 return;
             }
-            Event::Token(_) | Event::BranchBoundary(_) => {}
+            erl_pp::Event::Token(_) | erl_pp::Event::BranchBoundary(_) => {}
             other => panic!("unexpected event: {other:?}"),
         }
     }
@@ -466,14 +491,14 @@ fn lexical_from_condition(tokens: &[erl_pp::PreprocessedToken]) -> Vec<String> {
 fn if_then_scans_body() {
     let mut pp = make("-if(true).\nthen_side.\n-endif.\n");
     let req = match step(&mut pp) {
-        Event::AwaitingConditional(r) => r,
+        erl_pp::Event::AwaitingConditional(r) => r,
         other => panic!("expected AwaitingConditional, got {other:?}"),
     };
-    let ConditionalRequest::If(expr) = req else {
+    let erl_pp::ConditionalRequest::If(expr) = req else {
         panic!("expected If, got {req:?}");
     };
     assert_eq!(lexical_from_condition(&expr.condition_tokens), ["true"]);
-    pp.resume_conditional(Branch::Then).expect("resume");
+    pp.resume_conditional(erl_pp::Branch::Then).expect("resume");
     let texts = lexical_texts(&mut pp);
     assert_eq!(texts, ["then_side", "."]);
 }
@@ -482,7 +507,7 @@ fn if_then_scans_body() {
 fn if_else_skips_body() {
     let mut pp = make("-if(false).\nthen_side.\n-endif.\n");
     let _ = step(&mut pp);
-    pp.resume_conditional(Branch::Else).expect("resume");
+    pp.resume_conditional(erl_pp::Branch::Else).expect("resume");
     let texts = lexical_texts(&mut pp);
     assert!(texts.is_empty(), "Then body must be skipped: {texts:?}");
 }
@@ -499,11 +524,12 @@ fn if_elif_chain_first_active_skips_later_elif() {
          -endif.\n",
     );
     let req = match step(&mut pp) {
-        Event::AwaitingConditional(r) => r,
+        erl_pp::Event::AwaitingConditional(r) => r,
         other => panic!("expected opening -if, got {other:?}"),
     };
-    assert!(matches!(req, ConditionalRequest::If(_)));
-    pp.resume_conditional(Branch::Then).expect("resume if");
+    assert!(matches!(req, erl_pp::ConditionalRequest::If(_)));
+    pp.resume_conditional(erl_pp::Branch::Then)
+        .expect("resume if");
 
     let mut saw_a = false;
     let mut saw_b = false;
@@ -511,14 +537,14 @@ fn if_elif_chain_first_active_skips_later_elif() {
     let mut saw_elif_await = false;
     loop {
         match step(&mut pp) {
-            Event::Token(t) if t.text() == "a" => saw_a = true,
-            Event::Token(t) if t.text() == "b" => saw_b = true,
-            Event::Token(t) if t.text() == "c" => saw_c = true,
-            Event::Token(_) | Event::BranchBoundary(_) => {}
-            Event::AwaitingConditional(ConditionalRequest::Elif(_)) => {
+            erl_pp::Event::Token(t) if t.text() == "a" => saw_a = true,
+            erl_pp::Event::Token(t) if t.text() == "b" => saw_b = true,
+            erl_pp::Event::Token(t) if t.text() == "c" => saw_c = true,
+            erl_pp::Event::Token(_) | erl_pp::Event::BranchBoundary(_) => {}
+            erl_pp::Event::AwaitingConditional(erl_pp::ConditionalRequest::Elif(_)) => {
                 saw_elif_await = true;
             }
-            Event::Complete => break,
+            erl_pp::Event::Complete => break,
             other => panic!("unexpected: {other:?}"),
         }
     }
@@ -538,27 +564,29 @@ fn if_elif_chain_first_inactive_awaits_elif() {
          b.\n\
          -endif.\n",
     );
-    assert!(matches!(step(&mut pp), Event::MacroDefined(_)));
+    assert!(matches!(step(&mut pp), erl_pp::Event::MacroDefined(_)));
     let req = match step(&mut pp) {
-        Event::AwaitingConditional(r) => r,
+        erl_pp::Event::AwaitingConditional(r) => r,
         other => panic!("expected -if, got {other:?}"),
     };
-    assert!(matches!(req, ConditionalRequest::If(_)));
-    pp.resume_conditional(Branch::Else).expect("skip if");
+    assert!(matches!(req, erl_pp::ConditionalRequest::If(_)));
+    pp.resume_conditional(erl_pp::Branch::Else)
+        .expect("skip if");
 
     let mut saw_a = false;
     let elif_req = loop {
         match step(&mut pp) {
-            Event::Token(t) if t.text() == "a" => saw_a = true,
-            Event::Token(_) | Event::BranchBoundary(_) => {}
-            Event::AwaitingConditional(ConditionalRequest::Elif(r)) => break r,
-            Event::Complete => panic!("never saw elif await"),
+            erl_pp::Event::Token(t) if t.text() == "a" => saw_a = true,
+            erl_pp::Event::Token(_) | erl_pp::Event::BranchBoundary(_) => {}
+            erl_pp::Event::AwaitingConditional(erl_pp::ConditionalRequest::Elif(r)) => break r,
+            erl_pp::Event::Complete => panic!("never saw elif await"),
             other => panic!("unexpected: {other:?}"),
         }
     };
     assert!(!saw_a);
     assert_eq!(lexical_from_condition(&elif_req.condition_tokens), ["1"]);
-    pp.resume_conditional(Branch::Then).expect("take elif");
+    pp.resume_conditional(erl_pp::Branch::Then)
+        .expect("take elif");
     let texts = lexical_texts(&mut pp);
     assert_eq!(texts, ["b", "."]);
 }
@@ -576,15 +604,17 @@ fn if_elif_else_each_branch() {
          -endif.\n",
     );
     let _ = step(&mut pp);
-    pp.resume_conditional(Branch::Else).expect("skip if");
+    pp.resume_conditional(erl_pp::Branch::Else)
+        .expect("skip if");
     loop {
         match step(&mut pp) {
-            Event::AwaitingConditional(ConditionalRequest::Elif(_)) => break,
-            Event::Token(_) | Event::BranchBoundary(_) => {}
+            erl_pp::Event::AwaitingConditional(erl_pp::ConditionalRequest::Elif(_)) => break,
+            erl_pp::Event::Token(_) | erl_pp::Event::BranchBoundary(_) => {}
             other => panic!("unexpected before elif: {other:?}"),
         }
     }
-    pp.resume_conditional(Branch::Else).expect("skip elif");
+    pp.resume_conditional(erl_pp::Branch::Else)
+        .expect("skip elif");
     let texts = lexical_texts(&mut pp);
     assert_eq!(texts, ["c", "."]);
 }
@@ -593,7 +623,7 @@ fn if_elif_else_each_branch() {
 fn stray_elif_errors() {
     let mut pp = make("-elif(true).\n");
     match step(&mut pp) {
-        Event::PreprocessError(PreprocessError::StrayElif { .. }) => {}
+        erl_pp::Event::PreprocessError(erl_pp::PreprocessError::StrayElif { .. }) => {}
         other => panic!("expected StrayElif, got {other:?}"),
     }
 }
@@ -602,9 +632,10 @@ fn stray_elif_errors() {
 fn elif_on_ifdef_is_stray() {
     let mut pp = make("-ifdef(FOO).\n-elif(true).\n-endif.\n");
     let _ = step(&mut pp);
-    pp.resume_conditional(Branch::Then).expect("resume ifdef");
+    pp.resume_conditional(erl_pp::Branch::Then)
+        .expect("resume ifdef");
     match step(&mut pp) {
-        Event::PreprocessError(PreprocessError::StrayElif { .. }) => {}
+        erl_pp::Event::PreprocessError(erl_pp::PreprocessError::StrayElif { .. }) => {}
         other => panic!("expected StrayElif on ifdef, got {other:?}"),
     }
 }
@@ -613,18 +644,19 @@ fn elif_on_ifdef_is_stray() {
 fn elif_after_else_errors() {
     let mut pp = make("-if(false).\n-else.\n-elif(true).\n-endif.\n");
     let _ = step(&mut pp);
-    pp.resume_conditional(Branch::Else).expect("skip if");
+    pp.resume_conditional(erl_pp::Branch::Else)
+        .expect("skip if");
     // Cross -else boundary.
     loop {
         match step(&mut pp) {
-            Event::BranchBoundary(b) if b.kind == BranchBoundaryKind::Else => break,
-            Event::Token(_) => {}
-            Event::PreprocessError(PreprocessError::ElifAfterElse { .. }) => return,
+            erl_pp::Event::BranchBoundary(b) if b.kind == erl_pp::BranchBoundaryKind::Else => break,
+            erl_pp::Event::Token(_) => {}
+            erl_pp::Event::PreprocessError(erl_pp::PreprocessError::ElifAfterElse { .. }) => return,
             other => panic!("unexpected before else/elif: {other:?}"),
         }
     }
     match step(&mut pp) {
-        Event::PreprocessError(PreprocessError::ElifAfterElse { .. }) => {}
+        erl_pp::Event::PreprocessError(erl_pp::PreprocessError::ElifAfterElse { .. }) => {}
         other => panic!("expected ElifAfterElse, got {other:?}"),
     }
 }
@@ -641,7 +673,8 @@ fn nested_if_in_inactive_outer_is_silent() {
          -endif.\n",
     );
     let _ = step(&mut pp);
-    pp.resume_conditional(Branch::Else).expect("skip outer");
+    pp.resume_conditional(erl_pp::Branch::Else)
+        .expect("skip outer");
     let texts = lexical_texts(&mut pp);
     assert!(
         texts.is_empty(),
@@ -655,8 +688,12 @@ fn if_fork_independent_branches() {
     let _ = step(&mut pp);
     let mut then_pp = pp.clone();
     let mut else_pp = pp;
-    then_pp.resume_conditional(Branch::Then).expect("then");
-    else_pp.resume_conditional(Branch::Else).expect("else");
+    then_pp
+        .resume_conditional(erl_pp::Branch::Then)
+        .expect("then");
+    else_pp
+        .resume_conditional(erl_pp::Branch::Else)
+        .expect("else");
     assert_eq!(lexical_texts(&mut then_pp), ["then_side", "."]);
     assert_eq!(lexical_texts(&mut else_pp), ["else_side", "."]);
 }
@@ -664,19 +701,19 @@ fn if_fork_independent_branches() {
 #[test]
 fn if_condition_expands_defined_macro() {
     let mut pp = make("-define(V, 27).\n-if(?V >= 27).\nok.\n-endif.\n");
-    assert!(matches!(step(&mut pp), Event::MacroDefined(_)));
+    assert!(matches!(step(&mut pp), erl_pp::Event::MacroDefined(_)));
     let req = match step(&mut pp) {
-        Event::AwaitingConditional(r) => r,
+        erl_pp::Event::AwaitingConditional(r) => r,
         other => panic!("expected -if, got {other:?}"),
     };
-    let ConditionalRequest::If(expr) = req else {
+    let erl_pp::ConditionalRequest::If(expr) = req else {
         panic!("expected If, got {req:?}");
     };
     assert_eq!(
         lexical_from_condition(&expr.condition_tokens),
         ["27", ">=", "27"]
     );
-    pp.resume_conditional(Branch::Then).expect("resume");
+    pp.resume_conditional(erl_pp::Branch::Then).expect("resume");
     assert_eq!(lexical_texts(&mut pp), ["ok", "."]);
 }
 
@@ -688,18 +725,18 @@ fn if_condition_caller_driven_macro_empty_response() {
     let mut saw_macro = false;
     let req = loop {
         match step(&mut pp) {
-            Event::AwaitingMacroExpansion(r) => {
+            erl_pp::Event::AwaitingMacroExpansion(r) => {
                 assert_eq!(r.name.as_str(), "UNKNOWN");
                 saw_macro = true;
                 let empty = build_source("<caller-driven>", "");
                 pp.resume_macro_expansion(empty).expect("empty expand");
             }
-            Event::AwaitingConditional(r) => break r,
+            erl_pp::Event::AwaitingConditional(r) => break r,
             other => panic!("unexpected before conditional: {other:?}"),
         }
     };
     assert!(saw_macro);
-    let ConditionalRequest::If(expr) = req else {
+    let erl_pp::ConditionalRequest::If(expr) = req else {
         panic!("expected If, got {req:?}");
     };
     assert_eq!(lexical_from_condition(&expr.condition_tokens), [">=", "27"]);
@@ -709,15 +746,17 @@ fn if_condition_caller_driven_macro_empty_response() {
 fn if_unclosed_at_eof() {
     let mut pp = make("-if(true).\nbody.\n");
     let _ = step(&mut pp);
-    pp.resume_conditional(Branch::Then).expect("resume");
+    pp.resume_conditional(erl_pp::Branch::Then).expect("resume");
     let mut saw_unclosed = false;
     loop {
         match step(&mut pp) {
-            Event::Token(_) | Event::BranchBoundary(_) => {}
-            Event::PreprocessError(PreprocessError::UnclosedConditional { .. }) => {
+            erl_pp::Event::Token(_) | erl_pp::Event::BranchBoundary(_) => {}
+            erl_pp::Event::PreprocessError(erl_pp::PreprocessError::UnclosedConditional {
+                ..
+            }) => {
                 saw_unclosed = true;
             }
-            Event::Complete => break,
+            erl_pp::Event::Complete => break,
             other => panic!("unexpected: {other:?}"),
         }
     }

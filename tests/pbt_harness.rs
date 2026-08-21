@@ -8,9 +8,6 @@
 use std::cell::Cell;
 use std::collections::BTreeSet;
 
-use erl_pp::{Event, Preprocessor, ProtocolError, Source, Status};
-use erl_tokenize::{Position, Token, scan_token};
-
 /// Environment variable used by `noprop::seed_from_env_or_time` to
 /// reproduce a failing case.
 pub const SEED_ENV: &str = "ERL_PP_SEED";
@@ -61,47 +58,51 @@ impl LabelSet {
 }
 
 // ============================================================
-// Source construction
+// erl_pp::Source construction
 // ============================================================
 
 /// Tokenize `text` with `erl_tokenize::scan_token`. Panics on
 /// tokenization failure — property generators produce well-formed
 /// programs, so lexical failures indicate a generator bug.
-pub fn scan_all(text: &str) -> Vec<Token> {
+pub fn scan_all(text: &str) -> Vec<erl_tokenize::Token> {
     let mut tokens = Vec::new();
-    let mut position = Position::new();
-    while let Some(t) = scan_token(text, position).expect("generated source scans cleanly") {
+    let mut position = erl_tokenize::Position::new();
+    while let Some(t) =
+        erl_tokenize::scan_token(text, position).expect("generated source scans cleanly")
+    {
         position = t.end();
         tokens.push(t);
     }
     tokens
 }
 
-/// Build an in-memory [`Source`] with the given display name and text.
-pub fn build_source(name: &str, text: &str) -> Source {
+/// Build an in-memory [`erl_pp::Source`] with the given display name and text.
+pub fn build_source(name: &str, text: &str) -> erl_pp::Source {
     let tokens = scan_all(text);
-    Source::new(name, text.to_string(), tokens)
+    erl_pp::Source::new(name, text.to_string(), tokens)
 }
 
 // ============================================================
-// Preprocessor driving helpers
+// erl_pp::Preprocessor driving helpers
 // ============================================================
 
-/// Drive the preprocessor until it either produces `Event::Complete`
+/// Drive the preprocessor until it either produces `erl_pp::Event::Complete`
 /// or steps `MAX_STEPS` times. Every non-terminal event is appended to
 /// the returned `Vec`. If the machine hits an `Awaiting*` state, the
 /// caller is expected to be running with an input that never triggers
-/// external responses (used by tests that only exercise `Event::Token`
-/// / `Event::Complete` paths).
+/// external responses (used by tests that only exercise `erl_pp::Event::Token`
+/// / `erl_pp::Event::Complete` paths).
 ///
-/// Returns `Err(ProtocolError)` if `step` returns one; the panic-free
+/// Returns `Err(erl_pp::ProtocolError)` if `step` returns one; the panic-free
 /// contract of the preprocessor lets us surface protocol errors as
 /// test values rather than aborting the case.
-pub fn drive_to_complete(pp: &mut Preprocessor) -> Result<Vec<Event>, ProtocolError> {
+pub fn drive_to_complete(
+    pp: &mut erl_pp::Preprocessor,
+) -> Result<Vec<erl_pp::Event>, erl_pp::ProtocolError> {
     let mut events = Vec::new();
     for _ in 0..MAX_STEPS {
         let ev = pp.step()?;
-        let done = matches!(ev, Event::Complete);
+        let done = matches!(ev, erl_pp::Event::Complete);
         events.push(ev);
         if done {
             return Ok(events);
@@ -114,16 +115,16 @@ pub fn drive_to_complete(pp: &mut Preprocessor) -> Result<Vec<Event>, ProtocolEr
 }
 
 /// Step the preprocessor once. Convenience wrapper that panics on
-/// `ProtocolError` — useful in properties where the current state was
+/// `erl_pp::ProtocolError` — useful in properties where the current state was
 /// generated to be `Scanning`.
-pub fn step_expect_ok(pp: &mut Preprocessor) -> Event {
+pub fn step_expect_ok(pp: &mut erl_pp::Preprocessor) -> erl_pp::Event {
     pp.step()
         .expect("preprocessor was in Scanning; step must not protocol-error")
 }
 
-/// Assert the preprocessor is currently in the given `Status`. The
-/// caller writes the message; `Status` implements `PartialEq`.
-pub fn assert_status(pp: &Preprocessor, want: Status) {
+/// Assert the preprocessor is currently in the given `erl_pp::Status`. The
+/// caller writes the message; `erl_pp::Status` implements `PartialEq`.
+pub fn assert_status(pp: &erl_pp::Preprocessor, want: erl_pp::Status) {
     let got = pp.status();
     assert_eq!(got, want, "preprocessor status: got {got:?}, want {want:?}");
 }
