@@ -11,8 +11,6 @@ tools: the caller tokenizes (`erl_tokenize::scan_token`), performs I/O,
 include search, `-if` / `-elif` evaluation, and unknown-macro meaning.
 This crate advances directives, the macro table, and the condition stack.
 
-[Documentation](https://docs.rs/erl_pp)
-
 Examples
 --------
 
