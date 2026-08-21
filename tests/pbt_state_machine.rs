@@ -9,8 +9,8 @@
 mod pbt_harness;
 
 use erl_pp::{
-    Branch, BranchBoundaryKind, Event, IncludeKind, Origin, Preprocessor, Severity, Source,
-    SourceInfoMacroKind, Status,
+    Branch, BranchBoundaryKind, ConditionalRequest, Event, IncludeKind, Origin, Preprocessor,
+    Severity, Source, SourceInfoMacroKind, Status,
 };
 use noprop::{Ratio, Runner, TestCaseContext, TestResult};
 
@@ -273,7 +273,10 @@ fn ifdef_then_and_else_select_effective_branch() -> TestResult {
             match step_expect_ok(&mut pp) {
                 Event::AwaitingConditional(req) => {
                     assert!(!resumed, "double AwaitingConditional");
-                    assert_eq!(req.name.as_ref().map(|s| s.as_str()), Some(cond));
+                    let ConditionalRequest::Ifdef(d) = req else {
+                        panic!("expected Ifdef, got {req:?}");
+                    };
+                    assert_eq!(d.name.as_str(), cond);
                     pp.resume_conditional(branch).expect("resume");
                     resumed = true;
                 }

@@ -37,8 +37,8 @@ use crate::cursor::Cursor;
 use crate::directive::{Directive, parse_directive};
 use crate::error::{ConditionalErrorKind, MacroCallErrorKind, PreprocessError, ProtocolError};
 use crate::event::{
-    Branch, BranchBoundary, BranchBoundaryKind, ConditionalKind, ConditionalRequest, Diagnostic,
-    Event, IncludeKind, MacroExpansionRequest, Severity,
+    Branch, BranchBoundary, BranchBoundaryKind, ConditionalRequest, DefinedConditional, Diagnostic,
+    Event, ExpressionConditional, IncludeKind, MacroExpansionRequest, Severity,
 };
 use crate::macros::{MacroDefinition, MacroKey, MacroTable};
 use crate::origin::{Origin, SourceInfoMacroKind};
@@ -199,10 +199,28 @@ struct BranchFrame {
     is_if_chain: bool,
 }
 
+/// Distinguishes `-ifdef` from `-ifndef` when firing a defined-macro
+/// request. Not part of the public request type; that split lives on
+/// [`ConditionalRequest::Ifdef`] / [`ConditionalRequest::Ifndef`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DefinedKind {
+    Ifdef,
+    Ifndef,
+}
+
+/// Distinguishes `-if` from `-elif` while a condition expression is
+/// being expanded. Not part of the public request type; that split
+/// lives on [`ConditionalRequest::If`] / [`ConditionalRequest::Elif`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExprKind {
+    If,
+    Elif,
+}
+
 /// In-flight expansion of an `-if` / `-elif` condition expression.
 #[derive(Debug, Clone)]
 struct ConditionCollect {
-    kind: ConditionalKind,
+    kind: ExprKind,
     /// Span of the `-if` / `-elif` directive itself (request payload).
     directive_span: SourceSpan,
     pending: PendingConditional,
@@ -687,10 +705,10 @@ impl Preprocessor {
                     self.push_nested_inactive_frame(d.span, false);
                     return StepAction::Retry;
                 }
-                return StepAction::Emit(Box::new(self.fire_awaiting_conditional_ifdef(
-                    ConditionalKind::Ifdef,
+                return StepAction::Emit(Box::new(self.fire_awaiting_defined(
                     d.name.clone(),
                     d.span,
+                    DefinedKind::Ifdef,
                 )));
             }
             Directive::Ifndef(d) => {
@@ -698,10 +716,10 @@ impl Preprocessor {
                     self.push_nested_inactive_frame(d.span, false);
                     return StepAction::Retry;
                 }
-                return StepAction::Emit(Box::new(self.fire_awaiting_conditional_ifdef(
-                    ConditionalKind::Ifndef,
+                return StepAction::Emit(Box::new(self.fire_awaiting_defined(
                     d.name.clone(),
                     d.span,
+                    DefinedKind::Ifndef,
                 )));
             }
             Directive::If(d) => {
@@ -710,7 +728,7 @@ impl Preprocessor {
                     return StepAction::Retry;
                 }
                 return self.start_condition_collect(
-                    ConditionalKind::If,
+                    ExprKind::If,
                     d.span,
                     PendingConditional::OpenNew {
                         directive_span: d.span,
@@ -931,7 +949,7 @@ impl Preprocessor {
             return StepAction::Retry;
         }
         self.start_condition_collect(
-            ConditionalKind::Elif,
+            ExprKind::Elif,
             d.span,
             PendingConditional::ContinueElif,
             &d.arg_tokens,
@@ -942,7 +960,7 @@ impl Preprocessor {
     /// `-elif` by injecting them into the expansion queue.
     fn start_condition_collect(
         &mut self,
-        kind: ConditionalKind,
+        kind: ExprKind,
         directive_span: SourceSpan,
         pending: PendingConditional,
         arg_tokens: &[Token],
@@ -999,23 +1017,24 @@ impl Preprocessor {
         })
     }
 
-    fn fire_awaiting_conditional_ifdef(
+    fn fire_awaiting_defined(
         &mut self,
-        kind: ConditionalKind,
         name: SourceString,
         directive_span: SourceSpan,
+        kind: DefinedKind,
     ) -> Event {
-        let parent_origin = Arc::clone(&self.current_origin);
         let defined = self.macros.is_defined(name.as_str());
-        let recommended = recommended_branch(kind, defined);
-        let request = ConditionalRequest {
-            kind,
-            name: Some(name),
-            defined: Some(defined),
-            recommended: Some(recommended),
-            condition_tokens: None,
+        let recommended = recommended_defined_branch(kind, defined);
+        let payload = DefinedConditional {
+            name,
+            defined,
+            recommended,
             directive_span,
-            parent_origin: Arc::clone(&parent_origin),
+            parent_origin: Arc::clone(&self.current_origin),
+        };
+        let request = match kind {
+            DefinedKind::Ifdef => ConditionalRequest::Ifdef(payload),
+            DefinedKind::Ifndef => ConditionalRequest::Ifndef(payload),
         };
         self.state = State::AwaitingConditionalDecision(PendingConditional::OpenNew {
             directive_span,
@@ -1025,15 +1044,14 @@ impl Preprocessor {
     }
 
     fn fire_awaiting_conditional_expr(&mut self, collect: ConditionCollect) -> Event {
-        let parent_origin = Arc::clone(&self.current_origin);
-        let request = ConditionalRequest {
-            kind: collect.kind,
-            name: None,
-            defined: None,
-            recommended: None,
-            condition_tokens: Some(collect.collected),
+        let payload = ExpressionConditional {
+            condition_tokens: collect.collected,
             directive_span: collect.directive_span,
-            parent_origin: Arc::clone(&parent_origin),
+            parent_origin: Arc::clone(&self.current_origin),
+        };
+        let request = match collect.kind {
+            ExprKind::If => ConditionalRequest::If(payload),
+            ExprKind::Elif => ConditionalRequest::Elif(payload),
         };
         self.state = State::AwaitingConditionalDecision(collect.pending);
         Event::AwaitingConditional(request)
@@ -1617,17 +1635,13 @@ enum MacroCallOutcome {
     NotACall,
 }
 
-/// Which side of a conditional OTP `epp` would pick given the
-/// directive kind and whether the target macro is currently defined.
-///
-/// Only meaningful for `-ifdef` / `-ifndef`.
-fn recommended_branch(kind: ConditionalKind, defined: bool) -> Branch {
+/// Which side of a `-ifdef` / `-ifndef` OTP `epp` would pick given
+/// the directive kind and whether the target macro is currently
+/// defined.
+fn recommended_defined_branch(kind: DefinedKind, defined: bool) -> Branch {
     match (kind, defined) {
-        (ConditionalKind::Ifdef, true) | (ConditionalKind::Ifndef, false) => Branch::Then,
-        (ConditionalKind::Ifdef, false) | (ConditionalKind::Ifndef, true) => Branch::Else,
-        (ConditionalKind::If | ConditionalKind::Elif, _) => {
-            unreachable!("recommended_branch is only for -ifdef / -ifndef")
-        }
+        (DefinedKind::Ifdef, true) | (DefinedKind::Ifndef, false) => Branch::Then,
+        (DefinedKind::Ifdef, false) | (DefinedKind::Ifndef, true) => Branch::Else,
     }
 }
 

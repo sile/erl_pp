@@ -139,7 +139,14 @@ fn run_one(
                     .expect("resume_include after AwaitingInclude");
             }
             erl_pp::Event::AwaitingConditional(req) => {
-                pp.resume_conditional(req.recommended.unwrap_or(erl_pp::Branch::Else))
+                let branch = match req {
+                    erl_pp::ConditionalRequest::Ifdef(d)
+                    | erl_pp::ConditionalRequest::Ifndef(d) => d.recommended,
+                    erl_pp::ConditionalRequest::If(_) | erl_pp::ConditionalRequest::Elif(_) => {
+                        erl_pp::Branch::Else
+                    }
+                };
+                pp.resume_conditional(branch)
                     .expect("resume_conditional after AwaitingConditional");
             }
             erl_pp::Event::AwaitingMacroExpansion(_) => {

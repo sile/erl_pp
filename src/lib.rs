@@ -58,8 +58,8 @@ pub use crate::error::{
     PreprocessParseFailure, ProtocolError,
 };
 pub use crate::event::{
-    Branch, BranchBoundary, BranchBoundaryKind, ConditionalKind, ConditionalRequest, Diagnostic,
-    Event, IncludeKind, IncludeRequest, MacroExpansionRequest, Severity,
+    Branch, BranchBoundary, BranchBoundaryKind, ConditionalRequest, DefinedConditional, Diagnostic,
+    Event, ExpressionConditional, IncludeKind, IncludeRequest, MacroExpansionRequest, Severity,
 };
 pub use crate::include_path::{OpenIncludeError, open_include};
 pub use crate::macros::{MacroDefinition, MacroKey, MacroTable};

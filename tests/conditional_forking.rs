@@ -2,7 +2,7 @@
 //! and the Sans-I/O fork / resume_conditional protocol.
 
 use erl_pp::{
-    Branch, BranchBoundaryKind, ConditionalErrorKind, ConditionalKind, Event, IncludeKind,
+    Branch, BranchBoundaryKind, ConditionalErrorKind, ConditionalRequest, Event, IncludeKind,
     PreprocessError, Preprocessor, ProtocolError, Source, Status,
 };
 use erl_tokenize::{Position, scan_token};
@@ -51,10 +51,12 @@ fn ifdef_defined_recommends_then() {
         Event::AwaitingConditional(r) => r,
         other => panic!("expected AwaitingConditional, got {other:?}"),
     };
-    assert_eq!(request.kind, ConditionalKind::Ifdef);
-    assert_eq!(request.name.as_ref().map(|s| s.as_str()), Some("FOO"));
-    assert_eq!(request.defined, Some(true));
-    assert_eq!(request.recommended, Some(Branch::Then));
+    let ConditionalRequest::Ifdef(d) = request else {
+        panic!("expected Ifdef, got {request:?}");
+    };
+    assert_eq!(d.name.as_str(), "FOO");
+    assert!(d.defined);
+    assert_eq!(d.recommended, Branch::Then);
     assert!(matches!(pp.status(), Status::AwaitingConditionalDecision));
 }
 
@@ -67,9 +69,11 @@ fn ifndef_undefined_recommends_then() {
         Event::AwaitingConditional(r) => r,
         other => panic!("expected AwaitingConditional, got {other:?}"),
     };
-    assert_eq!(request.kind, ConditionalKind::Ifndef);
-    assert_eq!(request.defined, Some(false));
-    assert_eq!(request.recommended, Some(Branch::Then));
+    let ConditionalRequest::Ifndef(d) = request else {
+        panic!("expected Ifndef, got {request:?}");
+    };
+    assert!(!d.defined);
+    assert_eq!(d.recommended, Branch::Then);
 }
 
 // ---------------------------------------------------------------------
@@ -466,14 +470,10 @@ fn if_then_scans_body() {
         Event::AwaitingConditional(r) => r,
         other => panic!("expected AwaitingConditional, got {other:?}"),
     };
-    assert_eq!(req.kind, ConditionalKind::If);
-    assert!(req.name.is_none());
-    assert!(req.defined.is_none());
-    assert!(req.recommended.is_none());
-    assert_eq!(
-        lexical_from_condition(req.condition_tokens.as_ref().expect("tokens")),
-        ["true"]
-    );
+    let ConditionalRequest::If(expr) = req else {
+        panic!("expected If, got {req:?}");
+    };
+    assert_eq!(lexical_from_condition(&expr.condition_tokens), ["true"]);
     pp.resume_conditional(Branch::Then).expect("resume");
     let texts = lexical_texts(&mut pp);
     assert_eq!(texts, ["then_side", "."]);
@@ -503,7 +503,7 @@ fn if_elif_chain_first_active_skips_later_elif() {
         Event::AwaitingConditional(r) => r,
         other => panic!("expected opening -if, got {other:?}"),
     };
-    assert_eq!(req.kind, ConditionalKind::If);
+    assert!(matches!(req, ConditionalRequest::If(_)));
     pp.resume_conditional(Branch::Then).expect("resume if");
 
     let mut saw_a = false;
@@ -516,7 +516,7 @@ fn if_elif_chain_first_active_skips_later_elif() {
             Event::Token(t) if t.text() == "b" => saw_b = true,
             Event::Token(t) if t.text() == "c" => saw_c = true,
             Event::Token(_) | Event::BranchBoundary(_) => {}
-            Event::AwaitingConditional(r) if r.kind == ConditionalKind::Elif => {
+            Event::AwaitingConditional(ConditionalRequest::Elif(_)) => {
                 saw_elif_await = true;
             }
             Event::Complete => break,
@@ -544,7 +544,7 @@ fn if_elif_chain_first_inactive_awaits_elif() {
         Event::AwaitingConditional(r) => r,
         other => panic!("expected -if, got {other:?}"),
     };
-    assert_eq!(req.kind, ConditionalKind::If);
+    assert!(matches!(req, ConditionalRequest::If(_)));
     pp.resume_conditional(Branch::Else).expect("skip if");
 
     let mut saw_a = false;
@@ -552,16 +552,13 @@ fn if_elif_chain_first_inactive_awaits_elif() {
         match step(&mut pp) {
             Event::Token(t) if t.text() == "a" => saw_a = true,
             Event::Token(_) | Event::BranchBoundary(_) => {}
-            Event::AwaitingConditional(r) if r.kind == ConditionalKind::Elif => break r,
+            Event::AwaitingConditional(ConditionalRequest::Elif(r)) => break r,
             Event::Complete => panic!("never saw elif await"),
             other => panic!("unexpected: {other:?}"),
         }
     };
     assert!(!saw_a);
-    assert_eq!(
-        lexical_from_condition(elif_req.condition_tokens.as_ref().expect("tokens")),
-        ["1"]
-    );
+    assert_eq!(lexical_from_condition(&elif_req.condition_tokens), ["1"]);
     pp.resume_conditional(Branch::Then).expect("take elif");
     let texts = lexical_texts(&mut pp);
     assert_eq!(texts, ["b", "."]);
@@ -581,14 +578,13 @@ fn if_elif_else_each_branch() {
     );
     let _ = step(&mut pp);
     pp.resume_conditional(Branch::Else).expect("skip if");
-    let elif = loop {
+    loop {
         match step(&mut pp) {
-            Event::AwaitingConditional(r) if r.kind == ConditionalKind::Elif => break r,
+            Event::AwaitingConditional(ConditionalRequest::Elif(_)) => break,
             Event::Token(_) | Event::BranchBoundary(_) => {}
             other => panic!("unexpected before elif: {other:?}"),
         }
-    };
-    assert_eq!(elif.kind, ConditionalKind::Elif);
+    }
     pp.resume_conditional(Branch::Else).expect("skip elif");
     let texts = lexical_texts(&mut pp);
     assert_eq!(texts, ["c", "."]);
@@ -686,9 +682,11 @@ fn if_condition_expands_defined_macro() {
         Event::AwaitingConditional(r) => r,
         other => panic!("expected -if, got {other:?}"),
     };
-    assert_eq!(req.kind, ConditionalKind::If);
+    let ConditionalRequest::If(expr) = req else {
+        panic!("expected If, got {req:?}");
+    };
     assert_eq!(
-        lexical_from_condition(req.condition_tokens.as_ref().expect("tokens")),
+        lexical_from_condition(&expr.condition_tokens),
         ["27", ">=", "27"]
     );
     pp.resume_conditional(Branch::Then).expect("resume");
@@ -714,11 +712,10 @@ fn if_condition_caller_driven_macro_empty_response() {
         }
     };
     assert!(saw_macro);
-    assert_eq!(req.kind, ConditionalKind::If);
-    assert_eq!(
-        lexical_from_condition(req.condition_tokens.as_ref().expect("tokens")),
-        [">=", "27"]
-    );
+    let ConditionalRequest::If(expr) = req else {
+        panic!("expected If, got {req:?}");
+    };
+    assert_eq!(lexical_from_condition(&expr.condition_tokens), [">=", "27"]);
 }
 
 #[test]
