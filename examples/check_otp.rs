@@ -40,7 +40,7 @@ fn main() -> noargs::Result<ExitCode> {
             .unwrap_or(path)
             .to_string_lossy()
             .into_owned();
-        let include_paths = build_include_paths(path, &global_include_dirs);
+        let include_paths = build_include_paths(path, &root, &global_include_dirs);
         match run_one(path, &display, &include_paths, &erl_libs) {
             FileOutcome::Ok {
                 events,
@@ -223,7 +223,7 @@ fn empty_source(name: &str) -> erl_pp::Source {
     erl_pp::Source::new(name.to_string(), String::new(), Vec::new())
 }
 
-fn build_include_paths(target: &Path, globals: &[PathBuf]) -> Vec<PathBuf> {
+fn build_include_paths(target: &Path, root: &Path, globals: &[PathBuf]) -> Vec<PathBuf> {
     let mut paths = Vec::new();
     if let Some(dir) = target.parent() {
         paths.push(dir.to_path_buf());
@@ -234,12 +234,61 @@ fn build_include_paths(target: &Path, globals: &[PathBuf]) -> Vec<PathBuf> {
             }
         }
     }
+    // If the target sits inside an application's `src/` tree, add
+    // every subdirectory of that `src/` so bare `-include(...)` can
+    // reach headers kept next to the caller's cousins (e.g.
+    // `lib/inets/src/http_server/mod_alias.erl` reaching for
+    // `inets_internal.hrl` under `lib/inets/src/inets_app/`).
+    if let Some(app_src) = find_app_src(target) {
+        for sub in walk_dirs(&app_src) {
+            if !paths.iter().any(|p| p == &sub) {
+                paths.push(sub);
+            }
+        }
+    }
+    // `erts/preloaded/src/**` reaches for `lib/kernel/src/` headers
+    // (`inet_boot.hrl` / `file_int.hrl` / `inet_int.hrl`) that are
+    // application-private to kernel. Add `lib/kernel/src/` when the
+    // target is a preloaded module so those bare `-include(...)`
+    // resolve without a separate skip list entry.
+    if target.to_string_lossy().contains("/erts/preloaded/src/") {
+        let kernel_src = root.join("lib").join("kernel").join("src");
+        if kernel_src.is_dir() && !paths.iter().any(|p| p == &kernel_src) {
+            paths.push(kernel_src);
+        }
+    }
     for g in globals {
         if !paths.iter().any(|p| p == g) {
             paths.push(g.clone());
         }
     }
     paths
+}
+
+fn find_app_src(target: &Path) -> Option<PathBuf> {
+    let mut cur = target.parent()?;
+    loop {
+        if cur.file_name().and_then(|n| n.to_str()) == Some("src") {
+            return Some(cur.to_path_buf());
+        }
+        cur = cur.parent()?;
+    }
+}
+
+fn walk_dirs(root: &Path) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if root.is_dir() {
+        out.push(root.to_path_buf());
+        if let Ok(entries) = fs::read_dir(root) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.is_dir() {
+                    out.extend(walk_dirs(&p));
+                }
+            }
+        }
+    }
+    out
 }
 
 /// Return `otp/lib/<app>/include/` for every application. Ordinary
@@ -317,49 +366,19 @@ fn is_skipped(path: &Path) -> bool {
     // preprocessor and left as raw tokens, unbalancing the
     // surrounding `-endif` / `-else`).
     const INDIVIDUAL_SKIPS: &[&str] = &[
-        // Generated `beam_opcodes.hrl`.
-        "/lib/compiler/src/beam_asm.erl",
-        "/lib/compiler/src/beam_disasm.erl",
-        // -if / -elif inside compiler.
+        // -if / -elif (unsupported by the preprocessor).
         "/lib/compiler/src/beam_ssa_alias.erl",
         "/lib/compiler/src/beam_ssa_alias_debug.hrl",
         "/lib/compiler/src/beam_ssa_ss.erl",
-        // `-include("erl_compile.hrl")` cross-application.
-        "/lib/compiler/src/compile.erl",
-        "/lib/parsetools/src/leex.erl",
-        "/lib/parsetools/src/yecc.erl",
-        "/lib/sasl/src/systools.erl",
-        "/lib/stdlib/src/erl_compile.erl",
-        // `-include("logger.hrl")` — kernel-private, not on the app's
-        // include search list.
-        "/lib/stdlib/src/gen.erl",
-        "/lib/stdlib/src/gen_event.erl",
-        "/lib/stdlib/src/gen_fsm.erl",
-        "/lib/stdlib/src/gen_server.erl",
-        "/lib/stdlib/src/gen_statem.erl",
-        "/lib/stdlib/src/proc_lib.erl",
-        "/lib/stdlib/src/supervisor.erl",
-        "/lib/stdlib/src/supervisor_bridge.erl",
-        // `-include("file.hrl")` bare.
-        "/lib/stdlib/src/zip.erl",
-        // -if / -elif inside stdlib.
         "/lib/stdlib/src/graph.erl",
         "/lib/stdlib/src/peer.erl",
+        // Build-generated `beam_opcodes.hrl`.
+        "/lib/compiler/src/beam_asm.erl",
+        "/lib/compiler/src/beam_disasm.erl",
         // Build-generated `inet_dns_record_adts.hrl`.
         "/lib/kernel/src/inet_dns.erl",
         // `snmp_types.hrl` — depends on snmp (already skipped above).
         "/lib/common_test/src/ct_snmp.erl",
-        // `et.hrl` — cross-application.
-        "/lib/observer/src/ttb_et.erl",
-        // `inets_internal.hrl` / `http_internal.hrl` — inets-private.
-        "/lib/inets/src/http_server/mod_alias.erl",
-        "/lib/inets/src/http_server/mod_cgi.erl",
-        "/lib/inets/src/http_server/mod_get.erl",
-        // `erts/preloaded/src/` files include kernel headers that are
-        // not on the source-tree search path.
-        "/erts/preloaded/src/erl_prim_loader.erl",
-        "/erts/preloaded/src/prim_file.erl",
-        "/erts/preloaded/src/prim_inet.erl",
     ];
     if INDIVIDUAL_SKIPS.iter().any(|suffix| s.ends_with(suffix)) {
         return true;
