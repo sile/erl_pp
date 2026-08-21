@@ -3,7 +3,9 @@
 //! An [`Origin`] tells why a particular token appears in the output:
 //! whether it came directly from the source text, from an include, from
 //! a macro body, from a macro argument, from a stringification (`??Arg`),
-//! or from a predefined macro (`?FILE`, `?LINE`, `?MACHINE`).
+//! or from a predefined source-info macro (`?FILE`, `?LINE`). Other
+//! OTP predefined macros reach the caller as
+//! [`Event::AwaitingMacroExpansion`](crate::Event::AwaitingMacroExpansion).
 
 use std::sync::Arc;
 

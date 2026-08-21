@@ -186,10 +186,8 @@ impl SourceStore {
 
 /// Half-open range within a specific [`Source`].
 ///
-/// This is the common shape used by
-/// [`SourceToken::source_span`](crate::SourceToken::source_span) and, where needed, by
-/// later error, include, conditional, and diagnostic APIs so that ad
-/// hoc types do not proliferate.
+/// Shared by [`SourceToken::source_span`](crate::SourceToken::source_span),
+/// errors, includes, conditionals, and diagnostics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct SourceSpan {
     /// Identifier of the source that this span lies in.

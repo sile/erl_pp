@@ -76,17 +76,21 @@ pub enum Event {
     /// The preprocessor is crossing a conditional branch boundary
     /// (`-else` / `-endif`).
     ///
-    /// Payload is filled in by later work on conditional branching.
+    /// Observation only; the machine does not wait. See
+    /// [`BranchBoundary`].
     BranchBoundary(BranchBoundary),
 
     /// A `-error` / `-warning` diagnostic reached the caller.
     ///
-    /// Payload is filled in by later work on diagnostic directives.
+    /// The machine does not wait. Abort, record, or ignore. See
+    /// [`Diagnostic`].
     Diagnostic(Diagnostic),
 
     /// An input-derived error surfaced.
     ///
-    /// See [`PreprocessError`] for the concrete failure kinds.
+    /// The machine stays scanning; continue [`Preprocessor::step`](crate::Preprocessor::step)
+    /// or drop the preprocessor. See [`PreprocessError`] for the
+    /// concrete failure kinds.
     PreprocessError(PreprocessError),
 
     /// The whole input has been processed.

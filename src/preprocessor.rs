@@ -59,9 +59,9 @@ use crate::source_token::SourceToken;
 /// [`Event::Token`] is lexical only. Whitespace and comments remain
 /// in the caller's [`Source`] and are not re-emitted.
 ///
-/// The preprocessor implements [`Clone`] so that state machine forks
-/// (used by later conditional-branching work) can drive the two sides
-/// independently. The clone shares the [`SourceStore`].
+/// [`Clone`] shares the [`SourceStore`]. Cursor, macro table, and
+/// branch stack are independent. There is no API that merges two
+/// forked machines.
 pub struct Preprocessor {
     sources: Arc<SourceStore>,
     /// Cursor for the source currently being scanned. `None` when
@@ -1521,6 +1521,8 @@ impl Preprocessor {
     }
 }
 
+/// Shares [`SourceStore`]. Cursor, macro table, and branch stack
+/// are independent. Isolation, not undo after an error.
 impl Clone for Preprocessor {
     fn clone(&self) -> Self {
         Self {

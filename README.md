@@ -6,60 +6,55 @@ erl_pp
 [![Actions Status](https://github.com/sile/erl_pp/workflows/CI/badge.svg)](https://github.com/sile/erl_pp/actions)
 ![License](https://img.shields.io/crates/l/erl_pp)
 
-An Erlang source code preprocessor written in Rust.
+Erlang source code preprocessor. A Sans-I/O state machine for language
+tools: the caller tokenizes (`erl_tokenize::scan_token`), performs I/O,
+include search, `-if` / `-elif` evaluation, and unknown-macro meaning.
+This crate advances directives, the macro table, and the condition stack.
 
 [Documentation](https://docs.rs/erl_pp)
-
-References
-----------
-
-- [Erlang Reference Manual -- Preprocessor](http://erlang.org/doc/reference_manual/macros.html)
 
 Examples
 --------
 
-Preprocesses an Erlang source code snippet.
+Tokenize, wrap in `Source`, loop on `Preprocessor::step`.
+`Event::Token` is lexical only; whitespace and comments stay on `Source`.
 
 ```rust
-use erl_pp::Preprocessor;
-use erl_tokenize::Lexer;
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let text = "atom, foo, bar.";
+    let mut tokens = Vec::new();
+    let mut position = erl_tokenize::Position::new();
+    while let Some(t) = erl_tokenize::scan_token(text, position)? {
+        position = t.end();
+        tokens.push(t);
+    }
+    let source = erl_pp::Source::new("example.erl", text, tokens);
+    let mut pp = erl_pp::Preprocessor::new([source]);
 
-let src = r#"-define(FOO(A), {A, ?LINE}). io:format("Hello: ~p", [?FOO(bar)])."#;
-let pp = Preprocessor::new(Lexer::new(src));
-let tokens = pp.collect::<Result<Vec<_>, _>>().unwrap();
-
-assert_eq!(tokens.iter().map(|t| t.text()).collect::<Vec<_>>(),
-           ["io", ":", "format", "(", r#""Hello: ~p""#, ",",
-            "[", "{", "bar", ",", "1", "}", "]", ")", "."]);
+    let mut lexical = Vec::<String>::new();
+    loop {
+        match pp.step()? {
+            erl_pp::Event::Token(t) => lexical.push(t.text().to_owned()),
+            erl_pp::Event::Complete => break,
+            other => unreachable!("unexpected event: {other:?}"),
+        }
+    }
+    assert_eq!(lexical, ["atom", ",", "foo", ",", "bar", "."]);
+    Ok(())
+}
 ```
 
-Executes the example `pp` command:
+`Preprocessor` does not search the filesystem. `open_include` is optional
+OTP 29.0 path resolution and returns a path, not a file handle.
 
-```bash
-$ cargo run --example pp -- /dev/stdin <<EOS
--define(FOO, foo).
--define(BAR(A), {bar, A}).
+Each `Event` variant documents its contract. The [crate rustdoc](https://docs.rs/erl_pp)
+covers the `step` driver, typical compiler vs formatter / linter
+policies, and how to continue after input failure.
 
--ifdef(FOO).
+`examples/pp.rs` prints lexical tokens from a file or stdin.
+`examples/check_otp.rs` walks an OTP tree; it is not an introduction.
 
-foo() ->
-  ?FOO + ?BAR(baz).
+References
+----------
 
--endif.
-EOS
-
-[Position { filepath: Some("stdin"), offset: 61, line: 6, column: 1 }] "foo"
-[Position { filepath: Some("stdin"), offset: 64, line: 6, column: 4 }] "("
-[Position { filepath: Some("stdin"), offset: 65, line: 6, column: 5 }] ")"
-[Position { filepath: Some("stdin"), offset: 67, line: 6, column: 2 }] "->"
-[Position { filepath: Some("stdin"), offset: 13, line: 1, column: 2 }] "foo"
-[Position { filepath: Some("stdin"), offset: 77, line: 7, column: 2 }] "+"
-[Position { filepath: Some("stdin"), offset: 35, line: 2, column: 2 }] "{"
-[Position { filepath: Some("stdin"), offset: 36, line: 2, column: 3 }] "bar"
-[Position { filepath: Some("stdin"), offset: 39, line: 2, column: 6 }] ","
-[Position { filepath: Some("stdin"), offset: 84, line: 7, column: 7 }] "baz"
-[Position { filepath: Some("stdin"), offset: 42, line: 2, column: 3 }] "}"
-[Position { filepath: Some("stdin"), offset: 88, line: 7, column: 11 }] "."
-TOKEN COUNT: 12
-ELAPSED: 0.001244 seconds
-```
+- [Erlang Reference Manual -- Preprocessor](https://www.erlang.org/doc/system/macros.html)

@@ -7,8 +7,10 @@
 //! arities; a bare name (`?FOO`) selects the constant-like entry and a
 //! call (`?FOO(x, y)`) selects the arity-matching function-like entry.
 //!
-//! This module owns the definition side of macros only; expansion is
-//! carried out by later work.
+//! This module owns the definition side of macros only. Expansion of
+//! table entries is done by [`Preprocessor`](crate::Preprocessor);
+//! unknown names surface as
+//! [`Event::AwaitingMacroExpansion`](crate::Event::AwaitingMacroExpansion).
 #![expect(
     clippy::result_large_err,
     reason = "PreprocessError deliberately carries structured spans; \

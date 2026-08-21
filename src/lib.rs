@@ -1,11 +1,26 @@
 //! Erlang source code preprocessor.
 //!
-//! The crate is built around a Sans-I/O state machine. The caller feeds
-//! a sequence of [`Source`]s into [`Preprocessor`] and drives it by calling
-//! [`Preprocessor::step`] in a loop; each call returns one [`Event`]
-//! describing the next transition (a scanned token, a macro
-//! definition or undef, a caller-driven include / conditional /
-//! macro-expansion response, a diagnostic, an error, or completion).
+//! A Sans-I/O state machine for language tools. The caller tokenizes
+//! ([`erl_tokenize::scan_token`]), performs I/O, searches for includes,
+//! evaluates `-if` / `-elif`, and decides what unknown macros mean.
+//! This crate advances directives, the macro table, and the condition
+//! stack.
+//!
+//! Feed a sequence of [`Source`]s into [`Preprocessor`] and call
+//! [`Preprocessor::step`] in a loop. [`Event::Token`] is lexical only;
+//! whitespace and comments stay on [`Source`].
+//!
+//! Include search, environment expansion, cycle / depth limits, and
+//! encoding are outside [`Preprocessor`]. [`IncludeDirective`] carries
+//! the decoded path and the directive's span / origin.
+//! [`open_include`] is optional OTP 29.0 path resolution and returns
+//! the opened path, not a file handle. Differences from OTP `epp` are
+//! in [`docs::otp_differences`].
+//!
+//! [`Preprocessor`] implements [`Clone`]: the clone shares
+//! [`SourceStore`]; cursor, macro table, and branch stack are
+//! independent. There is no API that merges two forked machines.
+//! [`Clone`] is isolation, not undo after an error.
 //!
 //! # Minimal event loop
 //!
@@ -40,6 +55,60 @@
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! # Driving `step`
+//!
+//! Each [`Event`] variant documents its own contract. The skeleton
+//! below is a driver: resume the three waits, decide whether a
+//! diagnostic or input error is fatal, and treat the rest as
+//! observation. There is no skip-to-next-form or rewind API; recover
+//! by continuing `step` or dropping [`Preprocessor`].
+//!
+//! [`ProtocolError`] from `step` is a driver bug (`step` while awaiting,
+//! or the wrong `resume_*`). State is unchanged; the last [`Event`]
+//! names the wait.
+//!
+//! ```rust,ignore
+//! loop {
+//!     match pp.step() {
+//!         Ok(erl_pp::Event::Token(t)) => { /* accumulate; lexical only */ }
+//!         Ok(erl_pp::Event::AwaitingInclude(_)) => {
+//!             pp.resume_include(source)?; // empty Source skips
+//!         }
+//!         Ok(erl_pp::Event::AwaitingConditional(_)) => {
+//!             pp.resume_conditional(branch)?;
+//!         }
+//!         Ok(erl_pp::Event::AwaitingMacroExpansion(_)) => {
+//!             pp.resume_macro_expansion(empty)?; // empty Source skips
+//!         }
+//!         Ok(erl_pp::Event::Diagnostic(_) | erl_pp::Event::PreprocessError(_)) => {
+//!             // Record and step, or break and drop `pp`.
+//!         }
+//!         Ok(erl_pp::Event::Complete) => break,
+//!         Err(erl_pp::ProtocolError) => { /* driver bug; state unchanged */ }
+//!         Ok(_) => { /* MacroDefined, MacroUndefined, BranchBoundary */ }
+//!     }
+//! }
+//! ```
+//!
+//! Typical policies:
+//!
+//! | | Compiler-like | Formatter / linter |
+//! | --- | --- | --- |
+//! | Include | Filesystem ([`open_include`] or equivalent) | In-memory or empty [`Source`] |
+//! | `-ifdef` / `-ifndef` | `recommended` | `recommended`, or [`Clone`] both sides |
+//! | `-if` / `-elif` | Evaluate | Evaluate, or pick a [`Branch`] |
+//! | Unknown macro | Error, or implement | Empty expansion |
+//! | [`Event::Diagnostic`] Error | Fail the file | Record and continue |
+//!
+//! An empty resume succeeds and emits nothing; it is not OTP epp's undef
+//! error. Drop without `resume_*` if abandoning a wait; do not
+//! [`Preprocessor::step`] while awaiting.
+//!
+//! Lexical errors never reach [`Preprocessor::step`]. Inactive-branch
+//! `-define`, includes, diagnostics, unknown macros, and parse failures
+//! do not surface. Include failure is not a preprocessor error. A
+//! source sequence continues after an error in an earlier source.
 //!
 //! # References
 //!
