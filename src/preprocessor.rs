@@ -1834,13 +1834,12 @@ fn expand_function_like(
                 });
             }
             let var_text = target_tok.text(target_ppt.source().text());
-            let Some(param_idx) = def.params.iter().position(|p| p.name.as_str() == var_text)
-            else {
+            let Some(param_idx) = def.params.iter().position(|p| p.as_str() == var_text) else {
                 return Err(MacroCallErrorKind::InvalidStringificationTarget {
                     span: target_ppt.source_span(),
                 });
             };
-            let parameter = def.params[param_idx].name.clone();
+            let parameter = def.params[param_idx].clone();
             let argument = &arguments[param_idx];
             let synth_tokens = stringify_argument(
                 argument,
@@ -1859,10 +1858,10 @@ fn expand_function_like(
 
         if token.kind() == TokenKind::Variable {
             let var_text = token.text(repl[i].source().text());
-            if let Some(idx) = def.params.iter().position(|p| p.name.as_str() == var_text)
+            if let Some(idx) = def.params.iter().position(|p| p.as_str() == var_text)
                 && idx < arguments.len()
             {
-                let parameter = def.params[idx].name.clone();
+                let parameter = def.params[idx].clone();
                 for arg_tok in &arguments[idx] {
                     let origin = Origin::MacroArgument {
                         parent: Arc::clone(parent_origin),

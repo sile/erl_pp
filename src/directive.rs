@@ -70,7 +70,7 @@ pub(crate) enum Directive {
         /// Macro parameters. `None` is a constant-like macro
         /// (`-define(FOO, 1).`). `Some(vec![])` is an arity-0
         /// function-like macro (`-define(FOO(), 1).`).
-        params: Option<Vec<Param>>,
+        params: Option<Vec<SourceString>>,
         /// Replacement token list (may include hidden tokens).
         replacement: Vec<Token>,
         /// Span covering the replacement tokens. `None` when the
@@ -193,13 +193,6 @@ impl Directive {
             | Directive::Warning { span, .. } => *span,
         }
     }
-}
-
-/// One parameter of a function-like macro.
-#[derive(Debug, Clone)]
-pub struct Param {
-    /// Decoded parameter name (typically a variable identifier).
-    pub name: SourceString,
 }
 
 /// Names that this module recognises as preprocessor directives.
@@ -381,7 +374,7 @@ fn parse_define(
             loop {
                 let pname =
                     parse_identifier(cursor, source_id, &directive_start, "parameter name")?;
-                params.push(Param { name: pname });
+                params.push(pname);
                 if peek_is_symbol(cursor, Symbol::Comma) {
                     expect_symbol(cursor, Symbol::Comma, source_id, &directive_start)?;
                     continue;
@@ -939,7 +932,7 @@ mod tests {
             panic!("expected Define");
         };
         assert_eq!(name.as_str(), "FOO");
-        assert_eq!(params.as_deref().map(<[Param]>::len), Some(0));
+        assert_eq!(params.as_deref().map(<[SourceString]>::len), Some(0));
     }
 
     #[test]
@@ -950,7 +943,7 @@ mod tests {
         };
         assert_eq!(name.as_str(), "FOO");
         let params = params.expect("function-like");
-        let names: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
+        let names: Vec<&str> = params.iter().map(|p| p.as_str()).collect();
         assert_eq!(names, ["A", "B", "C"]);
     }
 

@@ -48,7 +48,6 @@
 #![warn(missing_docs)]
 #![forbid(unsafe_code)]
 
-pub use crate::directive::Param;
 pub use crate::error::{PreprocessError, ProtocolError};
 pub use crate::event::{
     Branch, BranchBoundary, Conditional, DefinedConditional, Diagnostic, Event,

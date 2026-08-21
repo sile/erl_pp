@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use erl_tokenize::{Symbol, Token, TokenKind};
 
-use crate::directive::{Directive, Param};
+use crate::directive::Directive;
 use crate::error::PreprocessError;
 use crate::origin::Origin;
 use crate::source::{Source, SourceId, SourceSpan};
@@ -78,9 +78,10 @@ pub struct MacroDefinition {
     /// macros with `n` parameters.
     pub arity: Option<usize>,
     /// Parameter names in declaration order. Empty for constant-like
-    /// macros; carries the arity-matching parameters for function-like
-    /// macros (empty vector for arity 0).
-    pub params: Vec<Param>,
+    /// macros; carries the arity-matching names for function-like
+    /// macros (empty vector for arity 0). Each [`SourceString`] is
+    /// the decoded name plus the span of that parameter token.
+    pub params: Vec<SourceString>,
     /// Replacement token list (may include hidden tokens).
     pub replacement: Vec<SourceToken>,
     /// Span covering the whole `-define(...)` directive.
@@ -162,11 +163,11 @@ fn build_source_token(
     SourceToken::new(token, Arc::clone(source), source_id, origin.clone())
 }
 
-fn first_duplicate_param(params: &[Param]) -> Option<SourceString> {
+fn first_duplicate_param(params: &[SourceString]) -> Option<SourceString> {
     let mut seen = HashMap::<&str, ()>::new();
     for p in params {
-        if seen.insert(p.name.as_str(), ()).is_some() {
-            return Some(p.name.clone());
+        if seen.insert(p.as_str(), ()).is_some() {
+            return Some(p.clone());
         }
     }
     None
@@ -482,9 +483,9 @@ mod tests {
         assert_eq!(def.name, "BAR");
         assert_eq!(def.arity, Some(3));
         assert_eq!(def.params.len(), 3);
-        assert_eq!(def.params[0].name.as_str(), "A");
-        assert_eq!(def.params[1].name.as_str(), "B");
-        assert_eq!(def.params[2].name.as_str(), "C");
+        assert_eq!(def.params[0].as_str(), "A");
+        assert_eq!(def.params[1].as_str(), "B");
+        assert_eq!(def.params[2].as_str(), "C");
     }
 
     #[test]
