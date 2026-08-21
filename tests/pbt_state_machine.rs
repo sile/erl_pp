@@ -273,7 +273,7 @@ fn ifdef_then_and_else_select_effective_branch() -> TestResult {
             match step_expect_ok(&mut pp) {
                 Event::AwaitingConditional(req) => {
                     assert!(!resumed, "double AwaitingConditional");
-                    assert_eq!(req.name.as_str(), cond);
+                    assert_eq!(req.name.as_ref().map(|s| s.as_str()), Some(cond));
                     pp.resume_conditional(branch).expect("resume");
                     resumed = true;
                 }

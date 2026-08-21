@@ -53,6 +53,10 @@ pub enum Directive {
     Error(ErrorDirective),
     /// `-warning(Argument).`
     Warning(WarningDirective),
+    /// `-if(Expression).`
+    If(IfDirective),
+    /// `-elif(Expression).`
+    Elif(ElifDirective),
 }
 
 impl Directive {
@@ -70,6 +74,8 @@ impl Directive {
             Directive::Endif(d) => d.span,
             Directive::Error(d) => d.span,
             Directive::Warning(d) => d.span,
+            Directive::If(d) => d.span,
+            Directive::Elif(d) => d.span,
         }
     }
 }
@@ -213,12 +219,39 @@ pub struct WarningDirective {
     pub arg_span: SourceSpan,
 }
 
+/// Data of an `-if(...)` directive.
+///
+/// The argument tokens are the raw expression inside the parentheses.
+/// Expression evaluation is the caller's responsibility; this module
+/// only recognises the directive shape.
+#[derive(Debug, Clone)]
+pub struct IfDirective {
+    /// Span covering the whole directive.
+    pub span: SourceSpan,
+    /// Raw token list inside the parentheses.
+    pub arg_tokens: Vec<Token>,
+    /// Span covering the argument tokens.
+    pub arg_span: SourceSpan,
+}
+
+/// Data of an `-elif(...)` directive.
+///
+/// Same payload shape as [`IfDirective`].
+#[derive(Debug, Clone)]
+pub struct ElifDirective {
+    /// Span covering the whole directive.
+    pub span: SourceSpan,
+    /// Raw token list inside the parentheses.
+    pub arg_tokens: Vec<Token>,
+    /// Span covering the argument tokens.
+    pub arg_span: SourceSpan,
+}
+
 /// Names that this module recognises as preprocessor directives.
 ///
 /// Names outside this list cause [`parse_directive`] to roll back and
-/// return `Ok(None)`. `-if(...)` and `-elif(...)` are intentionally
-/// excluded (their evaluation is out of scope); so are `-file(...)`,
-/// `-feature(...)`, and other non-listed directives.
+/// return `Ok(None)`. `-file(...)`, `-feature(...)`, and other
+/// non-listed directives remain excluded.
 const KNOWN_DIRECTIVES: &[&str] = &[
     "include",
     "include_lib",
@@ -226,6 +259,8 @@ const KNOWN_DIRECTIVES: &[&str] = &[
     "undef",
     "ifdef",
     "ifndef",
+    "if",
+    "elif",
     "else",
     "endif",
     "error",
@@ -336,6 +371,8 @@ pub(crate) fn parse_directive(cursor: &mut Cursor) -> Result<Option<Directive>, 
         "warning" => {
             parse_diagnostic(cursor, source_id, start_pos, directive_start, true).map(Some)
         }
+        "if" => parse_if_like(cursor, source_id, start_pos, directive_start, false).map(Some),
+        "elif" => parse_if_like(cursor, source_id, start_pos, directive_start, true).map(Some),
         _ => unreachable!("KNOWN_DIRECTIVES gate above"),
     }
 }
@@ -495,6 +532,45 @@ fn parse_diagnostic(
         })
     } else {
         Directive::Error(ErrorDirective {
+            span,
+            arg_tokens,
+            arg_span,
+        })
+    })
+}
+
+fn parse_if_like(
+    cursor: &mut Cursor,
+    source_id: SourceId,
+    start_pos: Position,
+    directive_start: SourceSpan,
+    is_elif: bool,
+) -> Result<Directive, ParseError> {
+    expect_symbol(cursor, Symbol::OpenParen, source_id, &directive_start)?;
+    let (arg_tokens, arg_span_opt) =
+        collect_until_close_paren(cursor, source_id, &directive_start)?;
+    if arg_tokens.is_empty() {
+        return Err(ParseError {
+            directive_start,
+            expected: "at least one token before `)`".to_owned(),
+            actual: ParseFailure::UnexpectedToken {
+                span: SourceSpan::new(source_id, start_pos, start_pos),
+                kind: TokenKind::Symbol(Symbol::CloseParen),
+            },
+        });
+    }
+    let arg_span = arg_span_opt.expect("non-empty arg_tokens implies a span");
+    expect_symbol(cursor, Symbol::CloseParen, source_id, &directive_start)?;
+    let dot = expect_symbol(cursor, Symbol::Dot, source_id, &directive_start)?;
+    let span = SourceSpan::new(source_id, start_pos, dot.end());
+    Ok(if is_elif {
+        Directive::Elif(ElifDirective {
+            span,
+            arg_tokens,
+            arg_span,
+        })
+    } else {
+        Directive::If(IfDirective {
             span,
             arg_tokens,
             arg_span,

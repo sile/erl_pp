@@ -133,24 +133,35 @@ pub struct IncludeRequest {
     pub parent_origin: Arc<Origin>,
 }
 
-/// Distinguishes `-ifdef` from `-ifndef` in a [`ConditionalRequest`].
+/// Distinguishes conditional opening / chain directives in a
+/// [`ConditionalRequest`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ConditionalKind {
     /// `-ifdef(NAME).`
     Ifdef,
     /// `-ifndef(NAME).`
     Ifndef,
+    /// `-if(Expression).`
+    If,
+    /// `-elif(Expression).`
+    Elif,
 }
 
-/// Which side of a `-ifdef` / `-ifndef` the caller wants to
-/// process. Passed to [`crate::Preprocessor::resume_conditional`].
+/// Which side of a conditional the caller wants to process. Passed to
+/// [`crate::Preprocessor::resume_conditional`].
+///
+/// For `-ifdef` / `-ifndef`, `Then` is the tokens between the opening
+/// directive and `-else` (or `-endif` when there is no `-else`), and
+/// `Else` is the tokens between `-else` and `-endif`.
+///
+/// For `-if` / `-elif`, `Then` means take this branch of the chain and
+/// `Else` means skip it and wait for a later `-elif` / `-else` /
+/// `-endif`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Branch {
-    /// The tokens between the opening directive and `-else`
-    /// (or `-endif` when there is no `-else`).
+    /// Take the current branch.
     Then,
-    /// The tokens between `-else` and `-endif`
-    /// (an empty branch when the conditional has no `-else`).
+    /// Skip the current branch.
     Else,
 }
 
@@ -166,23 +177,32 @@ pub enum BranchBoundaryKind {
 
 /// Data of an [`Event::AwaitingConditional`].
 ///
-/// Describes the `-ifdef` / `-ifndef` the caller must choose a
-/// branch for. `defined` reports the current macro table state and
-/// `recommended` is the branch OTP `epp` would take (a `defined`
-/// `Ifdef` prefers `Then`, `Ifndef` prefers the opposite); the
-/// caller may pick either side.
+/// For `-ifdef` / `-ifndef`, `name` / `defined` / `recommended` are
+/// `Some` and `condition_tokens` is `None`. `defined` reports the
+/// current macro table state and `recommended` is the branch OTP
+/// `epp` would take (a `defined` `Ifdef` prefers `Then`, `Ifndef`
+/// prefers the opposite); the caller may pick either side.
+///
+/// For `-if` / `-elif`, `condition_tokens` is `Some` (the expression
+/// after macro expansion) and `name` / `defined` / `recommended` are
+/// `None`. Expression evaluation is the caller's responsibility.
 #[derive(Debug, Clone)]
 pub struct ConditionalRequest {
-    /// Whether this is `-ifdef` or `-ifndef`.
+    /// Which conditional directive produced this request.
     pub kind: ConditionalKind,
-    /// Decoded name of the target macro (matches
-    /// `IfdefDirective::name` / `IfndefDirective::name`).
-    pub name: SourceString,
-    /// `MacroTable::is_defined(name)` at the point of the directive.
-    pub defined: bool,
-    /// The branch OTP `epp` would take given `kind` and `defined`.
-    /// Cached so callers do not have to reproduce the mapping.
-    pub recommended: Branch,
+    /// Decoded name of the target macro for `-ifdef` / `-ifndef`
+    /// (`Some`); `None` for `-if` / `-elif`.
+    pub name: Option<SourceString>,
+    /// `MacroTable::is_defined(name)` at the point of the directive
+    /// for `-ifdef` / `-ifndef` (`Some`); `None` for `-if` / `-elif`.
+    pub defined: Option<bool>,
+    /// The branch OTP `epp` would take given `kind` and `defined`,
+    /// for `-ifdef` / `-ifndef` only (`Some`). Cached so callers do
+    /// not have to reproduce the mapping. `None` for `-if` / `-elif`.
+    pub recommended: Option<Branch>,
+    /// Macro-expanded expression tokens for `-if` / `-elif` (`Some`);
+    /// `None` for `-ifdef` / `-ifndef`.
+    pub condition_tokens: Option<Vec<PreprocessedToken>>,
     /// Span of the whole directive.
     pub directive_span: SourceSpan,
     /// Origin at the directive's site.

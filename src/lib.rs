@@ -49,9 +49,9 @@
 #![forbid(unsafe_code)]
 
 pub use crate::directive::{
-    DefineDirective, Directive, ElseDirective, EndifDirective, ErrorDirective, IfdefDirective,
-    IfndefDirective, IncludeDirective, IncludeLibDirective, Param, UndefDirective,
-    WarningDirective,
+    DefineDirective, Directive, ElifDirective, ElseDirective, EndifDirective, ErrorDirective,
+    IfDirective, IfdefDirective, IfndefDirective, IncludeDirective, IncludeLibDirective, Param,
+    UndefDirective, WarningDirective,
 };
 pub use crate::error::{
     ConditionalErrorKind, MacroCallErrorKind, MacroDefinitionErrorKind, PreprocessError,
