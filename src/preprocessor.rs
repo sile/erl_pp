@@ -35,7 +35,7 @@ use erl_tokenize::{Keyword, Position, Symbol, Token, TokenKind, TokenValue};
 
 use crate::cursor::Cursor;
 use crate::directive::{Directive, parse_directive};
-use crate::error::{ConditionalErrorKind, MacroCallErrorKind, PreprocessError, ProtocolError};
+use crate::error::{MacroCallErrorKind, PreprocessError, ProtocolError};
 use crate::event::{
     Branch, BranchBoundary, BranchBoundaryKind, ConditionalRequest, DefinedConditional, Diagnostic,
     Event, ExpressionConditional, MacroExpansionRequest, Severity,
@@ -316,10 +316,11 @@ impl Preprocessor {
     /// mid-stream it simply adds a definition to the current macro
     /// table.
     ///
-    /// Returns `Err(PreprocessError::Parse)` when the source does not
-    /// parse as a `-define(...).` directive, or
-    /// [`PreprocessError::MacroDefinition`] when the definition
-    /// itself is invalid (duplicate parameter, etc.).
+    /// Returns [`PreprocessError::ParseUnexpectedEof`] or
+    /// [`PreprocessError::ParseUnexpectedToken`] when the source does
+    /// not parse as a `-define(...).` directive, or
+    /// [`PreprocessError::DuplicateParameter`] when the definition
+    /// itself is invalid.
     pub fn define_initial(&mut self, source: Source) -> Result<(), PreprocessError> {
         let source_id = self.sources.append(source);
         let source_arc = self.sources.get(source_id);
@@ -327,26 +328,23 @@ impl Preprocessor {
         let parsed = match parse_directive(&mut cursor) {
             Ok(Some(d)) => d,
             Ok(None) => {
-                return Err(PreprocessError::Parse {
+                return Err(PreprocessError::ParseUnexpectedEof {
                     directive_start: crate::source::SourceSpan::new(
                         source_id,
                         erl_tokenize::Position::new(),
                         erl_tokenize::Position::new(),
                     ),
                     expected: "-define directive".to_owned(),
-                    actual: crate::error::PreprocessParseFailure::UnexpectedEof,
                 });
             }
             Err(pe) => return Err(pe.into()),
         };
         if !matches!(parsed, Directive::Define { .. }) {
-            return Err(PreprocessError::Parse {
+            return Err(PreprocessError::ParseUnexpectedToken {
                 directive_start: parsed.span(),
                 expected: "-define directive".to_owned(),
-                actual: crate::error::PreprocessParseFailure::UnexpectedToken {
-                    span: parsed.span(),
-                    kind: TokenKind::Symbol(Symbol::Hyphen),
-                },
+                span: parsed.span(),
+                kind: TokenKind::Symbol(Symbol::Hyphen),
             });
         }
         let def = MacroDefinition::from_directive(&parsed, source_arc, source_id, Origin::Source)?;
@@ -643,10 +641,7 @@ impl Preprocessor {
             let open_span = frame.open_span;
             self.branch_stack.clear();
             return StepAction::Emit(Box::new(Event::PreprocessError(
-                PreprocessError::Conditional {
-                    span: open_span,
-                    kind: ConditionalErrorKind::UnclosedConditional,
-                },
+                PreprocessError::UnclosedConditional { span: open_span },
             )));
         }
         self.state = State::Completed;
@@ -875,22 +870,17 @@ impl Preprocessor {
     /// records the else, and fires `Event::BranchBoundary(Else)`
     /// unless the frame is a silent nested one. Stray `-else` (no
     /// matching opening directive) and double `-else` inside the
-    /// same conditional surface as `PreprocessError::Conditional`.
+    /// same conditional surface as [`PreprocessError::StrayElse`] /
+    /// [`PreprocessError::DoubleElse`].
     fn dispatch_else(&mut self, span: SourceSpan) -> StepAction {
         let Some(frame) = self.branch_stack.last_mut() else {
             return StepAction::Emit(Box::new(Event::PreprocessError(
-                PreprocessError::Conditional {
-                    span,
-                    kind: ConditionalErrorKind::StrayElse,
-                },
+                PreprocessError::StrayElse { span },
             )));
         };
         if frame.else_seen {
             return StepAction::Emit(Box::new(Event::PreprocessError(
-                PreprocessError::Conditional {
-                    span,
-                    kind: ConditionalErrorKind::DoubleElse,
-                },
+                PreprocessError::DoubleElse { span },
             )));
         }
         frame.else_seen = true;
@@ -915,26 +905,17 @@ impl Preprocessor {
     fn dispatch_elif(&mut self, span: SourceSpan, arg_tokens: &[Token]) -> StepAction {
         let Some(frame) = self.branch_stack.last() else {
             return StepAction::Emit(Box::new(Event::PreprocessError(
-                PreprocessError::Conditional {
-                    span,
-                    kind: ConditionalErrorKind::StrayElif,
-                },
+                PreprocessError::StrayElif { span },
             )));
         };
         if !frame.is_if_chain {
             return StepAction::Emit(Box::new(Event::PreprocessError(
-                PreprocessError::Conditional {
-                    span,
-                    kind: ConditionalErrorKind::StrayElif,
-                },
+                PreprocessError::StrayElif { span },
             )));
         }
         if frame.else_seen {
             return StepAction::Emit(Box::new(Event::PreprocessError(
-                PreprocessError::Conditional {
-                    span,
-                    kind: ConditionalErrorKind::ElifAfterElse,
-                },
+                PreprocessError::ElifAfterElse { span },
             )));
         }
         if frame.silent_close {
@@ -992,14 +973,11 @@ impl Preprocessor {
     /// Handles a `-endif` directive: pops the top branch frame and
     /// fires `Event::BranchBoundary(Endif)` unless the popped frame
     /// was a silent nested one. Stray `-endif` (no matching opening
-    /// directive) surfaces as `PreprocessError::Conditional`.
+    /// directive) surfaces as [`PreprocessError::StrayEndif`].
     fn dispatch_endif(&mut self, span: SourceSpan) -> StepAction {
         let Some(frame) = self.branch_stack.pop() else {
             return StepAction::Emit(Box::new(Event::PreprocessError(
-                PreprocessError::Conditional {
-                    span,
-                    kind: ConditionalErrorKind::StrayEndif,
-                },
+                PreprocessError::StrayEndif { span },
             )));
         };
         if frame.silent_close {
@@ -1204,7 +1182,7 @@ impl Preprocessor {
                     .unwrap_or_else(|| name_tok.end());
                 let span = SourceSpan::new(source_id, question_tok.start(), end);
                 return MacroCallOutcome::Fire(Box::new(Event::PreprocessError(
-                    PreprocessError::MacroCall { span, kind },
+                    kind.into_preprocess_error(span),
                 )));
             }
         };
@@ -1282,10 +1260,7 @@ impl Preprocessor {
                         }
                         Err(kind) => {
                             return MacroCallOutcome::Fire(Box::new(Event::PreprocessError(
-                                PreprocessError::MacroCall {
-                                    span: call_site,
-                                    kind,
-                                },
+                                kind.into_preprocess_error(call_site),
                             )));
                         }
                     }
@@ -1526,7 +1501,7 @@ impl Preprocessor {
                 let span =
                     SourceSpan::new(question_span.source_id, question_span.start, name_tok.end());
                 return MacroCallOutcome::Fire(Box::new(Event::PreprocessError(
-                    PreprocessError::MacroCall { span, kind },
+                    kind.into_preprocess_error(span),
                 )));
             }
         };
@@ -1722,7 +1697,7 @@ fn escape_erlang_string(s: &str) -> String {
 }
 
 /// Builds a [`MacroCallOutcome::Fire`] carrying a
-/// [`PreprocessError::MacroCall`] with a `CircularExpansion` kind.
+/// [`PreprocessError::CircularExpansion`].
 fn fire_circular(
     name: String,
     arity: Option<usize>,
@@ -1730,9 +1705,11 @@ fn fire_circular(
     chain: Vec<(String, Option<usize>)>,
 ) -> MacroCallOutcome {
     MacroCallOutcome::Fire(Box::new(Event::PreprocessError(
-        PreprocessError::MacroCall {
+        PreprocessError::CircularExpansion {
             span: call_site,
-            kind: MacroCallErrorKind::CircularExpansion { name, arity, chain },
+            name,
+            arity,
+            chain,
         },
     )))
 }
@@ -2410,10 +2387,10 @@ mod tests {
         }
     }
 
-    fn expect_preprocess_error(pp: &mut Preprocessor) -> MacroCallErrorKind {
+    fn expect_preprocess_error(pp: &mut Preprocessor) -> PreprocessError {
         match pp.step().expect("no protocol errors") {
-            Event::PreprocessError(PreprocessError::MacroCall { kind, .. }) => kind,
-            other => panic!("expected PreprocessError::MacroCall, got {other:?}"),
+            Event::PreprocessError(err) => err,
+            other => panic!("expected PreprocessError, got {other:?}"),
         }
     }
 
@@ -2487,22 +2464,22 @@ mod tests {
     #[test]
     fn function_like_call_leading_empty_is_error() {
         let mut pp = make("?FOO(, a).");
-        let kind = expect_preprocess_error(&mut pp);
-        assert!(matches!(kind, MacroCallErrorKind::LeadingEmptyArgument));
+        let err = expect_preprocess_error(&mut pp);
+        assert!(matches!(err, PreprocessError::LeadingEmptyArgument { .. }));
     }
 
     #[test]
     fn function_like_call_trailing_empty_is_error() {
         let mut pp = make("?FOO(a, ).");
-        let kind = expect_preprocess_error(&mut pp);
-        assert!(matches!(kind, MacroCallErrorKind::TrailingEmptyArgument));
+        let err = expect_preprocess_error(&mut pp);
+        assert!(matches!(err, PreprocessError::TrailingEmptyArgument { .. }));
     }
 
     #[test]
     fn function_like_call_unclosed_argument_is_error() {
         let mut pp = make("?FOO(a, b");
-        let kind = expect_preprocess_error(&mut pp);
-        assert!(matches!(kind, MacroCallErrorKind::UnclosedArgument));
+        let err = expect_preprocess_error(&mut pp);
+        assert!(matches!(err, PreprocessError::UnclosedArgument { .. }));
     }
 
     #[test]
@@ -2686,7 +2663,7 @@ mod tests {
         let event = pp.step().expect("no protocol error");
         assert!(matches!(
             event,
-            Event::PreprocessError(PreprocessError::MacroDefinition { .. })
+            Event::PreprocessError(PreprocessError::DuplicateParameter { .. })
         ));
         // The failing definition is not added to the table.
         assert!(pp.macros().is_empty());
@@ -2722,7 +2699,7 @@ mod tests {
         let err = pp
             .define_initial(define_source("-endif."))
             .expect_err("preprocess error expected");
-        assert!(matches!(err, PreprocessError::Parse { .. }));
+        assert!(matches!(err, PreprocessError::ParseUnexpectedToken { .. }));
     }
 
     // ---- Phase 7: rescan --------------------------------------------
@@ -2936,8 +2913,10 @@ mod tests {
     fn expect_circular(pp: &mut Preprocessor) -> (String, Option<usize>, CircularChain) {
         loop {
             match pp.step().expect("no protocol errors") {
-                Event::PreprocessError(PreprocessError::MacroCall {
-                    kind: MacroCallErrorKind::CircularExpansion { name, arity, chain },
+                Event::PreprocessError(PreprocessError::CircularExpansion {
+                    name,
+                    arity,
+                    chain,
                     ..
                 }) => return (name, arity, chain),
                 Event::Directive(_) | Event::Token(_) => {}
@@ -2973,10 +2952,9 @@ mod tests {
         let mut pp = make("-define(BAR, 1).\n-define(FOO, ?BAR).\n?FOO.");
         loop {
             match pp.step().expect("no protocol errors") {
-                Event::PreprocessError(PreprocessError::MacroCall {
-                    kind: MacroCallErrorKind::CircularExpansion { .. },
-                    ..
-                }) => panic!("unexpected CircularExpansion for non-recursive macros"),
+                Event::PreprocessError(PreprocessError::CircularExpansion { .. }) => {
+                    panic!("unexpected CircularExpansion for non-recursive macros")
+                }
                 Event::Complete => return,
                 _ => {}
             }
@@ -3173,10 +3151,11 @@ mod tests {
         let mut pp = make("-define(S(A), ??Foo).\n?S(x).");
         loop {
             match pp.step().expect("no protocol errors") {
-                Event::PreprocessError(PreprocessError::MacroCall {
-                    kind: MacroCallErrorKind::InvalidStringificationTarget { .. },
+                Event::PreprocessError(PreprocessError::InvalidStringificationTarget {
                     ..
-                }) => return,
+                }) => {
+                    return;
+                }
                 Event::Complete => panic!("expected InvalidStringificationTarget"),
                 _ => {}
             }

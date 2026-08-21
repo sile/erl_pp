@@ -2,8 +2,8 @@
 //! and the Sans-I/O fork / resume_conditional protocol.
 
 use erl_pp::{
-    Branch, BranchBoundaryKind, ConditionalErrorKind, ConditionalRequest, Event, IncludeKind,
-    PreprocessError, Preprocessor, ProtocolError, Source, Status,
+    Branch, BranchBoundaryKind, ConditionalRequest, Event, IncludeKind, PreprocessError,
+    Preprocessor, ProtocolError, Source, Status,
 };
 use erl_tokenize::{Position, scan_token};
 
@@ -318,36 +318,34 @@ fn clone_then_and_else_share_source_but_diverge_state() {
 }
 
 // ---------------------------------------------------------------------
-// 13. Stray -endif at top level is a PreprocessError::Conditional.
+// 13. Stray -endif at top level is a PreprocessError::StrayEndif.
 #[test]
 fn stray_endif_is_conditional_error() {
     let mut pp = make("-endif.\n");
     let event = step(&mut pp);
     match event {
-        Event::PreprocessError(PreprocessError::Conditional { kind, .. }) => {
-            assert_eq!(kind, ConditionalErrorKind::StrayEndif);
+        Event::PreprocessError(err @ PreprocessError::StrayEndif { span }) => {
+            assert_eq!(err.span(), span);
         }
         other => panic!("expected StrayEndif error, got {other:?}"),
     }
 }
 
 // ---------------------------------------------------------------------
-// 14. Stray -else at top level is a PreprocessError::Conditional.
+// 14. Stray -else at top level is a PreprocessError::StrayElse.
 #[test]
 fn stray_else_is_conditional_error() {
     let mut pp = make("-else.\n");
     let event = step(&mut pp);
     match event {
-        Event::PreprocessError(PreprocessError::Conditional { kind, .. }) => {
-            assert_eq!(kind, ConditionalErrorKind::StrayElse);
-        }
+        Event::PreprocessError(PreprocessError::StrayElse { .. }) => {}
         other => panic!("expected StrayElse error, got {other:?}"),
     }
 }
 
 // ---------------------------------------------------------------------
 // 15. Double -else in the same conditional is a
-//     PreprocessError::Conditional::DoubleElse.
+//     PreprocessError::DoubleElse.
 #[test]
 fn double_else_is_conditional_error() {
     let mut pp = make("-ifdef(FOO).\n-else.\n-else.\n-endif.\n");
@@ -357,8 +355,7 @@ fn double_else_is_conditional_error() {
     loop {
         match step(&mut pp) {
             Event::BranchBoundary(_) | Event::Token(_) => {}
-            Event::PreprocessError(PreprocessError::Conditional { kind, .. }) => {
-                assert_eq!(kind, ConditionalErrorKind::DoubleElse);
+            Event::PreprocessError(PreprocessError::DoubleElse { .. }) => {
                 return;
             }
             other => panic!("expected DoubleElse error, got {other:?}"),
@@ -368,7 +365,7 @@ fn double_else_is_conditional_error() {
 
 // ---------------------------------------------------------------------
 // 16. Unclosed conditional at EOF fires
-//     PreprocessError::Conditional::UnclosedConditional pointing at
+//     PreprocessError::UnclosedConditional pointing at
 //     the opening directive.
 #[test]
 fn unclosed_conditional_at_eof_is_error() {
@@ -378,8 +375,7 @@ fn unclosed_conditional_at_eof_is_error() {
     loop {
         match step(&mut pp) {
             Event::Token(_) | Event::BranchBoundary(_) => {}
-            Event::PreprocessError(PreprocessError::Conditional { kind, .. }) => {
-                assert_eq!(kind, ConditionalErrorKind::UnclosedConditional);
+            Event::PreprocessError(PreprocessError::UnclosedConditional { .. }) => {
                 return;
             }
             other => panic!("expected UnclosedConditional error, got {other:?}"),
@@ -594,10 +590,7 @@ fn if_elif_else_each_branch() {
 fn stray_elif_errors() {
     let mut pp = make("-elif(true).\n");
     match step(&mut pp) {
-        Event::PreprocessError(PreprocessError::Conditional {
-            kind: ConditionalErrorKind::StrayElif,
-            ..
-        }) => {}
+        Event::PreprocessError(PreprocessError::StrayElif { .. }) => {}
         other => panic!("expected StrayElif, got {other:?}"),
     }
 }
@@ -608,10 +601,7 @@ fn elif_on_ifdef_is_stray() {
     let _ = step(&mut pp);
     pp.resume_conditional(Branch::Then).expect("resume ifdef");
     match step(&mut pp) {
-        Event::PreprocessError(PreprocessError::Conditional {
-            kind: ConditionalErrorKind::StrayElif,
-            ..
-        }) => {}
+        Event::PreprocessError(PreprocessError::StrayElif { .. }) => {}
         other => panic!("expected StrayElif on ifdef, got {other:?}"),
     }
 }
@@ -626,18 +616,12 @@ fn elif_after_else_errors() {
         match step(&mut pp) {
             Event::BranchBoundary(b) if b.kind == BranchBoundaryKind::Else => break,
             Event::Token(_) => {}
-            Event::PreprocessError(PreprocessError::Conditional {
-                kind: ConditionalErrorKind::ElifAfterElse,
-                ..
-            }) => return,
+            Event::PreprocessError(PreprocessError::ElifAfterElse { .. }) => return,
             other => panic!("unexpected before else/elif: {other:?}"),
         }
     }
     match step(&mut pp) {
-        Event::PreprocessError(PreprocessError::Conditional {
-            kind: ConditionalErrorKind::ElifAfterElse,
-            ..
-        }) => {}
+        Event::PreprocessError(PreprocessError::ElifAfterElse { .. }) => {}
         other => panic!("expected ElifAfterElse, got {other:?}"),
     }
 }
@@ -727,10 +711,7 @@ fn if_unclosed_at_eof() {
     loop {
         match step(&mut pp) {
             Event::Token(_) | Event::BranchBoundary(_) => {}
-            Event::PreprocessError(PreprocessError::Conditional {
-                kind: ConditionalErrorKind::UnclosedConditional,
-                ..
-            }) => {
+            Event::PreprocessError(PreprocessError::UnclosedConditional { .. }) => {
                 saw_unclosed = true;
             }
             Event::Complete => break,

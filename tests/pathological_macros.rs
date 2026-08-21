@@ -7,9 +7,7 @@
 //! test either locks a currently-working behaviour or documents a
 //! known limitation that a follow-up change will lift.
 
-use erl_pp::{
-    Event, MacroCallErrorKind, Origin, PreprocessError, Preprocessor, Source, SourceInfoMacroKind,
-};
+use erl_pp::{Event, Origin, PreprocessError, Preprocessor, Source, SourceInfoMacroKind};
 use erl_tokenize::{Position, TokenKind, TokenValue, scan_token};
 
 fn build_source(name: &str, text: &str) -> Source {
@@ -141,12 +139,11 @@ fn function_like_in_constant_body_rescans_to_expanded_tokens() {
 #[test]
 fn function_like_rescan_detects_cycle() {
     let mut pp = make("-define(A, ?B(x)).\n-define(B(X), ?A).\n?A.");
-    let kind = drive_until(&mut pp, |e| match e {
-        Event::PreprocessError(PreprocessError::MacroCall { kind, .. }) => Some(kind),
+    drive_until(&mut pp, |e| match e {
+        Event::PreprocessError(PreprocessError::CircularExpansion { .. }) => Some(()),
         Event::Complete => panic!("expected CircularExpansion"),
         _ => None,
     });
-    assert!(matches!(kind, MacroCallErrorKind::CircularExpansion { .. }));
 }
 
 // ---------------------------------------------------------------------
@@ -170,12 +167,11 @@ fn function_like_rescan_fires_event_on_table_miss() {
 #[test]
 fn direct_constant_like_recursion_is_circular() {
     let mut pp = make("-define(X, ?X).\n?X.");
-    let kind = drive_until(&mut pp, |e| match e {
-        Event::PreprocessError(PreprocessError::MacroCall { kind, .. }) => Some(kind),
+    drive_until(&mut pp, |e| match e {
+        Event::PreprocessError(PreprocessError::CircularExpansion { .. }) => Some(()),
         Event::Complete => panic!("expected CircularExpansion"),
         _ => None,
     });
-    assert!(matches!(kind, MacroCallErrorKind::CircularExpansion { .. }));
 }
 
 // ---------------------------------------------------------------------
@@ -183,12 +179,11 @@ fn direct_constant_like_recursion_is_circular() {
 #[test]
 fn indirect_cycle_across_arity_boundary_is_circular() {
     let mut pp = make("-define(X, ?Y(1)).\n-define(Y(A), ?X).\n?X.");
-    let kind = drive_until(&mut pp, |e| match e {
-        Event::PreprocessError(PreprocessError::MacroCall { kind, .. }) => Some(kind),
+    drive_until(&mut pp, |e| match e {
+        Event::PreprocessError(PreprocessError::CircularExpansion { .. }) => Some(()),
         Event::Complete => panic!("expected CircularExpansion"),
         _ => None,
     });
-    assert!(matches!(kind, MacroCallErrorKind::CircularExpansion { .. }));
 }
 
 // ---------------------------------------------------------------------
@@ -203,12 +198,11 @@ fn caller_response_direct_recursion_is_circular() {
     }
     let response = build_source("<synth:UNKNOWN>", "?UNKNOWN");
     pp.resume_macro_expansion(response).expect("resume ok");
-    let kind = drive_until(&mut pp, |e| match e {
-        Event::PreprocessError(PreprocessError::MacroCall { kind, .. }) => Some(kind),
+    drive_until(&mut pp, |e| match e {
+        Event::PreprocessError(PreprocessError::CircularExpansion { .. }) => Some(()),
         Event::Complete => panic!("expected CircularExpansion"),
         _ => None,
     });
-    assert!(matches!(kind, MacroCallErrorKind::CircularExpansion { .. }));
 }
 
 // ---------------------------------------------------------------------
@@ -270,15 +264,11 @@ fn stringification_of_whitespace_only_argument() {
 #[test]
 fn stringification_of_non_parameter_is_invalid() {
     let mut pp = make("-define(S(A), ??Foo).\n?S(x).");
-    let kind = drive_until(&mut pp, |e| match e {
-        Event::PreprocessError(PreprocessError::MacroCall { kind, .. }) => Some(kind),
+    drive_until(&mut pp, |e| match e {
+        Event::PreprocessError(PreprocessError::InvalidStringificationTarget { .. }) => Some(()),
         Event::Complete => panic!("expected InvalidStringificationTarget"),
         _ => None,
     });
-    assert!(matches!(
-        kind,
-        MacroCallErrorKind::InvalidStringificationTarget { .. }
-    ));
 }
 
 // ---------------------------------------------------------------------

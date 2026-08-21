@@ -49,10 +49,7 @@
 #![forbid(unsafe_code)]
 
 pub use crate::directive::{Directive, Param};
-pub use crate::error::{
-    ConditionalErrorKind, MacroCallErrorKind, MacroDefinitionErrorKind, PreprocessError,
-    PreprocessParseFailure, ProtocolError,
-};
+pub use crate::error::{PreprocessError, ProtocolError};
 pub use crate::event::{
     Branch, BranchBoundary, BranchBoundaryKind, ConditionalRequest, DefinedConditional, Diagnostic,
     Event, ExpressionConditional, IncludeRequest, MacroExpansionRequest, Severity,

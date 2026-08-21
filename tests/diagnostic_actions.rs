@@ -276,14 +276,15 @@ fn diagnostic_inside_include_carries_include_origin() {
 }
 
 // ---------------------------------------------------------------------
-// 12. Malformed `-error(` surfaces as `Event::PreprocessError(Parse)`,
-//     NOT as `Event::Diagnostic`.
+// 12. Malformed `-error(` surfaces as `Event::PreprocessError`
+//     with a parse failure, NOT as `Event::Diagnostic`.
 #[test]
 fn malformed_diagnostic_directive_is_parse_error() {
     let mut pp = make("-error(unterminated");
     loop {
         match step(&mut pp) {
-            Event::PreprocessError(PreprocessError::Parse { .. }) => return,
+            Event::PreprocessError(PreprocessError::ParseUnexpectedToken { .. })
+            | Event::PreprocessError(PreprocessError::ParseUnexpectedEof { .. }) => return,
             Event::Diagnostic(d) => panic!("expected Parse error, got Diagnostic: {d:?}"),
             Event::Complete => panic!("expected Parse error, got Complete"),
             _ => {}

@@ -21,7 +21,7 @@ use std::sync::Arc;
 use erl_tokenize::{Symbol, Token, TokenKind};
 
 use crate::directive::{Directive, Param};
-use crate::error::{MacroDefinitionErrorKind, PreprocessError};
+use crate::error::PreprocessError;
 use crate::origin::Origin;
 use crate::preprocessed_token::PreprocessedToken;
 use crate::source::{Source, SourceId, SourceSpan};
@@ -66,7 +66,7 @@ impl MacroKey {
 ///
 /// Built by the preprocessor from a parsed [`Directive::Define`] with
 /// the parameter list validated (duplicate parameter names are
-/// rejected as [`PreprocessError::MacroDefinition`]).
+/// rejected as [`PreprocessError::DuplicateParameter`]).
 ///
 /// The replacement is kept as [`PreprocessedToken`]s so that later
 /// expansion can hand a caller tokens whose text, span, and origin are
@@ -99,7 +99,7 @@ impl MacroDefinition {
     /// synthesized origin for initial macros registered through the
     /// preprocessor's initialization API).
     ///
-    /// Returns [`PreprocessError::MacroDefinition`] when the parameter
+    /// Returns [`PreprocessError::DuplicateParameter`] when the parameter
     /// list is invalid (duplicate names today; more kinds may be added
     /// later).
     pub(crate) fn from_directive(
@@ -121,9 +121,9 @@ impl MacroDefinition {
         let (params, arity) = match params {
             Some(params) => {
                 if let Some(dup) = first_duplicate_param(params) {
-                    return Err(PreprocessError::MacroDefinition {
+                    return Err(PreprocessError::DuplicateParameter {
                         span: *span,
-                        kind: MacroDefinitionErrorKind::DuplicateParameter { name: dup },
+                        name: dup,
                     });
                 }
                 (params.clone(), Some(params.len()))
@@ -499,10 +499,9 @@ mod tests {
         let err = MacroDefinition::from_directive(&dir, source, source_id, Origin::Source)
             .expect_err("duplicate should fail");
         match err {
-            PreprocessError::MacroDefinition {
-                kind: MacroDefinitionErrorKind::DuplicateParameter { name },
-                ..
-            } => assert_eq!(name.as_str(), "A"),
+            PreprocessError::DuplicateParameter { name, .. } => {
+                assert_eq!(name.as_str(), "A")
+            }
             other => panic!("unexpected error: {other:?}"),
         }
     }
