@@ -49,17 +49,17 @@
 #![forbid(unsafe_code)]
 
 pub use crate::directive::{
-    DefineDirective, Directive, ElseDirective, EndifDirective, ErrorDirective, IfdefDirective,
-    IfndefDirective, IncludeDirective, IncludeLibDirective, Param, UndefDirective,
-    WarningDirective,
+    DefineDirective, Directive, ElifDirective, ElseDirective, EndifDirective, ErrorDirective,
+    IfDirective, IfdefDirective, IfndefDirective, IncludeDirective, IncludeLibDirective, Param,
+    UndefDirective, WarningDirective,
 };
 pub use crate::error::{
     ConditionalErrorKind, MacroCallErrorKind, MacroDefinitionErrorKind, PreprocessError,
     PreprocessParseFailure, ProtocolError,
 };
 pub use crate::event::{
-    Branch, BranchBoundary, BranchBoundaryKind, ConditionalKind, ConditionalRequest, Diagnostic,
-    Event, IncludeKind, IncludeRequest, MacroExpansionRequest, Severity,
+    Branch, BranchBoundary, BranchBoundaryKind, ConditionalRequest, DefinedConditional, Diagnostic,
+    Event, ExpressionConditional, IncludeKind, IncludeRequest, MacroExpansionRequest, Severity,
 };
 pub use crate::include_path::{OpenIncludeError, open_include};
 pub use crate::macros::{MacroDefinition, MacroKey, MacroTable};

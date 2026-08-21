@@ -2,7 +2,7 @@
 //! and the Sans-I/O fork / resume_conditional protocol.
 
 use erl_pp::{
-    Branch, BranchBoundaryKind, ConditionalErrorKind, ConditionalKind, Event, IncludeKind,
+    Branch, BranchBoundaryKind, ConditionalErrorKind, ConditionalRequest, Event, IncludeKind,
     PreprocessError, Preprocessor, ProtocolError, Source, Status,
 };
 use erl_tokenize::{Position, scan_token};
@@ -51,10 +51,12 @@ fn ifdef_defined_recommends_then() {
         Event::AwaitingConditional(r) => r,
         other => panic!("expected AwaitingConditional, got {other:?}"),
     };
-    assert_eq!(request.kind, ConditionalKind::Ifdef);
-    assert_eq!(request.name.as_str(), "FOO");
-    assert!(request.defined);
-    assert_eq!(request.recommended, Branch::Then);
+    let ConditionalRequest::Ifdef(d) = request else {
+        panic!("expected Ifdef, got {request:?}");
+    };
+    assert_eq!(d.name.as_str(), "FOO");
+    assert!(d.defined);
+    assert_eq!(d.recommended, Branch::Then);
     assert!(matches!(pp.status(), Status::AwaitingConditionalDecision));
 }
 
@@ -67,9 +69,11 @@ fn ifndef_undefined_recommends_then() {
         Event::AwaitingConditional(r) => r,
         other => panic!("expected AwaitingConditional, got {other:?}"),
     };
-    assert_eq!(request.kind, ConditionalKind::Ifndef);
-    assert!(!request.defined);
-    assert_eq!(request.recommended, Branch::Then);
+    let ConditionalRequest::Ifndef(d) = request else {
+        panic!("expected Ifndef, got {request:?}");
+    };
+    assert!(!d.defined);
+    assert_eq!(d.recommended, Branch::Then);
 }
 
 // ---------------------------------------------------------------------
@@ -445,4 +449,293 @@ fn include_in_active_branch_still_fires_awaiting_include() {
             other => panic!("unexpected event: {other:?}"),
         }
     }
+}
+
+// ---------------------------------------------------------------------
+// -if / -elif
+// ---------------------------------------------------------------------
+
+fn lexical_from_condition(tokens: &[erl_pp::PreprocessedToken]) -> Vec<String> {
+    tokens
+        .iter()
+        .filter(|t| t.token().kind().is_lexical())
+        .map(|t| t.text().to_owned())
+        .collect()
+}
+
+#[test]
+fn if_then_scans_body() {
+    let mut pp = make("-if(true).\nthen_side.\n-endif.\n");
+    let req = match step(&mut pp) {
+        Event::AwaitingConditional(r) => r,
+        other => panic!("expected AwaitingConditional, got {other:?}"),
+    };
+    let ConditionalRequest::If(expr) = req else {
+        panic!("expected If, got {req:?}");
+    };
+    assert_eq!(lexical_from_condition(&expr.condition_tokens), ["true"]);
+    pp.resume_conditional(Branch::Then).expect("resume");
+    let texts = lexical_texts(&mut pp);
+    assert_eq!(texts, ["then_side", "."]);
+}
+
+#[test]
+fn if_else_skips_body() {
+    let mut pp = make("-if(false).\nthen_side.\n-endif.\n");
+    let _ = step(&mut pp);
+    pp.resume_conditional(Branch::Else).expect("resume");
+    let texts = lexical_texts(&mut pp);
+    assert!(texts.is_empty(), "Then body must be skipped: {texts:?}");
+}
+
+#[test]
+fn if_elif_chain_first_active_skips_later_elif() {
+    let mut pp = make(
+        "-if(true).\n\
+         a.\n\
+         -elif(true).\n\
+         b.\n\
+         -else.\n\
+         c.\n\
+         -endif.\n",
+    );
+    let req = match step(&mut pp) {
+        Event::AwaitingConditional(r) => r,
+        other => panic!("expected opening -if, got {other:?}"),
+    };
+    assert!(matches!(req, ConditionalRequest::If(_)));
+    pp.resume_conditional(Branch::Then).expect("resume if");
+
+    let mut saw_a = false;
+    let mut saw_b = false;
+    let mut saw_c = false;
+    let mut saw_elif_await = false;
+    loop {
+        match step(&mut pp) {
+            Event::Token(t) if t.text() == "a" => saw_a = true,
+            Event::Token(t) if t.text() == "b" => saw_b = true,
+            Event::Token(t) if t.text() == "c" => saw_c = true,
+            Event::Token(_) | Event::BranchBoundary(_) => {}
+            Event::AwaitingConditional(ConditionalRequest::Elif(_)) => {
+                saw_elif_await = true;
+            }
+            Event::Complete => break,
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+    assert!(saw_a);
+    assert!(!saw_b, "later elif body must not emit");
+    assert!(!saw_c, "else body must not emit after taken if");
+    assert!(!saw_elif_await, "taken chain must not await elif");
+}
+
+#[test]
+fn if_elif_chain_first_inactive_awaits_elif() {
+    let mut pp = make(
+        "-define(V, 1).\n\
+         -if(false).\n\
+         a.\n\
+         -elif(?V).\n\
+         b.\n\
+         -endif.\n",
+    );
+    assert!(matches!(step(&mut pp), Event::Directive(_)));
+    let req = match step(&mut pp) {
+        Event::AwaitingConditional(r) => r,
+        other => panic!("expected -if, got {other:?}"),
+    };
+    assert!(matches!(req, ConditionalRequest::If(_)));
+    pp.resume_conditional(Branch::Else).expect("skip if");
+
+    let mut saw_a = false;
+    let elif_req = loop {
+        match step(&mut pp) {
+            Event::Token(t) if t.text() == "a" => saw_a = true,
+            Event::Token(_) | Event::BranchBoundary(_) => {}
+            Event::AwaitingConditional(ConditionalRequest::Elif(r)) => break r,
+            Event::Complete => panic!("never saw elif await"),
+            other => panic!("unexpected: {other:?}"),
+        }
+    };
+    assert!(!saw_a);
+    assert_eq!(lexical_from_condition(&elif_req.condition_tokens), ["1"]);
+    pp.resume_conditional(Branch::Then).expect("take elif");
+    let texts = lexical_texts(&mut pp);
+    assert_eq!(texts, ["b", "."]);
+}
+
+#[test]
+fn if_elif_else_each_branch() {
+    // Else path of the chain.
+    let mut pp = make(
+        "-if(false).\n\
+         a.\n\
+         -elif(false).\n\
+         b.\n\
+         -else.\n\
+         c.\n\
+         -endif.\n",
+    );
+    let _ = step(&mut pp);
+    pp.resume_conditional(Branch::Else).expect("skip if");
+    loop {
+        match step(&mut pp) {
+            Event::AwaitingConditional(ConditionalRequest::Elif(_)) => break,
+            Event::Token(_) | Event::BranchBoundary(_) => {}
+            other => panic!("unexpected before elif: {other:?}"),
+        }
+    }
+    pp.resume_conditional(Branch::Else).expect("skip elif");
+    let texts = lexical_texts(&mut pp);
+    assert_eq!(texts, ["c", "."]);
+}
+
+#[test]
+fn stray_elif_errors() {
+    let mut pp = make("-elif(true).\n");
+    match step(&mut pp) {
+        Event::PreprocessError(PreprocessError::Conditional {
+            kind: ConditionalErrorKind::StrayElif,
+            ..
+        }) => {}
+        other => panic!("expected StrayElif, got {other:?}"),
+    }
+}
+
+#[test]
+fn elif_on_ifdef_is_stray() {
+    let mut pp = make("-ifdef(FOO).\n-elif(true).\n-endif.\n");
+    let _ = step(&mut pp);
+    pp.resume_conditional(Branch::Then).expect("resume ifdef");
+    match step(&mut pp) {
+        Event::PreprocessError(PreprocessError::Conditional {
+            kind: ConditionalErrorKind::StrayElif,
+            ..
+        }) => {}
+        other => panic!("expected StrayElif on ifdef, got {other:?}"),
+    }
+}
+
+#[test]
+fn elif_after_else_errors() {
+    let mut pp = make("-if(false).\n-else.\n-elif(true).\n-endif.\n");
+    let _ = step(&mut pp);
+    pp.resume_conditional(Branch::Else).expect("skip if");
+    // Cross -else boundary.
+    loop {
+        match step(&mut pp) {
+            Event::BranchBoundary(b) if b.kind == BranchBoundaryKind::Else => break,
+            Event::Token(_) => {}
+            Event::PreprocessError(PreprocessError::Conditional {
+                kind: ConditionalErrorKind::ElifAfterElse,
+                ..
+            }) => return,
+            other => panic!("unexpected before else/elif: {other:?}"),
+        }
+    }
+    match step(&mut pp) {
+        Event::PreprocessError(PreprocessError::Conditional {
+            kind: ConditionalErrorKind::ElifAfterElse,
+            ..
+        }) => {}
+        other => panic!("expected ElifAfterElse, got {other:?}"),
+    }
+}
+
+#[test]
+fn nested_if_in_inactive_outer_is_silent() {
+    let mut pp = make(
+        "-ifdef(FOO).\n\
+         -if(true).\n\
+         inner.\n\
+         -elif(true).\n\
+         x.\n\
+         -endif.\n\
+         -endif.\n",
+    );
+    let _ = step(&mut pp);
+    pp.resume_conditional(Branch::Else).expect("skip outer");
+    let texts = lexical_texts(&mut pp);
+    assert!(
+        texts.is_empty(),
+        "nested if chain in inactive outer must stay silent: {texts:?}"
+    );
+}
+
+#[test]
+fn if_fork_independent_branches() {
+    let mut pp = make("-if(true).\nthen_side.\n-else.\nelse_side.\n-endif.\n");
+    let _ = step(&mut pp);
+    let mut then_pp = pp.clone();
+    let mut else_pp = pp;
+    then_pp.resume_conditional(Branch::Then).expect("then");
+    else_pp.resume_conditional(Branch::Else).expect("else");
+    assert_eq!(lexical_texts(&mut then_pp), ["then_side", "."]);
+    assert_eq!(lexical_texts(&mut else_pp), ["else_side", "."]);
+}
+
+#[test]
+fn if_condition_expands_defined_macro() {
+    let mut pp = make("-define(V, 27).\n-if(?V >= 27).\nok.\n-endif.\n");
+    assert!(matches!(step(&mut pp), Event::Directive(_)));
+    let req = match step(&mut pp) {
+        Event::AwaitingConditional(r) => r,
+        other => panic!("expected -if, got {other:?}"),
+    };
+    let ConditionalRequest::If(expr) = req else {
+        panic!("expected If, got {req:?}");
+    };
+    assert_eq!(
+        lexical_from_condition(&expr.condition_tokens),
+        ["27", ">=", "27"]
+    );
+    pp.resume_conditional(Branch::Then).expect("resume");
+    assert_eq!(lexical_texts(&mut pp), ["ok", "."]);
+}
+
+#[test]
+fn if_condition_caller_driven_macro_empty_response() {
+    let mut pp = make("-if(?UNKNOWN >= 27).\nok.\n-endif.\n");
+    // First event may be AwaitingMacroExpansion for ?UNKNOWN inside
+    // the condition, then AwaitingConditional with empty/partial tokens.
+    let mut saw_macro = false;
+    let req = loop {
+        match step(&mut pp) {
+            Event::AwaitingMacroExpansion(r) => {
+                assert_eq!(r.name.as_str(), "UNKNOWN");
+                saw_macro = true;
+                let empty = build_source("<caller-driven>", "");
+                pp.resume_macro_expansion(empty).expect("empty expand");
+            }
+            Event::AwaitingConditional(r) => break r,
+            other => panic!("unexpected before conditional: {other:?}"),
+        }
+    };
+    assert!(saw_macro);
+    let ConditionalRequest::If(expr) = req else {
+        panic!("expected If, got {req:?}");
+    };
+    assert_eq!(lexical_from_condition(&expr.condition_tokens), [">=", "27"]);
+}
+
+#[test]
+fn if_unclosed_at_eof() {
+    let mut pp = make("-if(true).\nbody.\n");
+    let _ = step(&mut pp);
+    pp.resume_conditional(Branch::Then).expect("resume");
+    let mut saw_unclosed = false;
+    loop {
+        match step(&mut pp) {
+            Event::Token(_) | Event::BranchBoundary(_) => {}
+            Event::PreprocessError(PreprocessError::Conditional {
+                kind: ConditionalErrorKind::UnclosedConditional,
+                ..
+            }) => {
+                saw_unclosed = true;
+            }
+            Event::Complete => break,
+            other => panic!("unexpected: {other:?}"),
+        }
+    }
+    assert!(saw_unclosed);
 }

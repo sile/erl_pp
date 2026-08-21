@@ -114,15 +114,21 @@ pub enum PreprocessError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ConditionalErrorKind {
     /// `-else` appeared without a matching opening `-ifdef` /
-    /// `-ifndef`.
+    /// `-ifndef` / `-if`.
     StrayElse,
     /// `-endif` appeared without a matching opening `-ifdef` /
-    /// `-ifndef`.
+    /// `-ifndef` / `-if`.
     StrayEndif,
     /// A second `-else` appeared inside the same conditional.
     DoubleElse,
     /// The source ended while a conditional was still open.
     UnclosedConditional,
+    /// `-elif` appeared without a matching opening `-if`, or on top
+    /// of an `-ifdef` / `-ifndef` frame (erl_pp rejects the latter
+    /// even though OTP `epp` would accept it).
+    StrayElif,
+    /// `-elif` appeared after `-else` in the same conditional.
+    ElifAfterElse,
 }
 
 /// Reasons a `-define(...)` directive is rejected by the macro table.

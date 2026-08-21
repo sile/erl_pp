@@ -60,8 +60,9 @@ pub enum Event {
     /// The preprocessor is awaiting a conditional-branch decision
     /// from the caller.
     ///
-    /// Payload struct name is preserved for now; details are filled
-    /// in by later work on conditional branching.
+    /// `-ifdef` / `-ifndef` and `-if` / `-elif` share this event
+    /// and [`crate::Preprocessor::resume_conditional`], but their
+    /// payloads differ: see [`ConditionalRequest`].
     AwaitingConditional(ConditionalRequest),
 
     /// The preprocessor is awaiting a caller-driven macro expansion.
@@ -133,24 +134,21 @@ pub struct IncludeRequest {
     pub parent_origin: Arc<Origin>,
 }
 
-/// Distinguishes `-ifdef` from `-ifndef` in a [`ConditionalRequest`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ConditionalKind {
-    /// `-ifdef(NAME).`
-    Ifdef,
-    /// `-ifndef(NAME).`
-    Ifndef,
-}
-
-/// Which side of a `-ifdef` / `-ifndef` the caller wants to
-/// process. Passed to [`crate::Preprocessor::resume_conditional`].
+/// Which side of a conditional the caller wants to process. Passed to
+/// [`crate::Preprocessor::resume_conditional`].
+///
+/// For `-ifdef` / `-ifndef`, `Then` is the tokens between the opening
+/// directive and `-else` (or `-endif` when there is no `-else`), and
+/// `Else` is the tokens between `-else` and `-endif`.
+///
+/// For `-if` / `-elif`, `Then` means take this branch of the chain and
+/// `Else` means skip it and wait for a later `-elif` / `-else` /
+/// `-endif`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Branch {
-    /// The tokens between the opening directive and `-else`
-    /// (or `-endif` when there is no `-else`).
+    /// Take the current branch.
     Then,
-    /// The tokens between `-else` and `-endif`
-    /// (an empty branch when the conditional has no `-else`).
+    /// Skip the current branch.
     Else,
 }
 
@@ -166,23 +164,51 @@ pub enum BranchBoundaryKind {
 
 /// Data of an [`Event::AwaitingConditional`].
 ///
-/// Describes the `-ifdef` / `-ifndef` the caller must choose a
-/// branch for. `defined` reports the current macro table state and
-/// `recommended` is the branch OTP `epp` would take (a `defined`
-/// `Ifdef` prefers `Then`, `Ifndef` prefers the opposite); the
-/// caller may pick either side.
+/// `-ifdef` / `-ifndef` and `-if` / `-elif` both wait for
+/// [`crate::Preprocessor::resume_conditional`], but the information
+/// the caller needs is different, so the variants carry distinct
+/// payloads instead of sharing optional fields.
 #[derive(Debug, Clone)]
-pub struct ConditionalRequest {
-    /// Whether this is `-ifdef` or `-ifndef`.
-    pub kind: ConditionalKind,
-    /// Decoded name of the target macro (matches
-    /// `IfdefDirective::name` / `IfndefDirective::name`).
+pub enum ConditionalRequest {
+    /// `-ifdef(NAME).`
+    Ifdef(DefinedConditional),
+    /// `-ifndef(NAME).`
+    Ifndef(DefinedConditional),
+    /// `-if(Expression).` Expression evaluation is the caller's
+    /// responsibility.
+    If(ExpressionConditional),
+    /// `-elif(Expression).` Expression evaluation is the caller's
+    /// responsibility.
+    Elif(ExpressionConditional),
+}
+
+/// Payload of [`ConditionalRequest::Ifdef`] and
+/// [`ConditionalRequest::Ifndef`].
+#[derive(Debug, Clone)]
+pub struct DefinedConditional {
+    /// Decoded name of the target macro.
     pub name: SourceString,
-    /// `MacroTable::is_defined(name)` at the point of the directive.
+    /// [`crate::MacroTable::is_defined`] at the point of the directive.
     pub defined: bool,
-    /// The branch OTP `epp` would take given `kind` and `defined`.
-    /// Cached so callers do not have to reproduce the mapping.
+    /// The branch OTP `epp` would take given the directive and
+    /// `defined`. A defined `-ifdef` prefers [`Branch::Then`];
+    /// `-ifndef` prefers the opposite. Cached so callers do not have
+    /// to reproduce the mapping. The caller may still pick either
+    /// side.
     pub recommended: Branch,
+    /// Span of the whole directive.
+    pub directive_span: SourceSpan,
+    /// Origin at the directive's site.
+    pub parent_origin: Arc<Origin>,
+}
+
+/// Payload of [`ConditionalRequest::If`] and
+/// [`ConditionalRequest::Elif`].
+#[derive(Debug, Clone)]
+pub struct ExpressionConditional {
+    /// Macro-expanded expression tokens. Evaluating them is the
+    /// caller's responsibility.
+    pub condition_tokens: Vec<PreprocessedToken>,
     /// Span of the whole directive.
     pub directive_span: SourceSpan,
     /// Origin at the directive's site.

@@ -37,8 +37,8 @@ use crate::cursor::Cursor;
 use crate::directive::{Directive, parse_directive};
 use crate::error::{ConditionalErrorKind, MacroCallErrorKind, PreprocessError, ProtocolError};
 use crate::event::{
-    Branch, BranchBoundary, BranchBoundaryKind, ConditionalKind, ConditionalRequest, Diagnostic,
-    Event, IncludeKind, MacroExpansionRequest, Severity,
+    Branch, BranchBoundary, BranchBoundaryKind, ConditionalRequest, DefinedConditional, Diagnostic,
+    Event, ExpressionConditional, IncludeKind, MacroExpansionRequest, Severity,
 };
 use crate::macros::{MacroDefinition, MacroKey, MacroTable};
 use crate::origin::{Origin, SourceInfoMacroKind};
@@ -104,6 +104,12 @@ pub struct Preprocessor {
     /// so a `?FOO` call finished during this or an earlier step
     /// surfaces its replacement before scanning continues.
     expansion_queue: VecDeque<PreprocessedToken>,
+    /// When `Some`, the scanner is expanding an `-if` / `-elif`
+    /// condition expression: queue tokens are collected into this
+    /// buffer instead of being emitted as [`Event::Token`], and the
+    /// inactive-branch skip guard is bypassed so macros inside a
+    /// skipped `-elif` condition still expand.
+    condition_collect: Option<ConditionCollect>,
 }
 
 /// State-machine state.
@@ -147,22 +153,31 @@ struct PendingInclude {
 }
 
 /// Bookkeeping saved while an [`Event::AwaitingConditional`] is
-/// pending. Kept minimal: the caller already has the full request
-/// payload, and the only field the resume path needs to carry over
-/// to the `BranchFrame` is the opening directive's span (used by
-/// `UnclosedConditional` diagnostics at EOF).
+/// pending. Distinguishes an opening directive (push a new frame on
+/// resume) from an `-elif` continuation (update the existing frame).
 #[derive(Debug, Clone)]
-struct PendingConditional {
-    directive_span: SourceSpan,
+enum PendingConditional {
+    /// `-if` / `-ifdef` / `-ifndef`: push a new [`BranchFrame`] on
+    /// resume. `is_if_chain` is `true` only for `-if`.
+    OpenNew {
+        directive_span: SourceSpan,
+        is_if_chain: bool,
+    },
+    /// `-elif`: update the top frame's `active` / `chain_active_seen`
+    /// without pushing.
+    ContinueElif,
 }
 
-/// A conditional currently open on the branch stack. Pushed when a
-/// `-ifdef` / `-ifndef` is resolved; the `active` flag flips on
-/// `-else`; the frame is popped on `-endif`.
+/// A conditional currently open on the branch stack. Pushed when an
+/// opening `-if` / `-ifdef` / `-ifndef` is resolved; the `active` flag
+/// flips on `-else` (with an exception for taken `-if` chains); the
+/// frame is popped on `-endif`.
 #[derive(Debug, Clone)]
 struct BranchFrame {
     /// Whether the current side of the frame is being executed
-    /// (`true`) or skipped (`false`). Flips on `-else`.
+    /// (`true`) or skipped (`false`). Flips on `-else` for
+    /// `-ifdef` / `-ifndef`; for an `-if` chain that already took a
+    /// branch, stays `false` through later `-else`.
     active: bool,
     /// `true` once `-else` has been observed for this frame.
     else_seen: bool,
@@ -172,10 +187,44 @@ struct BranchFrame {
     /// polished contract that nested conditionals inside an
     /// inactive skip stay invisible to the caller.
     silent_close: bool,
-    /// Span of the opening `-ifdef` / `-ifndef`. Reported by
+    /// Span of the opening `-if` / `-ifdef` / `-ifndef`. Reported by
     /// `UnclosedConditional` when the source ends with the frame
     /// still on the stack.
     open_span: SourceSpan,
+    /// `true` once any branch of this `-if` / `-elif` chain has been
+    /// taken. Unused (`false`) for `-ifdef` / `-ifndef` frames.
+    chain_active_seen: bool,
+    /// `true` when this frame was opened by `-if` (so `-elif` is
+    /// legal). `false` for `-ifdef` / `-ifndef`.
+    is_if_chain: bool,
+}
+
+/// Distinguishes `-ifdef` from `-ifndef` when firing a defined-macro
+/// request. Not part of the public request type; that split lives on
+/// [`ConditionalRequest::Ifdef`] / [`ConditionalRequest::Ifndef`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DefinedKind {
+    Ifdef,
+    Ifndef,
+}
+
+/// Distinguishes `-if` from `-elif` while a condition expression is
+/// being expanded. Not part of the public request type; that split
+/// lives on [`ConditionalRequest::If`] / [`ConditionalRequest::Elif`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExprKind {
+    If,
+    Elif,
+}
+
+/// In-flight expansion of an `-if` / `-elif` condition expression.
+#[derive(Debug, Clone)]
+struct ConditionCollect {
+    kind: ExprKind,
+    /// Span of the `-if` / `-elif` directive itself (request payload).
+    directive_span: SourceSpan,
+    pending: PendingConditional,
+    collected: Vec<PreprocessedToken>,
 }
 
 /// Bookkeeping saved while an [`Event::AwaitingMacroExpansion`] is
@@ -237,6 +286,7 @@ impl Preprocessor {
             state: State::Scanning,
             at_form_boundary: true,
             expansion_queue: VecDeque::new(),
+            condition_collect: None,
         }
     }
 
@@ -457,19 +507,35 @@ impl Preprocessor {
         else {
             unreachable!("state was checked immediately above");
         };
-        // The scan always starts on the Then side (source order).
-        // Then chose → active; Else chose → inactive until the frame
-        // flips at `-else` (or stays inactive to the closing endif
-        // when the conditional has no `-else`).
         let active = matches!(branch, Branch::Then);
-        // AwaitingConditional only fires from an active state, so
-        // this frame is never nested inside an inactive one.
-        self.branch_stack.push(BranchFrame {
-            active,
-            else_seen: false,
-            silent_close: false,
-            open_span: pending.directive_span,
-        });
+        match pending {
+            PendingConditional::OpenNew {
+                directive_span,
+                is_if_chain,
+            } => {
+                // AwaitingConditional for an opening directive only
+                // fires from an active state, so this frame is never
+                // nested inside an inactive one.
+                self.branch_stack.push(BranchFrame {
+                    active,
+                    else_seen: false,
+                    silent_close: false,
+                    open_span: directive_span,
+                    chain_active_seen: active,
+                    is_if_chain,
+                });
+            }
+            PendingConditional::ContinueElif => {
+                let frame = self
+                    .branch_stack
+                    .last_mut()
+                    .expect("ContinueElif requires an open -if frame");
+                frame.active = active;
+                if active {
+                    frame.chain_active_seen = true;
+                }
+            }
+        }
         Ok(())
     }
 
@@ -478,9 +544,10 @@ impl Preprocessor {
     /// See the module rustdoc for the loop contract.
     fn step_scan(&mut self) -> Event {
         type Step = fn(&mut Preprocessor) -> StepAction;
-        const STEPS: [Step; 6] = [
+        const STEPS: [Step; 7] = [
             Preprocessor::try_rescan_queue_head,
             Preprocessor::drain_expansion_queue,
+            Preprocessor::finish_condition_collect_if_ready,
             Preprocessor::handle_cursor_eof,
             Preprocessor::try_parse_directive_at_boundary,
             Preprocessor::try_scan_macro_call,
@@ -500,9 +567,10 @@ impl Preprocessor {
     /// Makes a macro that appeared in an earlier expansion body
     /// expand itself before its tokens surface as regular output.
     fn try_rescan_queue_head(&mut self) -> StepAction {
-        // Do not recognize macros while skipping an inactive branch;
-        // the drain path will silently discard the queued tokens.
-        if self.is_in_inactive_branch() {
+        // Do not recognize macros while skipping an inactive branch,
+        // unless we are expanding an `-if` / `-elif` condition (those
+        // must expand even when the surrounding frame is inactive).
+        if self.condition_collect.is_none() && self.is_in_inactive_branch() {
             return StepAction::Fall;
         }
         let head_is_question = matches!(
@@ -526,6 +594,12 @@ impl Preprocessor {
         let Some(ppt) = self.expansion_queue.pop_front() else {
             return StepAction::Fall;
         };
+        if let Some(collect) = self.condition_collect.as_mut() {
+            // Condition expansion: buffer tokens; do not emit and do
+            // not disturb the main source's form-boundary flag.
+            collect.collected.push(ppt);
+            return StepAction::Retry;
+        }
         let token = *ppt.token();
         self.update_form_boundary_after_bump(token);
         if self.is_in_inactive_branch() {
@@ -533,6 +607,22 @@ impl Preprocessor {
             return StepAction::Retry;
         }
         StepAction::Emit(Box::new(Event::Token(ppt)))
+    }
+
+    /// When condition expansion has drained the queue, fire
+    /// [`Event::AwaitingConditional`] with the collected tokens.
+    fn finish_condition_collect_if_ready(&mut self) -> StepAction {
+        if self.condition_collect.is_none() {
+            return StepAction::Fall;
+        }
+        if !self.expansion_queue.is_empty() {
+            return StepAction::Fall;
+        }
+        let collect = self
+            .condition_collect
+            .take()
+            .expect("checked is_none above");
+        StepAction::Emit(Box::new(self.fire_awaiting_conditional_expr(collect)))
     }
 
     fn handle_cursor_eof(&mut self) -> StepAction {
@@ -612,25 +702,43 @@ impl Preprocessor {
         match directive {
             Directive::Ifdef(d) => {
                 if inactive {
-                    self.push_nested_inactive_frame(d.span);
+                    self.push_nested_inactive_frame(d.span, false);
                     return StepAction::Retry;
                 }
-                return StepAction::Emit(Box::new(self.fire_awaiting_conditional(
-                    ConditionalKind::Ifdef,
+                return StepAction::Emit(Box::new(self.fire_awaiting_defined(
                     d.name.clone(),
                     d.span,
+                    DefinedKind::Ifdef,
                 )));
             }
             Directive::Ifndef(d) => {
                 if inactive {
-                    self.push_nested_inactive_frame(d.span);
+                    self.push_nested_inactive_frame(d.span, false);
                     return StepAction::Retry;
                 }
-                return StepAction::Emit(Box::new(self.fire_awaiting_conditional(
-                    ConditionalKind::Ifndef,
+                return StepAction::Emit(Box::new(self.fire_awaiting_defined(
                     d.name.clone(),
                     d.span,
+                    DefinedKind::Ifndef,
                 )));
+            }
+            Directive::If(d) => {
+                if inactive {
+                    self.push_nested_inactive_frame(d.span, true);
+                    return StepAction::Retry;
+                }
+                return self.start_condition_collect(
+                    ExprKind::If,
+                    d.span,
+                    PendingConditional::OpenNew {
+                        directive_span: d.span,
+                        is_if_chain: true,
+                    },
+                    &d.arg_tokens,
+                );
+            }
+            Directive::Elif(d) => {
+                return self.dispatch_elif(d);
             }
             Directive::Else(d) => {
                 return self.dispatch_else(d.span);
@@ -693,17 +801,19 @@ impl Preprocessor {
         StepAction::Emit(Box::new(Event::Directive(directive)))
     }
 
-    /// Pushes a `BranchFrame` for a nested `-ifdef` / `-ifndef`
+    /// Pushes a `BranchFrame` for a nested `-if` / `-ifdef` / `-ifndef`
     /// encountered while an outer frame is already inactive. The
     /// frame is marked `silent_close` so its `-else` / `-endif` do
     /// not fire boundary events and its `active` starts `false`
     /// (nested content is always skipped alongside the outer skip).
-    fn push_nested_inactive_frame(&mut self, open_span: SourceSpan) {
+    fn push_nested_inactive_frame(&mut self, open_span: SourceSpan, is_if_chain: bool) {
         self.branch_stack.push(BranchFrame {
             active: false,
             else_seen: false,
             silent_close: true,
             open_span,
+            chain_active_seen: false,
+            is_if_chain,
         });
     }
 
@@ -759,11 +869,11 @@ impl Preprocessor {
     }
 
     /// Handles a `-else` directive: flips the top branch frame's
-    /// active side, records the else, and fires
-    /// `Event::BranchBoundary(Else)` unless the frame is a silent
-    /// nested one. Stray `-else` (no matching opening directive) and
-    /// double `-else` inside the same conditional surface as
-    /// `PreprocessError::Conditional`.
+    /// active side (unless a taken `-if` chain must stay inactive),
+    /// records the else, and fires `Event::BranchBoundary(Else)`
+    /// unless the frame is a silent nested one. Stray `-else` (no
+    /// matching opening directive) and double `-else` inside the
+    /// same conditional surface as `PreprocessError::Conditional`.
     fn dispatch_else(&mut self, span: SourceSpan) -> StepAction {
         let Some(frame) = self.branch_stack.last_mut() else {
             return StepAction::Emit(Box::new(Event::PreprocessError(
@@ -782,7 +892,13 @@ impl Preprocessor {
             )));
         }
         frame.else_seen = true;
-        frame.active = !frame.active;
+        if frame.is_if_chain && frame.chain_active_seen {
+            // A later `-else` must not revive a branch after an
+            // earlier `-if` / `-elif` was taken.
+            frame.active = false;
+        } else {
+            frame.active = !frame.active;
+        }
         let silent = frame.silent_close;
         if silent {
             StepAction::Retry
@@ -791,6 +907,84 @@ impl Preprocessor {
                 self.fire_branch_boundary(BranchBoundaryKind::Else, span),
             ))
         }
+    }
+
+    /// Handles an `-elif(...)` directive according to the open frame.
+    fn dispatch_elif(&mut self, d: crate::directive::ElifDirective) -> StepAction {
+        let Some(frame) = self.branch_stack.last() else {
+            return StepAction::Emit(Box::new(Event::PreprocessError(
+                PreprocessError::Conditional {
+                    span: d.span,
+                    kind: ConditionalErrorKind::StrayElif,
+                },
+            )));
+        };
+        if !frame.is_if_chain {
+            return StepAction::Emit(Box::new(Event::PreprocessError(
+                PreprocessError::Conditional {
+                    span: d.span,
+                    kind: ConditionalErrorKind::StrayElif,
+                },
+            )));
+        }
+        if frame.else_seen {
+            return StepAction::Emit(Box::new(Event::PreprocessError(
+                PreprocessError::Conditional {
+                    span: d.span,
+                    kind: ConditionalErrorKind::ElifAfterElse,
+                },
+            )));
+        }
+        if frame.silent_close {
+            return StepAction::Retry;
+        }
+        if frame.chain_active_seen {
+            // Taken earlier in the chain: skip this `-elif` body
+            // without expanding its condition or asking the caller.
+            let frame = self
+                .branch_stack
+                .last_mut()
+                .expect("frame was present above");
+            frame.active = false;
+            return StepAction::Retry;
+        }
+        self.start_condition_collect(
+            ExprKind::Elif,
+            d.span,
+            PendingConditional::ContinueElif,
+            &d.arg_tokens,
+        )
+    }
+
+    /// Starts macro-expanding the condition tokens of an `-if` /
+    /// `-elif` by injecting them into the expansion queue.
+    fn start_condition_collect(
+        &mut self,
+        kind: ExprKind,
+        directive_span: SourceSpan,
+        pending: PendingConditional,
+        arg_tokens: &[Token],
+    ) -> StepAction {
+        let source_id = self.cursor.source_id();
+        let source_arc = Arc::clone(self.cursor.source());
+        let origin = (*self.current_origin).clone();
+        let mut wrapped = VecDeque::with_capacity(arg_tokens.len());
+        for token in arg_tokens {
+            wrapped.push_back(PreprocessedToken::new(
+                *token,
+                Arc::clone(&source_arc),
+                source_id,
+                origin.clone(),
+            ));
+        }
+        self.condition_collect = Some(ConditionCollect {
+            kind,
+            directive_span,
+            pending,
+            collected: Vec::new(),
+        });
+        self.prepend_to_queue(wrapped);
+        StepAction::Retry
     }
 
     /// Handles a `-endif` directive: pops the top branch frame and
@@ -823,24 +1017,43 @@ impl Preprocessor {
         })
     }
 
-    fn fire_awaiting_conditional(
+    fn fire_awaiting_defined(
         &mut self,
-        kind: ConditionalKind,
         name: SourceString,
         directive_span: SourceSpan,
+        kind: DefinedKind,
     ) -> Event {
-        let parent_origin = Arc::clone(&self.current_origin);
         let defined = self.macros.is_defined(name.as_str());
-        let recommended = recommended_branch(kind, defined);
-        let request = ConditionalRequest {
-            kind,
-            name: name.clone(),
+        let recommended = recommended_defined_branch(kind, defined);
+        let payload = DefinedConditional {
+            name,
             defined,
             recommended,
             directive_span,
-            parent_origin: Arc::clone(&parent_origin),
+            parent_origin: Arc::clone(&self.current_origin),
         };
-        self.state = State::AwaitingConditionalDecision(PendingConditional { directive_span });
+        let request = match kind {
+            DefinedKind::Ifdef => ConditionalRequest::Ifdef(payload),
+            DefinedKind::Ifndef => ConditionalRequest::Ifndef(payload),
+        };
+        self.state = State::AwaitingConditionalDecision(PendingConditional::OpenNew {
+            directive_span,
+            is_if_chain: false,
+        });
+        Event::AwaitingConditional(request)
+    }
+
+    fn fire_awaiting_conditional_expr(&mut self, collect: ConditionCollect) -> Event {
+        let payload = ExpressionConditional {
+            condition_tokens: collect.collected,
+            directive_span: collect.directive_span,
+            parent_origin: Arc::clone(&self.current_origin),
+        };
+        let request = match collect.kind {
+            ExprKind::If => ConditionalRequest::If(payload),
+            ExprKind::Elif => ConditionalRequest::Elif(payload),
+        };
+        self.state = State::AwaitingConditionalDecision(collect.pending);
         Event::AwaitingConditional(request)
     }
 
@@ -1380,6 +1593,7 @@ impl Clone for Preprocessor {
             state: self.state.clone(),
             at_form_boundary: self.at_form_boundary,
             expansion_queue: self.expansion_queue.clone(),
+            condition_collect: self.condition_collect.clone(),
         }
     }
 }
@@ -1421,12 +1635,13 @@ enum MacroCallOutcome {
     NotACall,
 }
 
-/// Which side of a conditional OTP `epp` would pick given the
-/// directive kind and whether the target macro is currently defined.
-fn recommended_branch(kind: ConditionalKind, defined: bool) -> Branch {
+/// Which side of a `-ifdef` / `-ifndef` OTP `epp` would pick given
+/// the directive kind and whether the target macro is currently
+/// defined.
+fn recommended_defined_branch(kind: DefinedKind, defined: bool) -> Branch {
     match (kind, defined) {
-        (ConditionalKind::Ifdef, true) | (ConditionalKind::Ifndef, false) => Branch::Then,
-        (ConditionalKind::Ifdef, false) | (ConditionalKind::Ifndef, true) => Branch::Else,
+        (DefinedKind::Ifdef, true) | (DefinedKind::Ifndef, false) => Branch::Then,
+        (DefinedKind::Ifdef, false) | (DefinedKind::Ifndef, true) => Branch::Else,
     }
 }
 
@@ -2011,6 +2226,8 @@ fn directive_span_of(directive: &Directive) -> crate::source::SourceSpan {
         Directive::Undef(d) => d.span,
         Directive::Ifdef(d) => d.span,
         Directive::Ifndef(d) => d.span,
+        Directive::If(d) => d.span,
+        Directive::Elif(d) => d.span,
         Directive::Else(d) => d.span,
         Directive::Endif(d) => d.span,
         Directive::Error(d) => d.span,
