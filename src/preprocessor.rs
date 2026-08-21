@@ -14,7 +14,7 @@
 //! scans, never through [`Preprocessor::step`].
 //!
 //! The preprocessor does not retain scanned tokens; each
-//! [`crate::Event::Token`] carries a self-contained
+//! [`Event::Token`](crate::Event::Token) carries a self-contained
 //! [`SourceToken`] and the caller keeps whatever accumulator
 //! they need.
 //!

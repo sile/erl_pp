@@ -1,4 +1,4 @@
-//! Origin metadata for [`crate::SourceToken`]s.
+//! Origin metadata for [`SourceToken`](crate::SourceToken)s.
 //!
 //! An [`Origin`] tells why a particular token appears in the output:
 //! whether it came directly from the source text, from an include, from
@@ -11,7 +11,7 @@ use crate::source::SourceSpan;
 use crate::source_string::SourceString;
 
 /// Distinguishes `-include` from `-include_lib` in
-/// [`crate::IncludeDirective`] and [`Origin::Include`].
+/// [`IncludeDirective`](crate::IncludeDirective) and [`Origin::Include`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IncludeKind {
     /// `-include("path").`
@@ -45,7 +45,7 @@ pub enum SourceInfoMacroKind {
 /// shared and are not deep-copied when the enclosing state is cloned.
 #[derive(Debug, Clone)]
 pub enum Origin {
-    /// Token was written directly in an input [`crate::Source`].
+    /// Token was written directly in an input [`Source`](crate::Source).
     ///
     /// This variant has no parent because it sits at the root of every
     /// provenance chain.
@@ -125,7 +125,7 @@ pub enum Origin {
         kind: SourceInfoMacroKind,
     },
 
-    /// Token came from a [`crate::Source`] the caller supplied through
+    /// Token came from a [`Source`](crate::Source) the caller supplied through
     /// `Preprocessor::resume_macro_expansion` after an
     /// `Event::AwaitingMacroExpansion`.
     ///

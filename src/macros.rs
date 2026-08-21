@@ -175,7 +175,7 @@ fn first_duplicate_param(params: &[SourceString]) -> Option<SourceString> {
 
 /// Read-only view of the preprocessor's macro table.
 ///
-/// Exposed by [`crate::Preprocessor::macros`]. Modifications happen
+/// Exposed by [`Preprocessor::macros`](crate::Preprocessor::macros). Modifications happen
 /// through scanned `-define` / `-undef` directives; the caller has no
 /// direct mutator.
 ///

@@ -280,7 +280,7 @@ impl From<ParseError> for PreprocessError {
 ///
 /// The value has no variants: `step` only fails when a response is
 /// pending, and `resume_*` only fails when that response is not
-/// expected. The last [`crate::Event`] already names which wait (if
+/// expected. The last [`Event`](crate::Event) already names which wait (if
 /// any) is in force.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProtocolError;

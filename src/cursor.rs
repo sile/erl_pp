@@ -6,7 +6,7 @@
 //! lookahead and snapshot-based rollback.
 //!
 //! Tokenization is not this module's job. The tokens are produced up
-//! front by the caller and handed to [`crate::Source::new`]; the
+//! front by the caller and handed to [`Source::new`](crate::Source::new); the
 //! cursor merely indexes into that stored token slice.
 //!
 //! Multi-source concerns like `-include` are the state machine's job;
@@ -24,7 +24,7 @@ use crate::source::{Source, SourceId};
 ///
 /// A `Cursor` is created with the [`SourceId`] of the source it walks
 /// and an [`Arc<Source>`] handle so it never has to re-query the
-/// [`crate::SourceStore`] during scanning.
+/// [`SourceStore`](crate::SourceStore) during scanning.
 ///
 /// `Cursor` derives [`Clone`] so that a state machine can fork its
 /// scanning state; the clone owns an independent read index.

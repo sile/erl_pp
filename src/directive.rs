@@ -1,7 +1,7 @@
 //! Preprocessor directive parser.
 //!
 //! [`parse_directive`] tries to recognise one preprocessor directive
-//! at the current [`crate::cursor::Cursor`] position. It performs no
+//! at the current [`Cursor`](crate::cursor::Cursor) position. It performs no
 //! side effects: it does not open include files, register or expand
 //! macros, evaluate conditionals, or emit diagnostics. Its job is to
 //! turn a run of tokens into a structured [`Directive`] value (or to
@@ -41,7 +41,7 @@ pub(crate) enum Directive {
     /// string literals — the raw Erlang-source value, **not** a
     /// resolved filesystem path. Environment-variable expansion
     /// (`$FOO`), relative-path resolution, and any OS-specific path
-    /// handling are the resolver's job (see [`crate::open_include`]).
+    /// handling are the resolver's job (see [`open_include`](crate::open_include)).
     ///
     /// Stored as a decoded [`SourceString`] rather than `Vec<Token>`
     /// because `-include("foo" ".hrl")` collapses one or more adjacent

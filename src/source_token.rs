@@ -2,10 +2,10 @@
 //!
 //! Each [`SourceToken`] carries the raw [`Token`] together with the
 //! [`Arc<Source>`] it indexes, its [`SourceId`], and its
-//! [`crate::Origin`]. [`Source`] is the buffer the token's offsets
-//! refer to; [`crate::Origin`] is why the token appears (written in
+//! [`Origin`](crate::Origin). [`Source`] is the buffer the token's offsets
+//! refer to; [`Origin`](crate::Origin) is why the token appears (written in
 //! that source, copied from a macro body, synthesized for `?FILE`,
-//! and so on). It is the payload of [`crate::Event::Token`], so a
+//! and so on). It is the payload of [`Event::Token`](crate::Event::Token), so a
 //! caller receives everything needed to inspect the token in one
 //! value.
 //!
@@ -43,7 +43,7 @@ impl SourceToken {
     ///
     /// This is `pub(crate)` because only preprocessor internals build
     /// these; external callers observe them as the payload of
-    /// [`crate::Event::Token`].
+    /// [`Event::Token`](crate::Event::Token).
     pub(crate) fn new(
         token: Token,
         source: Arc<Source>,

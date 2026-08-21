@@ -1,8 +1,8 @@
 //! Erlang/OTP 29.0 compatible include path resolver.
 //!
 //! [`open_include`] is a standalone utility that a filesystem-backed
-//! caller can invoke in response to [`crate::Event::AwaitingInclude`].
-//! The Sans-I/O [`crate::Preprocessor`] never calls this itself; the
+//! caller can invoke in response to [`Event::AwaitingInclude`](crate::Event::AwaitingInclude).
+//! The Sans-I/O [`Preprocessor`](crate::Preprocessor) never calls this itself; the
 //! caller is free to use a different resolver, and this module can be
 //! ignored entirely by callers that only feed in-memory sources.
 //!
@@ -35,7 +35,7 @@
 //!
 //! # What this module does NOT do
 //!
-//! - Automatic invocation from [`crate::Preprocessor`]
+//! - Automatic invocation from [`Preprocessor`](crate::Preprocessor)
 //! - Cycle detection, include depth, source-size, or total-read limits
 //! - Encoding conversion after read open
 //! - Async filesystem access

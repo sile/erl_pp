@@ -1,6 +1,6 @@
 //! Events produced by the preprocessor state machine.
 //!
-//! Each call to [`crate::Preprocessor::step`] advances the machine by
+//! Each call to [`Preprocessor::step`](crate::Preprocessor::step) advances the machine by
 //! one transition and returns one [`Event`] describing what happened.
 //! When the event leaves the machine awaiting a response, the caller
 //! invokes the matching response method before calling `step` again.
@@ -14,7 +14,7 @@ use crate::source::SourceSpan;
 use crate::source_string::SourceString;
 use crate::source_token::SourceToken;
 
-/// One-shot output of [`crate::Preprocessor::step`].
+/// One-shot output of [`Preprocessor::step`](crate::Preprocessor::step).
 ///
 /// Each `step` call advances the state machine and returns exactly one
 /// event. Some variants leave the machine in an awaiting state; while
@@ -26,8 +26,8 @@ pub enum Event {
     /// A token was scanned from the input.
     ///
     /// The bundled [`SourceToken`] carries the token itself, the
-    /// [`crate::Source`] it indexes, its [`crate::SourceSpan`], and
-    /// its [`crate::Origin`]. Callers that need the whole stream keep
+    /// [`Source`](crate::Source) it indexes, its [`SourceSpan`](crate::SourceSpan), and
+    /// its [`Origin`](crate::Origin). Callers that need the whole stream keep
     /// their own accumulator; the preprocessor does not retain scanned
     /// tokens.
     Token(SourceToken),
@@ -35,7 +35,7 @@ pub enum Event {
     /// A `-define(...)` was applied to the macro table.
     ///
     /// The table update is visible through
-    /// [`crate::Preprocessor::macros`] before this event is
+    /// [`Preprocessor::macros`](crate::Preprocessor::macros) before this event is
     /// returned. The payload is the definition that was inserted.
     MacroDefined(MacroDefinition),
 
@@ -50,14 +50,14 @@ pub enum Event {
     /// caller.
     ///
     /// Payload is [`IncludeDirective`]. Resume with
-    /// [`crate::Preprocessor::resume_include`].
+    /// [`Preprocessor::resume_include`](crate::Preprocessor::resume_include).
     AwaitingInclude(IncludeDirective),
 
     /// The preprocessor is awaiting a conditional-branch decision
     /// from the caller.
     ///
     /// `-ifdef` / `-ifndef` and `-if` / `-elif` share this event
-    /// and [`crate::Preprocessor::resume_conditional`], but their
+    /// and [`Preprocessor::resume_conditional`](crate::Preprocessor::resume_conditional), but their
     /// payloads differ: see [`Conditional`].
     AwaitingConditional(Conditional),
 
@@ -66,9 +66,9 @@ pub enum Event {
     /// Fires for every `?NAME` (or `?NAME(...)`) that is neither
     /// `?FILE` / `?LINE` nor present in the current macro table. The
     /// caller inspects the [`MacroCall`] and resumes via
-    /// [`crate::Preprocessor::resume_macro_expansion`] with a
-    /// [`crate::Source`] whose token stream is spliced in as the
-    /// expansion result. An empty [`crate::Source`] effectively
+    /// [`Preprocessor::resume_macro_expansion`](crate::Preprocessor::resume_macro_expansion) with a
+    /// [`Source`](crate::Source) whose token stream is spliced in as the
+    /// expansion result. An empty [`Source`](crate::Source) effectively
     /// skips the call.
     AwaitingMacroExpansion(MacroCall),
 
@@ -116,8 +116,8 @@ pub struct UndefinedMacro {
 /// does no path lookup, no environment expansion, and no filesystem
 /// access — the caller uses `path`, `kind`, and (via `SourceStore`)
 /// the source referenced by `directive_span.source_id` to resolve the
-/// include, then hands the resulting [`crate::Source`] back through
-/// [`crate::Preprocessor::resume_include`].
+/// include, then hands the resulting [`Source`](crate::Source) back through
+/// [`Preprocessor::resume_include`](crate::Preprocessor::resume_include).
 #[derive(Debug, Clone)]
 pub struct IncludeDirective {
     /// Whether this is `-include` or `-include_lib`.
@@ -138,7 +138,7 @@ pub struct IncludeDirective {
 }
 
 /// Which side of a conditional the caller wants to process. Passed to
-/// [`crate::Preprocessor::resume_conditional`].
+/// [`Preprocessor::resume_conditional`](crate::Preprocessor::resume_conditional).
 ///
 /// For `-ifdef` / `-ifndef`, `Then` is the tokens between the opening
 /// directive and `-else` (or `-endif` when there is no `-else`), and
@@ -158,7 +158,7 @@ pub enum Branch {
 /// Data of an [`Event::AwaitingConditional`].
 ///
 /// `-ifdef` / `-ifndef` and `-if` / `-elif` both wait for
-/// [`crate::Preprocessor::resume_conditional`], but the information
+/// [`Preprocessor::resume_conditional`](crate::Preprocessor::resume_conditional), but the information
 /// the caller needs is different, so the variants carry distinct
 /// payloads instead of sharing optional fields.
 #[derive(Debug, Clone)]
@@ -181,7 +181,7 @@ pub enum Conditional {
 pub struct DefinedConditional {
     /// Decoded name of the target macro.
     pub name: SourceString,
-    /// [`crate::MacroTable::is_defined`] at the point of the directive.
+    /// [`MacroTable::is_defined`](crate::MacroTable::is_defined) at the point of the directive.
     pub defined: bool,
     /// The branch OTP `epp` would take given the directive and
     /// `defined`. A defined `-ifdef` prefers [`Branch::Then`];
