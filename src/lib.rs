@@ -23,12 +23,12 @@
 //!     position = t.end();
 //!     tokens.push(t);
 //! }
-//! let source = erl_pp::Source::new("example.erl", text.to_string(), tokens);
+//! let source = erl_pp::Source::new("example.erl", text, tokens);
 //! let mut pp = erl_pp::Preprocessor::new([source]);
 //!
 //! let mut lexical = Vec::<String>::new();
 //! loop {
-//!     match pp.step().expect("no protocol error on trivial input") {
+//!     match pp.step()? {
 //!         erl_pp::Event::Token(t) if t.token().kind().is_lexical() => {
 //!             lexical.push(t.text().to_owned());
 //!         }
