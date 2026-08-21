@@ -2,6 +2,9 @@ name: CI
 
 on: [push]
 
+env:
+  OTP_TAG: OTP-29.0.5
+
 jobs:
   check:
     name: Check
@@ -48,3 +51,15 @@ jobs:
         env:
           RUSTDOCFLAGS: -D warnings
         run: cargo doc --no-deps
+
+  otp-check:
+    name: OTP source check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Checkout Erlang/OTP source (${{ env.OTP_TAG }})
+        run: git clone --depth 1 --branch "${OTP_TAG}" https://github.com/erlang/otp otp
+      - run: rustup update stable
+      - run: rustup default stable
+      - run: cargo run --example check_otp -- otp
