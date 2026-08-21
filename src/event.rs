@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use crate::directive::Directive;
 use crate::error::PreprocessError;
-use crate::origin::Origin;
+use crate::origin::{IncludeKind, Origin};
 use crate::preprocessed_token::PreprocessedToken;
 use crate::source::SourceSpan;
 use crate::source_string::SourceString;
@@ -98,16 +98,6 @@ pub enum Event {
     Complete,
 }
 
-/// Distinguishes `-include` from `-include_lib` in an
-/// [`IncludeRequest`] and in [`Origin::Include`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum IncludeKind {
-    /// `-include("path").`
-    Include,
-    /// `-include_lib("app/include/hdr.hrl").`
-    IncludeLib,
-}
-
 /// Data of an [`Event::AwaitingInclude`].
 ///
 /// Describes the include the caller must resolve. The preprocessor
@@ -121,8 +111,7 @@ pub struct IncludeRequest {
     /// Whether this is `-include` or `-include_lib`.
     pub kind: IncludeKind,
     /// Decoded, concatenated contents of the include's string
-    /// literals (matches `IncludeDirective::path` /
-    /// `IncludeLibDirective::path`).
+    /// literals (matches [`crate::Directive::Include`]'s `path`).
     pub path: SourceString,
     /// Span of the whole directive from the leading `-` through the
     /// terminating `.`. The include's parent source is
@@ -262,9 +251,10 @@ pub struct Diagnostic {
     /// Span of the whole directive (`-` through `.`).
     pub directive_span: SourceSpan,
     /// Span of the argument tokens. Kept as-is from the underlying
-    /// `ErrorDirective` / `WarningDirective`, which set it to run
-    /// from the first lexical token's start to the last lexical
-    /// token's end (hidden token edges are not included).
+    /// [`crate::Directive::Error`] / [`crate::Directive::Warning`],
+    /// which set it to run from the first lexical token's start to
+    /// the last lexical token's end (hidden token edges are not
+    /// included).
     pub arg_span: SourceSpan,
     /// Origin at the directive's site.
     pub parent_origin: Arc<Origin>,

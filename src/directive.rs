@@ -23,40 +23,134 @@ use erl_tokenize::{Position, Symbol, Token, TokenKind, TokenValue};
 
 use crate::cursor::Cursor;
 use crate::error::{ParseError, ParseFailure};
+use crate::origin::IncludeKind;
 use crate::source::{SourceId, SourceSpan};
 use crate::source_string::SourceString;
 
 /// A parsed preprocessor directive.
 ///
 /// Every variant carries a [`SourceSpan`] covering the whole directive
-/// from the opening `-` through the terminating `.`, plus spans and
-/// decoded values for each constituent that the parser recognises.
+/// from the opening `-` through the terminating `.` as its first
+/// field, plus decoded values for each constituent that the parser
+/// recognises.
 #[derive(Debug, Clone)]
 pub enum Directive {
-    /// `-include("path").`
-    Include(IncludeDirective),
-    /// `-include_lib("path").`
-    IncludeLib(IncludeLibDirective),
+    /// `-include(...)` or `-include_lib(...)`.
+    ///
+    /// `path` is the decoded, concatenated contents of the include's
+    /// string literals — the raw Erlang-source value, **not** a
+    /// resolved filesystem path. Environment-variable expansion
+    /// (`$FOO`), relative-path resolution, and any OS-specific path
+    /// handling are the resolver's job (see [`crate::open_include`]).
+    ///
+    /// Stored as a decoded [`SourceString`] rather than `Vec<Token>`
+    /// because `-include("foo" ".hrl")` collapses one or more adjacent
+    /// string literals into a single logical path with no single owning
+    /// token. The [`SourceString`] span covers all path string literal
+    /// tokens (from the first literal's start to the last literal's
+    /// end, possibly across intervening hidden tokens).
+    ///
+    /// For `-include_lib`, the first path component is the application
+    /// name, which the resolver looks up in the code path rather than
+    /// opening as a directory.
+    Include {
+        /// Span covering the whole directive from `-` through `.`.
+        span: SourceSpan,
+        /// Whether this is `-include` or `-include_lib`.
+        kind: IncludeKind,
+        /// Decoded, concatenated include path (see variant docs).
+        path: SourceString,
+    },
     /// `-define(NAME[(Params)], Replacement).`
-    Define(DefineDirective),
+    Define {
+        /// Span covering the whole directive.
+        span: SourceSpan,
+        /// Decoded macro name.
+        name: SourceString,
+        /// Macro parameters. `None` is a constant-like macro
+        /// (`-define(FOO, 1).`). `Some(vec![])` is an arity-0
+        /// function-like macro (`-define(FOO(), 1).`).
+        params: Option<Vec<Param>>,
+        /// Replacement token list (may include hidden tokens).
+        replacement: Vec<Token>,
+        /// Span covering the replacement tokens. `None` when the
+        /// replacement is empty.
+        replacement_span: Option<SourceSpan>,
+    },
     /// `-undef(NAME).`
-    Undef(UndefDirective),
+    Undef {
+        /// Span covering the whole directive.
+        span: SourceSpan,
+        /// Decoded macro name.
+        name: SourceString,
+    },
     /// `-ifdef(NAME).`
-    Ifdef(IfdefDirective),
+    Ifdef {
+        /// Span covering the whole directive.
+        span: SourceSpan,
+        /// Decoded macro name.
+        name: SourceString,
+    },
     /// `-ifndef(NAME).`
-    Ifndef(IfndefDirective),
-    /// `-else.`
-    Else(ElseDirective),
-    /// `-endif.`
-    Endif(EndifDirective),
-    /// `-error(Argument).`
-    Error(ErrorDirective),
-    /// `-warning(Argument).`
-    Warning(WarningDirective),
+    Ifndef {
+        /// Span covering the whole directive.
+        span: SourceSpan,
+        /// Decoded macro name.
+        name: SourceString,
+    },
     /// `-if(Expression).`
-    If(IfDirective),
+    ///
+    /// The argument tokens are the raw expression inside the
+    /// parentheses. Expression evaluation is the caller's
+    /// responsibility; this module only recognises the directive shape.
+    If {
+        /// Span covering the whole directive.
+        span: SourceSpan,
+        /// Raw token list inside the parentheses.
+        arg_tokens: Vec<Token>,
+        /// Span covering the argument tokens.
+        arg_span: SourceSpan,
+    },
     /// `-elif(Expression).`
-    Elif(ElifDirective),
+    ///
+    /// Same payload shape as [`Directive::If`].
+    Elif {
+        /// Span covering the whole directive.
+        span: SourceSpan,
+        /// Raw token list inside the parentheses.
+        arg_tokens: Vec<Token>,
+        /// Span covering the argument tokens.
+        arg_span: SourceSpan,
+    },
+    /// `-else.`
+    Else {
+        /// Span covering the whole directive.
+        span: SourceSpan,
+    },
+    /// `-endif.`
+    Endif {
+        /// Span covering the whole directive.
+        span: SourceSpan,
+    },
+    /// `-error(Argument).`
+    Error {
+        /// Span covering the whole directive.
+        span: SourceSpan,
+        /// Raw token list inside the parentheses (evaluation is not
+        /// this module's responsibility).
+        arg_tokens: Vec<Token>,
+        /// Span covering the argument tokens.
+        arg_span: SourceSpan,
+    },
+    /// `-warning(Argument).`
+    Warning {
+        /// Span covering the whole directive.
+        span: SourceSpan,
+        /// Raw token list inside the parentheses.
+        arg_tokens: Vec<Token>,
+        /// Span covering the argument tokens.
+        arg_span: SourceSpan,
+    },
 }
 
 impl Directive {
@@ -64,88 +158,19 @@ impl Directive {
     /// through `.`.
     pub fn span(&self) -> SourceSpan {
         match self {
-            Directive::Include(d) => d.span,
-            Directive::IncludeLib(d) => d.span,
-            Directive::Define(d) => d.span,
-            Directive::Undef(d) => d.span,
-            Directive::Ifdef(d) => d.span,
-            Directive::Ifndef(d) => d.span,
-            Directive::Else(d) => d.span,
-            Directive::Endif(d) => d.span,
-            Directive::Error(d) => d.span,
-            Directive::Warning(d) => d.span,
-            Directive::If(d) => d.span,
-            Directive::Elif(d) => d.span,
+            Directive::Include { span, .. }
+            | Directive::Define { span, .. }
+            | Directive::Undef { span, .. }
+            | Directive::Ifdef { span, .. }
+            | Directive::Ifndef { span, .. }
+            | Directive::If { span, .. }
+            | Directive::Elif { span, .. }
+            | Directive::Else { span }
+            | Directive::Endif { span }
+            | Directive::Error { span, .. }
+            | Directive::Warning { span, .. } => *span,
         }
     }
-}
-
-/// Data of an `-include(...)` directive.
-#[derive(Debug, Clone)]
-pub struct IncludeDirective {
-    /// Span covering the whole directive from `-` through `.`.
-    pub span: SourceSpan,
-    /// The decoded, concatenated contents of the include's string
-    /// literals.
-    ///
-    /// This is the raw Erlang-source value, **not** a resolved
-    /// filesystem path. Environment-variable expansion (`$FOO`),
-    /// relative-path resolution, and any OS-specific path handling
-    /// are the resolver's job (see the `open_include` utility added
-    /// by later work). Consumers that pass the value on to a
-    /// resolver can hand it over as-is.
-    //
-    // Stored as a decoded [`SourceString`] rather than `Vec<Token>`
-    // because `-include("foo" ".hrl")` collapses one or more adjacent
-    // string literals into a single logical path with no single owning
-    // token, and every consumer wants the final decoded value.
-    // Directives whose payload is consumed as raw tokens downstream
-    // (e.g. `DefineDirective::replacement`, the diagnostic arg
-    // lists) do keep `Vec<Token>`.
-    ///
-    /// The [`SourceString`] span covers all path string literal tokens
-    /// (from the first literal's start to the last literal's end,
-    /// possibly across intervening hidden tokens).
-    pub path: SourceString,
-}
-
-/// Data of an `-include_lib(...)` directive.
-#[derive(Debug, Clone)]
-pub struct IncludeLibDirective {
-    /// Span covering the whole directive from `-` through `.`.
-    pub span: SourceSpan,
-    /// The decoded, concatenated contents of the include's string
-    /// literals.
-    ///
-    /// This is the raw Erlang-source value, **not** a resolved
-    /// filesystem path. In particular the first path component is the
-    /// application name, which the resolver looks up in the code path
-    /// rather than opening as a directory. Environment-variable
-    /// expansion, relative-path resolution, and OS-specific path
-    /// handling are all the resolver's job (see the `open_include`
-    /// utility added by later work).
-    //
-    // See `IncludeDirective::path` for the rationale behind storing a
-    // decoded [`SourceString`] rather than `Vec<Token>`.
-    pub path: SourceString,
-}
-
-/// Data of a `-define(...)` directive.
-#[derive(Debug, Clone)]
-pub struct DefineDirective {
-    /// Span covering the whole directive.
-    pub span: SourceSpan,
-    /// Decoded macro name.
-    pub name: SourceString,
-    /// Macro parameters. `None` is a constant-like macro
-    /// (`-define(FOO, 1).`). `Some(vec![])` is an arity-0 function-like
-    /// macro (`-define(FOO(), 1).`).
-    pub params: Option<Vec<Param>>,
-    /// Replacement token list (may include hidden tokens).
-    pub replacement: Vec<Token>,
-    /// Span covering the replacement tokens. `None` when the
-    /// replacement is empty.
-    pub replacement_span: Option<SourceSpan>,
 }
 
 /// One parameter of a function-like macro.
@@ -153,98 +178,6 @@ pub struct DefineDirective {
 pub struct Param {
     /// Decoded parameter name (typically a variable identifier).
     pub name: SourceString,
-}
-
-/// Data of an `-undef(...)` directive.
-#[derive(Debug, Clone)]
-pub struct UndefDirective {
-    /// Span covering the whole directive.
-    pub span: SourceSpan,
-    /// Decoded macro name.
-    pub name: SourceString,
-}
-
-/// Data of an `-ifdef(...)` directive.
-#[derive(Debug, Clone)]
-pub struct IfdefDirective {
-    /// Span covering the whole directive.
-    pub span: SourceSpan,
-    /// Decoded macro name.
-    pub name: SourceString,
-}
-
-/// Data of an `-ifndef(...)` directive.
-#[derive(Debug, Clone)]
-pub struct IfndefDirective {
-    /// Span covering the whole directive.
-    pub span: SourceSpan,
-    /// Decoded macro name.
-    pub name: SourceString,
-}
-
-/// Data of an `-else.` directive.
-#[derive(Debug, Clone)]
-pub struct ElseDirective {
-    /// Span covering the whole directive.
-    pub span: SourceSpan,
-}
-
-/// Data of an `-endif.` directive.
-#[derive(Debug, Clone)]
-pub struct EndifDirective {
-    /// Span covering the whole directive.
-    pub span: SourceSpan,
-}
-
-/// Data of an `-error(...)` directive.
-#[derive(Debug, Clone)]
-pub struct ErrorDirective {
-    /// Span covering the whole directive.
-    pub span: SourceSpan,
-    /// Raw token list inside the parentheses (evaluation is not this
-    /// module's responsibility).
-    pub arg_tokens: Vec<Token>,
-    /// Span covering the argument tokens.
-    pub arg_span: SourceSpan,
-}
-
-/// Data of a `-warning(...)` directive.
-#[derive(Debug, Clone)]
-pub struct WarningDirective {
-    /// Span covering the whole directive.
-    pub span: SourceSpan,
-    /// Raw token list inside the parentheses.
-    pub arg_tokens: Vec<Token>,
-    /// Span covering the argument tokens.
-    pub arg_span: SourceSpan,
-}
-
-/// Data of an `-if(...)` directive.
-///
-/// The argument tokens are the raw expression inside the parentheses.
-/// Expression evaluation is the caller's responsibility; this module
-/// only recognises the directive shape.
-#[derive(Debug, Clone)]
-pub struct IfDirective {
-    /// Span covering the whole directive.
-    pub span: SourceSpan,
-    /// Raw token list inside the parentheses.
-    pub arg_tokens: Vec<Token>,
-    /// Span covering the argument tokens.
-    pub arg_span: SourceSpan,
-}
-
-/// Data of an `-elif(...)` directive.
-///
-/// Same payload shape as [`IfDirective`].
-#[derive(Debug, Clone)]
-pub struct ElifDirective {
-    /// Span covering the whole directive.
-    pub span: SourceSpan,
-    /// Raw token list inside the parentheses.
-    pub arg_tokens: Vec<Token>,
-    /// Span covering the argument tokens.
-    pub arg_span: SourceSpan,
 }
 
 /// Names that this module recognises as preprocessor directives.
@@ -321,8 +254,22 @@ pub(crate) fn parse_directive(cursor: &mut Cursor) -> Result<Option<Directive>, 
     let name_span = SourceSpan::new(source_id, name_tok.start(), name_tok.end());
 
     match name_text.as_str() {
-        "include" => parse_include(cursor, source_id, start_pos, directive_start).map(Some),
-        "include_lib" => parse_include_lib(cursor, source_id, start_pos, directive_start).map(Some),
+        "include" => parse_include(
+            cursor,
+            source_id,
+            start_pos,
+            directive_start,
+            IncludeKind::Include,
+        )
+        .map(Some),
+        "include_lib" => parse_include(
+            cursor,
+            source_id,
+            start_pos,
+            directive_start,
+            IncludeKind::IncludeLib,
+        )
+        .map(Some),
         "define" => parse_define(cursor, source_id, start_pos, directive_start).map(Some),
         "undef" => parse_name_only(
             cursor,
@@ -385,27 +332,15 @@ fn parse_include(
     source_id: SourceId,
     start_pos: Position,
     directive_start: SourceSpan,
+    kind: IncludeKind,
 ) -> Result<Directive, ParseError> {
     let path = parse_paren_string_path(cursor, source_id, &directive_start)?;
     let dot = expect_symbol(cursor, Symbol::Dot, source_id, &directive_start)?;
-    Ok(Directive::Include(IncludeDirective {
+    Ok(Directive::Include {
         span: SourceSpan::new(source_id, start_pos, dot.end()),
+        kind,
         path,
-    }))
-}
-
-fn parse_include_lib(
-    cursor: &mut Cursor,
-    source_id: SourceId,
-    start_pos: Position,
-    directive_start: SourceSpan,
-) -> Result<Directive, ParseError> {
-    let path = parse_paren_string_path(cursor, source_id, &directive_start)?;
-    let dot = expect_symbol(cursor, Symbol::Dot, source_id, &directive_start)?;
-    Ok(Directive::IncludeLib(IncludeLibDirective {
-        span: SourceSpan::new(source_id, start_pos, dot.end()),
-        path,
-    }))
+    })
 }
 
 fn parse_define(
@@ -444,13 +379,13 @@ fn parse_define(
     expect_symbol(cursor, Symbol::CloseParen, source_id, &directive_start)?;
     let dot = expect_symbol(cursor, Symbol::Dot, source_id, &directive_start)?;
 
-    Ok(Directive::Define(DefineDirective {
+    Ok(Directive::Define {
         span: SourceSpan::new(source_id, start_pos, dot.end()),
         name,
         params,
         replacement,
         replacement_span,
-    }))
+    })
 }
 
 enum NameOnlyKind {
@@ -474,9 +409,9 @@ fn parse_name_only(
 
     let span = SourceSpan::new(source_id, start_pos, dot.end());
     Ok(match kind {
-        NameOnlyKind::Undef => Directive::Undef(UndefDirective { span, name }),
-        NameOnlyKind::Ifdef => Directive::Ifdef(IfdefDirective { span, name }),
-        NameOnlyKind::Ifndef => Directive::Ifndef(IfndefDirective { span, name }),
+        NameOnlyKind::Undef => Directive::Undef { span, name },
+        NameOnlyKind::Ifdef => Directive::Ifdef { span, name },
+        NameOnlyKind::Ifndef => Directive::Ifndef { span, name },
     })
 }
 
@@ -495,8 +430,8 @@ fn parse_barewords(
     let dot = expect_symbol(cursor, Symbol::Dot, source_id, &directive_start)?;
     let span = SourceSpan::new(source_id, start_pos, dot.end());
     Ok(match kind {
-        BareKind::Else => Directive::Else(ElseDirective { span }),
-        BareKind::Endif => Directive::Endif(EndifDirective { span }),
+        BareKind::Else => Directive::Else { span },
+        BareKind::Endif => Directive::Endif { span },
     })
 }
 
@@ -525,17 +460,17 @@ fn parse_diagnostic(
     let dot = expect_symbol(cursor, Symbol::Dot, source_id, &directive_start)?;
     let span = SourceSpan::new(source_id, start_pos, dot.end());
     Ok(if is_warning {
-        Directive::Warning(WarningDirective {
+        Directive::Warning {
             span,
             arg_tokens,
             arg_span,
-        })
+        }
     } else {
-        Directive::Error(ErrorDirective {
+        Directive::Error {
             span,
             arg_tokens,
             arg_span,
-        })
+        }
     })
 }
 
@@ -564,17 +499,17 @@ fn parse_if_like(
     let dot = expect_symbol(cursor, Symbol::Dot, source_id, &directive_start)?;
     let span = SourceSpan::new(source_id, start_pos, dot.end());
     Ok(if is_elif {
-        Directive::Elif(ElifDirective {
+        Directive::Elif {
             span,
             arg_tokens,
             arg_span,
-        })
+        }
     } else {
-        Directive::If(IfDirective {
+        Directive::If {
             span,
             arg_tokens,
             arg_span,
-        })
+        }
     })
 }
 
@@ -909,39 +844,41 @@ mod tests {
     #[test]
     fn include_directive() {
         let d = parse_ok(r#"-include("foo.hrl")."#);
-        let Directive::Include(inc) = d else {
+        let Directive::Include { path, span, kind } = d else {
             panic!("expected Include");
         };
-        assert_eq!(inc.path.as_str(), "foo.hrl");
-        assert_eq!(inc.span.start.offset(), 0);
-        assert_eq!(inc.span.end.offset(), r#"-include("foo.hrl")."#.len());
+        assert_eq!(kind, IncludeKind::Include);
+        assert_eq!(path.as_str(), "foo.hrl");
+        assert_eq!(span.start.offset(), 0);
+        assert_eq!(span.end.offset(), r#"-include("foo.hrl")."#.len());
     }
 
     #[test]
     fn include_lib_directive() {
         let d = parse_ok(r#"-include_lib("kernel/include/file.hrl")."#);
-        let Directive::IncludeLib(inc) = d else {
-            panic!("expected IncludeLib");
+        let Directive::Include { path, kind, .. } = d else {
+            panic!("expected Include");
         };
-        assert_eq!(inc.path.as_str(), "kernel/include/file.hrl");
+        assert_eq!(kind, IncludeKind::IncludeLib);
+        assert_eq!(path.as_str(), "kernel/include/file.hrl");
     }
 
     #[test]
     fn include_concats_adjacent_strings() {
         let d = parse_ok(r#"-include("foo" ".hrl")."#);
-        let Directive::Include(inc) = d else {
+        let Directive::Include { path, .. } = d else {
             panic!("expected Include");
         };
-        assert_eq!(inc.path.as_str(), "foo.hrl");
+        assert_eq!(path.as_str(), "foo.hrl");
     }
 
     #[test]
     fn include_concats_three_or_more() {
         let d = parse_ok(r#"-include("a" "b" "c" ".hrl")."#);
-        let Directive::Include(inc) = d else {
+        let Directive::Include { path, .. } = d else {
             panic!("expected Include");
         };
-        assert_eq!(inc.path.as_str(), "abc.hrl");
+        assert_eq!(path.as_str(), "abc.hrl");
     }
 
     #[test]
@@ -950,41 +887,47 @@ mod tests {
             r#"-include("foo" % note
 ".hrl")."#,
         );
-        let Directive::Include(inc) = d else {
+        let Directive::Include { path, .. } = d else {
             panic!("expected Include");
         };
-        assert_eq!(inc.path.as_str(), "foo.hrl");
+        assert_eq!(path.as_str(), "foo.hrl");
     }
 
     #[test]
     fn define_constant_like() {
         let d = parse_ok("-define(FOO, 1).");
-        let Directive::Define(def) = d else {
+        let Directive::Define {
+            name,
+            params,
+            replacement,
+            ..
+        } = d
+        else {
             panic!("expected Define");
         };
-        assert_eq!(def.name.as_str(), "FOO");
-        assert!(def.params.is_none());
-        assert!(!def.replacement.is_empty());
+        assert_eq!(name.as_str(), "FOO");
+        assert!(params.is_none());
+        assert!(!replacement.is_empty());
     }
 
     #[test]
     fn define_arity_zero_function_like() {
         let d = parse_ok("-define(FOO(), 1).");
-        let Directive::Define(def) = d else {
+        let Directive::Define { name, params, .. } = d else {
             panic!("expected Define");
         };
-        assert_eq!(def.name.as_str(), "FOO");
-        assert_eq!(def.params.as_deref().map(<[Param]>::len), Some(0));
+        assert_eq!(name.as_str(), "FOO");
+        assert_eq!(params.as_deref().map(<[Param]>::len), Some(0));
     }
 
     #[test]
     fn define_multi_param_function_like() {
         let d = parse_ok("-define(FOO(A, B, C), [A, B, C]).");
-        let Directive::Define(def) = d else {
+        let Directive::Define { name, params, .. } = d else {
             panic!("expected Define");
         };
-        assert_eq!(def.name.as_str(), "FOO");
-        let params = def.params.expect("function-like");
+        assert_eq!(name.as_str(), "FOO");
+        let params = params.expect("function-like");
         let names: Vec<&str> = params.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(names, ["A", "B", "C"]);
     }
@@ -992,53 +935,58 @@ mod tests {
     #[test]
     fn define_empty_replacement() {
         let d = parse_ok("-define(FOO,).");
-        let Directive::Define(def) = d else {
+        let Directive::Define {
+            name,
+            replacement_span,
+            ..
+        } = d
+        else {
             panic!("expected Define");
         };
-        assert_eq!(def.name.as_str(), "FOO");
-        assert!(def.replacement_span.is_none());
+        assert_eq!(name.as_str(), "FOO");
+        assert!(replacement_span.is_none());
     }
 
     #[test]
     fn undef_directive() {
         let d = parse_ok("-undef(FOO).");
-        let Directive::Undef(u) = d else {
+        let Directive::Undef { name, .. } = d else {
             panic!("expected Undef");
         };
-        assert_eq!(u.name.as_str(), "FOO");
+        assert_eq!(name.as_str(), "FOO");
     }
 
     #[test]
     fn ifdef_ifndef_directives() {
         let d = parse_ok("-ifdef(FOO).");
-        assert!(matches!(d, Directive::Ifdef(ref x) if x.name.as_str() == "FOO"));
+        assert!(matches!(d, Directive::Ifdef { name, .. } if name.as_str() == "FOO"));
 
         let d = parse_ok("-ifndef(FOO).");
-        assert!(matches!(d, Directive::Ifndef(ref x) if x.name.as_str() == "FOO"));
+        assert!(matches!(d, Directive::Ifndef { name, .. } if name.as_str() == "FOO"));
     }
 
     #[test]
     fn else_endif_directives() {
         let d = parse_ok("-else.");
-        assert!(matches!(d, Directive::Else(_)));
+        assert!(matches!(d, Directive::Else { .. }));
 
         let d = parse_ok("-endif.");
-        assert!(matches!(d, Directive::Endif(_)));
+        assert!(matches!(d, Directive::Endif { .. }));
     }
 
     #[test]
     fn error_and_warning_directives_carry_arg_tokens() {
         let d = parse_ok(r#"-error("bad")."#);
-        let Directive::Error(e) = d else {
+        let Directive::Error { arg_tokens, .. } = d else {
             panic!("expected Error");
         };
-        assert!(!e.arg_tokens.is_empty());
+        assert!(!arg_tokens.is_empty());
 
         let d = parse_ok(r#"-warning({soft, "issue"})."#);
-        let Directive::Warning(w) = d else {
+        let Directive::Warning { arg_tokens, .. } = d else {
             panic!("expected Warning");
         };
-        assert!(w.arg_tokens.len() >= 3); // {, soft, ..., }
+        assert!(arg_tokens.len() >= 3); // {, soft, ..., }
     }
 
     #[test]
@@ -1068,11 +1016,11 @@ mod tests {
     fn span_covers_full_directive_including_dot() {
         let text = "-endif.";
         let d = parse_ok(text);
-        let Directive::Endif(e) = d else {
+        let Directive::Endif { span } = d else {
             panic!("expected Endif");
         };
-        assert_eq!(e.span.start.offset(), 0);
-        assert_eq!(e.span.end.offset(), text.len());
+        assert_eq!(span.start.offset(), 0);
+        assert_eq!(span.end.offset(), text.len());
     }
 
     #[test]
@@ -1091,14 +1039,21 @@ mod tests {
     // keyword blocks must not terminate the `-define` body prematurely.
     // Only the outer `)` followed by `.` terminates.
 
-    fn define_of(text: &str) -> DefineDirective {
+    struct DefineParts {
+        name: SourceString,
+        replacement: Vec<Token>,
+    }
+
+    fn define_of(text: &str) -> DefineParts {
         match parse_ok(text) {
-            Directive::Define(d) => d,
+            Directive::Define {
+                name, replacement, ..
+            } => DefineParts { name, replacement },
             other => panic!("expected Define, got {other:?}"),
         }
     }
 
-    fn replacement_texts(def: &DefineDirective, source: &str) -> Vec<String> {
+    fn replacement_texts(def: &DefineParts, source: &str) -> Vec<String> {
         def.replacement
             .iter()
             .map(|t| t.text(source).to_owned())
@@ -1203,6 +1158,6 @@ mod tests {
         // `-error(...)` benefits from the same fix.
         let text = "-error([ ) ]).";
         let d = parse_ok(text);
-        assert!(matches!(d, Directive::Error(_)));
+        assert!(matches!(d, Directive::Error { .. }));
     }
 }

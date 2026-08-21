@@ -48,22 +48,18 @@
 #![warn(missing_docs)]
 #![forbid(unsafe_code)]
 
-pub use crate::directive::{
-    DefineDirective, Directive, ElifDirective, ElseDirective, EndifDirective, ErrorDirective,
-    IfDirective, IfdefDirective, IfndefDirective, IncludeDirective, IncludeLibDirective, Param,
-    UndefDirective, WarningDirective,
-};
+pub use crate::directive::{Directive, Param};
 pub use crate::error::{
     ConditionalErrorKind, MacroCallErrorKind, MacroDefinitionErrorKind, PreprocessError,
     PreprocessParseFailure, ProtocolError,
 };
 pub use crate::event::{
     Branch, BranchBoundary, BranchBoundaryKind, ConditionalRequest, DefinedConditional, Diagnostic,
-    Event, ExpressionConditional, IncludeKind, IncludeRequest, MacroExpansionRequest, Severity,
+    Event, ExpressionConditional, IncludeRequest, MacroExpansionRequest, Severity,
 };
 pub use crate::include_path::{OpenIncludeError, open_include};
 pub use crate::macros::{MacroDefinition, MacroKey, MacroTable};
-pub use crate::origin::{Origin, SourceInfoMacroKind};
+pub use crate::origin::{IncludeKind, Origin, SourceInfoMacroKind};
 pub use crate::preprocessed_token::PreprocessedToken;
 pub use crate::preprocessor::{Preprocessor, Status};
 pub use crate::source::{Source, SourceId, SourceSpan, SourceStore};

@@ -52,7 +52,8 @@ use std::fs::File;
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
-use crate::event::{IncludeKind, IncludeRequest};
+use crate::event::IncludeRequest;
+use crate::origin::IncludeKind;
 
 /// Failure modes of [`open_include`].
 ///
@@ -408,7 +409,8 @@ mod tests {
 
     use erl_tokenize::Position;
 
-    use crate::event::{IncludeKind, IncludeRequest};
+    use crate::event::IncludeRequest;
+    use crate::origin::IncludeKind;
     use crate::origin::Origin;
     use crate::source::{Source, SourceSpan, SourceStore};
     use crate::source_string::SourceString;
