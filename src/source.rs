@@ -1,7 +1,7 @@
 //! Source text, source store, source identifier, and source span.
 //!
 //! These types form the storage layer that every
-//! [`crate::PreprocessedToken`] refers to. See the crate-level rustdoc
+//! [`crate::SourceToken`] refers to. See the crate-level rustdoc
 //! for how they compose.
 
 use std::num::NonZeroU32;
@@ -124,7 +124,7 @@ impl Source {
 }
 
 /// Append-only store of [`Source`]s shared between a preprocessor and
-/// the [`crate::PreprocessedToken`]s it emits.
+/// the [`crate::SourceToken`]s it emits.
 ///
 /// A store is designed to be wrapped in an [`Arc`] and shared with any
 /// preprocessor forks. Appending is done through a `&self` method with
@@ -187,7 +187,7 @@ impl SourceStore {
 /// Half-open range within a specific [`Source`].
 ///
 /// This is the common shape used by
-/// [`crate::PreprocessedToken::source_span`] and, where needed, by
+/// [`crate::SourceToken::source_span`] and, where needed, by
 /// later error, include, conditional, and diagnostic APIs so that ad
 /// hoc types do not proliferate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

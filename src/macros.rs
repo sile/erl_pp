@@ -23,9 +23,9 @@ use erl_tokenize::{Symbol, Token, TokenKind};
 use crate::directive::{Directive, Param};
 use crate::error::PreprocessError;
 use crate::origin::Origin;
-use crate::preprocessed_token::PreprocessedToken;
 use crate::source::{Source, SourceId, SourceSpan};
 use crate::source_string::SourceString;
+use crate::source_token::SourceToken;
 
 /// Identifier of a macro entry in a [`MacroTable`].
 ///
@@ -68,7 +68,7 @@ impl MacroKey {
 /// the parameter list validated (duplicate parameter names are
 /// rejected as [`PreprocessError::DuplicateParameter`]).
 ///
-/// The replacement is kept as [`PreprocessedToken`]s so that later
+/// The replacement is kept as [`SourceToken`]s so that later
 /// expansion can hand a caller tokens whose text, span, and origin are
 /// already resolved.
 #[derive(Debug, Clone)]
@@ -80,7 +80,7 @@ pub struct MacroDefinition {
     /// macros (empty vector for arity 0).
     pub params: Vec<Param>,
     /// Replacement token list (may include hidden tokens).
-    pub replacement: Vec<PreprocessedToken>,
+    pub replacement: Vec<SourceToken>,
     /// Span covering the whole `-define(...)` directive.
     pub directive_span: SourceSpan,
     /// Span of the macro name token.
@@ -93,7 +93,7 @@ impl MacroDefinition {
     /// Builds a definition from a parsed directive.
     ///
     /// `source` is the [`Source`] the directive was scanned from; it
-    /// is used to construct the replacement [`PreprocessedToken`]s.
+    /// is used to construct the replacement [`SourceToken`]s.
     /// `origin` is the [`Origin`] assigned to the tokens (typically
     /// [`Origin::Source`] for source-scanned directives).
     ///
@@ -152,8 +152,8 @@ fn build_source_token(
     source: &Arc<Source>,
     source_id: SourceId,
     origin: &Origin,
-) -> PreprocessedToken {
-    PreprocessedToken::new(token, Arc::clone(source), source_id, origin.clone())
+) -> SourceToken {
+    SourceToken::new(token, Arc::clone(source), source_id, origin.clone())
 }
 
 fn first_duplicate_param(params: &[Param]) -> Option<SourceString> {
@@ -324,8 +324,8 @@ impl MacroTable {
     }
 }
 
-fn collect_uses(replacement: &[PreprocessedToken]) -> Vec<(String, Option<usize>)> {
-    let lex: Vec<&PreprocessedToken> = replacement
+fn collect_uses(replacement: &[SourceToken]) -> Vec<(String, Option<usize>)> {
+    let lex: Vec<&SourceToken> = replacement
         .iter()
         .filter(|pt| pt.token().kind().is_lexical())
         .collect();
@@ -389,7 +389,7 @@ fn is_symbol(token: &Token, sym: Symbol) -> bool {
 /// (`( )`, `[ ]`, `{ }`, `<< >>`) but not `end`-terminated keyword
 /// blocks. It is used only for building the static uses graph; the
 /// runtime argument parser at call time is exact.
-fn count_call_args(rest: &[&PreprocessedToken]) -> (usize, usize) {
+fn count_call_args(rest: &[&SourceToken]) -> (usize, usize) {
     let mut depth = 0usize;
     let mut has_content = false;
     let mut commas = 0usize;

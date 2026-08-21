@@ -1,4 +1,4 @@
-//! Origin metadata for preprocessed tokens.
+//! Origin metadata for [`crate::SourceToken`]s.
 //!
 //! An [`Origin`] tells why a particular token appears in the output:
 //! whether it came directly from the source text, from an include, from

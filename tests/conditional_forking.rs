@@ -479,7 +479,7 @@ fn include_in_active_branch_still_fires_awaiting_include() {
 // -if / -elif
 // ---------------------------------------------------------------------
 
-fn lexical_from_condition(tokens: &[erl_pp::PreprocessedToken]) -> Vec<String> {
+fn lexical_from_condition(tokens: &[erl_pp::SourceToken]) -> Vec<String> {
     tokens
         .iter()
         .filter(|t| t.token().kind().is_lexical())

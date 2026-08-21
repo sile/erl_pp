@@ -1,9 +1,12 @@
-//! Bundled preprocessed token payload.
+//! Bundled source-token payload.
 //!
-//! Each [`PreprocessedToken`] carries the raw [`Token`] together with
-//! the [`Arc<Source>`] it was scanned from, its [`SourceId`], and its
-//! [`crate::Origin`]. It is the payload of [`crate::Event::Token`],
-//! so a caller receives everything needed to inspect the token in one
+//! Each [`SourceToken`] carries the raw [`Token`] together with the
+//! [`Arc<Source>`] it indexes, its [`SourceId`], and its
+//! [`crate::Origin`]. [`Source`] is the buffer the token's offsets
+//! refer to; [`crate::Origin`] is why the token appears (written in
+//! that source, copied from a macro body, synthesized for `?FILE`,
+//! and so on). It is the payload of [`crate::Event::Token`], so a
+//! caller receives everything needed to inspect the token in one
 //! value.
 //!
 //! Preprocessor callers that want to keep the full token stream
@@ -17,22 +20,26 @@ use erl_tokenize::{Token, TokenValue};
 use crate::origin::Origin;
 use crate::source::{Source, SourceId, SourceSpan};
 
-/// A scanned [`Token`] together with the [`Source`] it came from and
+/// A scanned [`Token`] together with the [`Source`] it indexes and
 /// the [`Origin`] the preprocessor assigned to it.
+///
+/// [`Source`] is the buffer the token's offsets refer to, not a claim
+/// that [`origin`](Self::origin) is [`Origin::Source`]. A token copied
+/// from a macro body still indexes the definition's [`Source`].
 ///
 /// Values of this type are self-contained: they carry an
 /// [`Arc<Source>`] rather than an index, so a caller can hold and
 /// inspect a token without borrowing back into the preprocessor.
 #[derive(Debug, Clone)]
-pub struct PreprocessedToken {
+pub struct SourceToken {
     token: Token,
     source: Arc<Source>,
     source_id: SourceId,
     origin: Origin,
 }
 
-impl PreprocessedToken {
-    /// Creates a preprocessed-token bundle from its components.
+impl SourceToken {
+    /// Creates a source-token bundle from its components.
     ///
     /// This is `pub(crate)` because only preprocessor internals build
     /// these; external callers observe them as the payload of
@@ -73,8 +80,7 @@ impl PreprocessedToken {
         self.token.value(self.source.text())
     }
 
-    /// Returns a shared handle to the [`Source`] this token was
-    /// scanned from.
+    /// Returns a shared handle to the [`Source`] this token indexes.
     pub fn source(&self) -> &Arc<Source> {
         &self.source
     }
@@ -115,17 +121,17 @@ mod tests {
         let source = store.get(source_id);
         let token = scan_one(text);
 
-        let ppt = PreprocessedToken::new(token, Arc::clone(&source), source_id, Origin::Source);
+        let tok = SourceToken::new(token, Arc::clone(&source), source_id, Origin::Source);
 
-        assert_eq!(*ppt.token(), token);
-        assert_eq!(ppt.text(), "foo");
-        assert!(matches!(ppt.value(), TokenValue::Atom(a) if a.as_ref() == "foo"));
-        assert!(Arc::ptr_eq(ppt.source(), &source));
-        let span = ppt.source_span();
+        assert_eq!(*tok.token(), token);
+        assert_eq!(tok.text(), "foo");
+        assert!(matches!(tok.value(), TokenValue::Atom(a) if a.as_ref() == "foo"));
+        assert!(Arc::ptr_eq(tok.source(), &source));
+        let span = tok.source_span();
         assert_eq!(span.source_id, source_id);
         assert_eq!(span.start.offset(), 0);
         assert_eq!(span.end.offset(), text.len());
-        assert!(matches!(ppt.origin(), Origin::Source));
+        assert!(matches!(tok.origin(), Origin::Source));
     }
 
     #[test]
@@ -136,7 +142,7 @@ mod tests {
         let source = store.get(source_id);
         let token = scan_one(text);
 
-        let ppt = PreprocessedToken::new(token, Arc::clone(&source), source_id, Origin::Source);
+        let tok = SourceToken::new(token, Arc::clone(&source), source_id, Origin::Source);
 
         // Grow the store from another handle; the token still resolves
         // through the Arc<Source> it captured.
@@ -146,7 +152,7 @@ mod tests {
                 format!("body {i}"),
             ));
         }
-        assert_eq!(ppt.text(), "bar");
+        assert_eq!(tok.text(), "bar");
     }
 
     #[test]
@@ -156,9 +162,9 @@ mod tests {
         let source = store.get(source_id);
         let token = scan_one("baz");
 
-        let ppt = PreprocessedToken::new(token, Arc::clone(&source), source_id, Origin::Source);
-        let cloned = ppt.clone();
-        assert!(Arc::ptr_eq(ppt.source(), cloned.source()));
+        let tok = SourceToken::new(token, Arc::clone(&source), source_id, Origin::Source);
+        let cloned = tok.clone();
+        assert!(Arc::ptr_eq(tok.source(), cloned.source()));
         assert_eq!(cloned.text(), "baz");
     }
 }

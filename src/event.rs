@@ -12,9 +12,9 @@ use std::sync::Arc;
 use crate::error::PreprocessError;
 use crate::macros::MacroDefinition;
 use crate::origin::{IncludeKind, Origin};
-use crate::preprocessed_token::PreprocessedToken;
 use crate::source::SourceSpan;
 use crate::source_string::SourceString;
+use crate::source_token::SourceToken;
 
 /// One-shot output of [`crate::Preprocessor::step`].
 ///
@@ -28,12 +28,12 @@ use crate::source_string::SourceString;
 pub enum Event {
     /// A token was scanned from the input.
     ///
-    /// The bundled [`PreprocessedToken`] carries the token itself, the
-    /// [`crate::Source`] it came from, its [`crate::SourceSpan`], and
+    /// The bundled [`SourceToken`] carries the token itself, the
+    /// [`crate::Source`] it indexes, its [`crate::SourceSpan`], and
     /// its [`crate::Origin`]. Callers that need the whole stream keep
     /// their own accumulator; the preprocessor does not retain scanned
     /// tokens.
-    Token(PreprocessedToken),
+    Token(SourceToken),
 
     /// A `-define(...)` was applied to the macro table.
     ///
@@ -214,7 +214,7 @@ pub struct DefinedConditional {
 pub struct ExpressionConditional {
     /// Macro-expanded expression tokens. Evaluating them is the
     /// caller's responsibility.
-    pub condition_tokens: Vec<PreprocessedToken>,
+    pub condition_tokens: Vec<SourceToken>,
     /// Span of the whole directive.
     pub directive_span: SourceSpan,
     /// Origin at the directive's site.
@@ -264,7 +264,7 @@ pub struct Diagnostic {
     /// token's `Origin` is the directive site's origin (the
     /// `parent_origin` on this same struct); no macro expansion is
     /// applied inside the arguments.
-    pub arguments: Vec<PreprocessedToken>,
+    pub arguments: Vec<SourceToken>,
     /// Span of the whole directive (`-` through `.`).
     pub directive_span: SourceSpan,
     /// Span of the argument tokens, from the first lexical token's
@@ -297,5 +297,5 @@ pub struct MacroExpansionRequest {
     pub call_site: SourceSpan,
     /// Per-argument token streams. Empty when `arity` is `None` or
     /// `Some(0)`; otherwise has exactly `n` entries.
-    pub arguments: Vec<Vec<PreprocessedToken>>,
+    pub arguments: Vec<Vec<SourceToken>>,
 }

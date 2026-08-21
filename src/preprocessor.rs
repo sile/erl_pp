@@ -17,7 +17,7 @@
 //!
 //! The preprocessor does not retain scanned tokens; each
 //! [`crate::Event::Token`] carries a self-contained
-//! [`PreprocessedToken`] and the caller keeps whatever accumulator
+//! [`SourceToken`] and the caller keeps whatever accumulator
 //! they need.
 //!
 //! This module intentionally does no I/O and holds no runtime, path,
@@ -42,9 +42,9 @@ use crate::event::{
 };
 use crate::macros::{MacroDefinition, MacroKey, MacroTable};
 use crate::origin::{IncludeKind, Origin, SourceInfoMacroKind};
-use crate::preprocessed_token::PreprocessedToken;
 use crate::source::{Source, SourceId, SourceSpan, SourceStore};
 use crate::source_string::SourceString;
+use crate::source_token::SourceToken;
 
 /// Sans-I/O preprocessor state machine.
 ///
@@ -61,7 +61,7 @@ use crate::source_string::SourceString;
 ///    returning `Event::Complete`.
 ///
 /// The preprocessor does not retain scanned tokens; each
-/// [`Event::Token`] carries a self-contained [`PreprocessedToken`]
+/// [`Event::Token`] carries a self-contained [`SourceToken`]
 /// and the caller keeps whatever accumulator they need.
 ///
 /// The preprocessor implements [`Clone`] so that state machine forks
@@ -111,7 +111,7 @@ pub struct Preprocessor {
     /// Drained by [`Preprocessor::step`] before consulting the cursor,
     /// so a `?FOO` call finished during this or an earlier step
     /// surfaces its replacement before scanning continues.
-    expansion_queue: VecDeque<PreprocessedToken>,
+    expansion_queue: VecDeque<SourceToken>,
     /// When `Some`, the scanner is expanding an `-if` / `-elif`
     /// condition expression: queue tokens are collected into this
     /// buffer instead of being emitted as [`Event::Token`], and the
@@ -232,7 +232,7 @@ struct ConditionCollect {
     /// Span of the `-if` / `-elif` directive itself (request payload).
     directive_span: SourceSpan,
     pending: PendingConditional,
-    collected: Vec<PreprocessedToken>,
+    collected: Vec<SourceToken>,
 }
 
 /// Bookkeeping saved while an [`Event::AwaitingMacroExpansion`] is
@@ -408,7 +408,7 @@ impl Preprocessor {
                 call_site: pending.call_site,
                 name: pending.name.clone(),
             };
-            self.expansion_queue.push_back(PreprocessedToken::new(
+            self.expansion_queue.push_back(SourceToken::new(
                 *token,
                 Arc::clone(&source_arc),
                 source_id,
@@ -848,7 +848,7 @@ impl Preprocessor {
         let arguments = arg_tokens
             .iter()
             .map(|token| {
-                PreprocessedToken::new(
+                SourceToken::new(
                     *token,
                     Arc::clone(&source_arc),
                     source_id,
@@ -953,7 +953,7 @@ impl Preprocessor {
         let origin = (*self.current_origin).clone();
         let mut wrapped = VecDeque::with_capacity(arg_tokens.len());
         for token in arg_tokens {
-            wrapped.push_back(PreprocessedToken::new(
+            wrapped.push_back(SourceToken::new(
                 *token,
                 Arc::clone(&source_arc),
                 source_id,
@@ -1071,7 +1071,7 @@ impl Preprocessor {
             // Silently consume tokens while skipping.
             return StepAction::Retry;
         }
-        let ppt = PreprocessedToken::new(
+        let ppt = SourceToken::new(
             token,
             Arc::clone(self.cursor_mut().source()),
             self.cursor_mut().source_id(),
@@ -1215,7 +1215,7 @@ impl Preprocessor {
         name_ss: SourceString,
         arity: Option<usize>,
         call_site: SourceSpan,
-        arguments: Vec<Vec<PreprocessedToken>>,
+        arguments: Vec<Vec<SourceToken>>,
         parent_origin: Arc<Origin>,
     ) -> MacroCallOutcome {
         match arity {
@@ -1291,7 +1291,7 @@ impl Preprocessor {
 
     /// Splices `tokens` in front of the current expansion queue so
     /// they surface before anything scheduled by earlier expansions.
-    fn prepend_to_queue(&mut self, mut tokens: VecDeque<PreprocessedToken>) {
+    fn prepend_to_queue(&mut self, mut tokens: VecDeque<SourceToken>) {
         tokens.append(&mut self.expansion_queue);
         self.expansion_queue = tokens;
     }
@@ -1339,7 +1339,7 @@ impl Preprocessor {
         // is expected to succeed.
         let (source_arc, source_id) = synthesize_source(&self.sources, display_name, synth_text)
             .expect("synth text for ?FILE/?LINE always tokenizes");
-        let mut expanded: VecDeque<PreprocessedToken> =
+        let mut expanded: VecDeque<SourceToken> =
             VecDeque::with_capacity(source_arc.tokens().len());
         for token in source_arc.tokens() {
             let origin = Origin::SourceInfo {
@@ -1347,7 +1347,7 @@ impl Preprocessor {
                 call_site,
                 kind,
             };
-            expanded.push_back(PreprocessedToken::new(
+            expanded.push_back(SourceToken::new(
                 *token,
                 Arc::clone(&source_arc),
                 source_id,
@@ -1768,9 +1768,9 @@ fn expand_constant_like(
     def: &MacroDefinition,
     call_site: SourceSpan,
     parent_origin: &Arc<Origin>,
-) -> VecDeque<PreprocessedToken> {
+) -> VecDeque<SourceToken> {
     let definition_span = def.directive_span;
-    let mut out: VecDeque<PreprocessedToken> = VecDeque::with_capacity(def.replacement.len());
+    let mut out: VecDeque<SourceToken> = VecDeque::with_capacity(def.replacement.len());
     for replacement in &def.replacement {
         let origin = Origin::MacroBody {
             parent: Arc::clone(parent_origin),
@@ -1780,7 +1780,7 @@ fn expand_constant_like(
         let token = *replacement.token();
         let source = Arc::clone(replacement.source());
         let source_id = replacement.source_span().source_id;
-        out.push_back(PreprocessedToken::new(token, source, source_id, origin));
+        out.push_back(SourceToken::new(token, source, source_id, origin));
     }
     out
 }
@@ -1797,13 +1797,13 @@ fn expand_constant_like(
 /// they were bound to.
 fn expand_function_like(
     def: &MacroDefinition,
-    arguments: &[Vec<PreprocessedToken>],
+    arguments: &[Vec<SourceToken>],
     call_site: SourceSpan,
     parent_origin: &Arc<Origin>,
     sources: &Arc<SourceStore>,
-) -> Result<VecDeque<PreprocessedToken>, MacroCallErrorKind> {
+) -> Result<VecDeque<SourceToken>, MacroCallErrorKind> {
     let definition_span = def.directive_span;
-    let mut out: VecDeque<PreprocessedToken> = VecDeque::new();
+    let mut out: VecDeque<SourceToken> = VecDeque::new();
     let repl = &def.replacement;
     let mut i = 0;
     while i < repl.len() {
@@ -1871,7 +1871,7 @@ fn expand_function_like(
                     let arg_token = *arg_tok.token();
                     let source = Arc::clone(arg_tok.source());
                     let source_id = arg_tok.source_span().source_id;
-                    out.push_back(PreprocessedToken::new(arg_token, source, source_id, origin));
+                    out.push_back(SourceToken::new(arg_token, source, source_id, origin));
                 }
                 i += 1;
                 continue;
@@ -1884,7 +1884,7 @@ fn expand_function_like(
         };
         let source = Arc::clone(repl[i].source());
         let source_id = repl[i].source_span().source_id;
-        out.push_back(PreprocessedToken::new(token, source, source_id, origin));
+        out.push_back(SourceToken::new(token, source, source_id, origin));
         i += 1;
     }
     Ok(out)
@@ -1893,7 +1893,7 @@ fn expand_function_like(
 /// Returns the index of the next lexical token in `tokens` at or
 /// after `start`, or `None` if none is found before the slice runs
 /// out.
-fn find_next_lexical_index(tokens: &[PreprocessedToken], start: usize) -> Option<usize> {
+fn find_next_lexical_index(tokens: &[SourceToken], start: usize) -> Option<usize> {
     (start..tokens.len()).find(|&i| tokens[i].token().kind().is_lexical())
 }
 
@@ -1902,13 +1902,13 @@ fn find_next_lexical_index(tokens: &[PreprocessedToken], start: usize) -> Option
 /// lexical tokens, print each with a per-kind formatter, and join
 /// them with a single space.
 fn stringify_argument(
-    argument: &[PreprocessedToken],
+    argument: &[SourceToken],
     sources: &Arc<SourceStore>,
     call_site: SourceSpan,
     parameter: SourceString,
     definition_span: SourceSpan,
     parent_origin: &Arc<Origin>,
-) -> Vec<PreprocessedToken> {
+) -> Vec<SourceToken> {
     let parts: Vec<String> = argument
         .iter()
         .filter(|ppt| ppt.token().kind().is_lexical())
@@ -1923,7 +1923,7 @@ fn stringify_argument(
         .tokens()
         .iter()
         .map(|t| {
-            PreprocessedToken::new(
+            SourceToken::new(
                 *t,
                 Arc::clone(&source_arc),
                 source_id,
@@ -1940,7 +1940,7 @@ fn stringify_argument(
 
 /// Formats a single argument token into the text form that OTP's
 /// `token_src/1` produces for `stringify_1/1`.
-fn stringify_token_text(ppt: &PreprocessedToken) -> String {
+fn stringify_token_text(ppt: &SourceToken) -> String {
     let token = *ppt.token();
     let source_text = ppt.source().text();
     // Integer / Float use the decoded value when the tokenizer
@@ -1979,7 +1979,7 @@ enum Delimiter {
 /// Result of one macro-argument-parse attempt.
 struct ParsedArguments {
     /// Per-argument token streams. Empty when the call was `()` (arity 0).
-    arguments: Vec<Vec<PreprocessedToken>>,
+    arguments: Vec<Vec<SourceToken>>,
     /// Position of the byte after the closing `)`. Used together with
     /// the call's opening `?` to build the call-site span.
     close_end: Position,
@@ -1996,8 +1996,8 @@ trait ArgTokenSource {
     fn peek(&self) -> Option<Token>;
 
     /// Consumes the next token and returns it wrapped as a
-    /// [`PreprocessedToken`], `None` at end.
-    fn bump(&mut self) -> Option<PreprocessedToken>;
+    /// [`SourceToken`], `None` at end.
+    fn bump(&mut self) -> Option<SourceToken>;
 }
 
 /// [`ArgTokenSource`] adapter that pulls from a raw source cursor,
@@ -2015,9 +2015,9 @@ impl ArgTokenSource for CursorArgSource<'_> {
         self.cursor.peek()
     }
 
-    fn bump(&mut self) -> Option<PreprocessedToken> {
+    fn bump(&mut self) -> Option<SourceToken> {
         let token = self.cursor.bump()?;
-        Some(PreprocessedToken::new(
+        Some(SourceToken::new(
             token,
             Arc::clone(self.cursor.source()),
             self.source_id,
@@ -2029,7 +2029,7 @@ impl ArgTokenSource for CursorArgSource<'_> {
 /// [`ArgTokenSource`] adapter that pulls from the front of the
 /// expansion queue, keeping each token's existing Origin intact.
 struct QueueArgSource<'a> {
-    queue: &'a mut VecDeque<PreprocessedToken>,
+    queue: &'a mut VecDeque<SourceToken>,
 }
 
 impl ArgTokenSource for QueueArgSource<'_> {
@@ -2037,7 +2037,7 @@ impl ArgTokenSource for QueueArgSource<'_> {
         self.queue.front().map(|ppt| *ppt.token())
     }
 
-    fn bump(&mut self) -> Option<PreprocessedToken> {
+    fn bump(&mut self) -> Option<SourceToken> {
         self.queue.pop_front()
     }
 }
@@ -2059,8 +2059,8 @@ impl ArgTokenSource for QueueArgSource<'_> {
 fn parse_macro_arguments<S: ArgTokenSource>(
     source: &mut S,
 ) -> Result<ParsedArguments, MacroCallErrorKind> {
-    let mut arguments: Vec<Vec<PreprocessedToken>> = Vec::new();
-    let mut current: Vec<PreprocessedToken> = Vec::new();
+    let mut arguments: Vec<Vec<SourceToken>> = Vec::new();
+    let mut current: Vec<SourceToken> = Vec::new();
     let mut current_has_lexical = false;
     let mut stack: Vec<Delimiter> = Vec::new();
     // `true` while we have not yet seen any lexical token or comma.

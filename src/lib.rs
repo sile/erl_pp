@@ -57,10 +57,10 @@ pub use crate::event::{
 pub use crate::include_path::{OpenIncludeError, open_include};
 pub use crate::macros::{MacroDefinition, MacroKey, MacroTable};
 pub use crate::origin::{IncludeKind, Origin, SourceInfoMacroKind};
-pub use crate::preprocessed_token::PreprocessedToken;
 pub use crate::preprocessor::{Preprocessor, Status};
 pub use crate::source::{Source, SourceId, SourceSpan, SourceStore};
 pub use crate::source_string::SourceString;
+pub use crate::source_token::SourceToken;
 
 pub mod docs;
 
@@ -71,7 +71,7 @@ mod event;
 mod include_path;
 mod macros;
 mod origin;
-mod preprocessed_token;
 mod preprocessor;
 mod source;
 mod source_string;
+mod source_token;
