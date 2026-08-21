@@ -22,7 +22,7 @@ fn build_source(name: &str, text: &str) -> Source {
 }
 
 fn make(text: &str) -> Preprocessor {
-    Preprocessor::new(build_source("m.erl", text))
+    Preprocessor::new([build_source("m.erl", text)])
 }
 
 fn step(pp: &mut Preprocessor) -> Event {

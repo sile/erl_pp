@@ -63,7 +63,7 @@ fn scan_all(text: &str) -> Vec<Token> {
 fn take_include_request(source_text: &str) -> IncludeRequest {
     let tokens = scan_all(source_text);
     let source = Source::new("caller.erl", source_text.to_string(), tokens);
-    let mut pp = Preprocessor::new(source);
+    let mut pp = Preprocessor::new([source]);
     loop {
         match pp.step().expect("no protocol error") {
             Event::AwaitingInclude(req) => return req,

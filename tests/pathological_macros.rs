@@ -21,7 +21,7 @@ fn build_source(name: &str, text: &str) -> Source {
 }
 
 fn make(text: &str) -> Preprocessor {
-    Preprocessor::new(build_source("m.erl", text))
+    Preprocessor::new([build_source("m.erl", text)])
 }
 
 fn collect_lexical_texts(pp: &mut Preprocessor) -> Vec<String> {

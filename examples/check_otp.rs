@@ -111,7 +111,7 @@ fn run_one(
         }
     };
     let source = erl_pp::Source::new(display.to_string(), src, tokens);
-    let mut pp = erl_pp::Preprocessor::new(source);
+    let mut pp = erl_pp::Preprocessor::new([source]);
 
     let mut events = 0usize;
     let mut token_count = 0usize;

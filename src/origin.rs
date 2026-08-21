@@ -112,10 +112,9 @@ pub enum Origin {
     /// Every other OTP predefined macro (`?MACHINE`, `?MODULE`,
     /// `?FUNCTION_NAME`, etc.) is out of scope for erl_pp itself and
     /// is delegated to the caller through
-    /// `Event::AwaitingMacroExpansion`. Caller-supplied macros
-    /// registered via `Preprocessor::define_initial` expand through
-    /// the normal user-macro path and carry [`Origin::MacroBody`],
-    /// not this variant.
+    /// `Event::AwaitingMacroExpansion`. Macros that appear in a
+    /// scanned `-define` expand through the normal user-macro path
+    /// and carry [`Origin::MacroBody`], not this variant.
     SourceInfo {
         /// Parent origin (the origin at the macro use site).
         parent: Arc<Origin>,

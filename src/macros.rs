@@ -95,9 +95,7 @@ impl MacroDefinition {
     /// `source` is the [`Source`] the directive was scanned from; it
     /// is used to construct the replacement [`PreprocessedToken`]s.
     /// `origin` is the [`Origin`] assigned to the tokens (typically
-    /// [`Origin::Source`] for source-scanned directives, or the
-    /// synthesized origin for initial macros registered through the
-    /// preprocessor's initialization API).
+    /// [`Origin::Source`] for source-scanned directives).
     ///
     /// Returns [`PreprocessError::DuplicateParameter`] when the parameter
     /// list is invalid (duplicate names today; more kinds may be added
@@ -171,8 +169,8 @@ fn first_duplicate_param(params: &[Param]) -> Option<SourceString> {
 /// Read-only view of the preprocessor's macro table.
 ///
 /// Exposed by [`crate::Preprocessor::macros`]. Modifications happen
-/// through directive processing and through the preprocessor's
-/// initialization API; the caller has no direct mutator.
+/// through scanned `-define` / `-undef` directives; the caller has no
+/// direct mutator.
 ///
 /// Internally the table maintains a parallel "uses" map that records,
 /// for every stored definition, the `(name, arity)` macro references

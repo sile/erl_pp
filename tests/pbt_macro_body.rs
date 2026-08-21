@@ -182,7 +182,7 @@ fn parse_define_body(body: &str) -> Result<usize, DriveError> {
     let text = format!("-define(FOO, {body}).\n");
     let tokens = scan_all(&text).map_err(DriveError::Lexical)?;
     let source = Source::new("prop.erl", text, tokens);
-    let mut pp = Preprocessor::new(source);
+    let mut pp = Preprocessor::new([source]);
     match pp.step().map_err(DriveError::Protocol)? {
         Event::MacroDefined(def) => Ok(def.replacement.len()),
         Event::PreprocessError(err) => Err(DriveError::Preprocess(Box::new(err))),

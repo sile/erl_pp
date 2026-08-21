@@ -50,7 +50,7 @@ use crate::source_string::SourceString;
 ///
 /// # Overview
 ///
-/// 1. Create with [`Preprocessor::new`] and an initial [`Source`].
+/// 1. Create with [`Preprocessor::new`] and a sequence of [`Source`]s.
 /// 2. Call [`step`](Self::step) repeatedly; every call advances the
 ///    machine by one transition and returns exactly one [`Event`].
 /// 3. When the returned event leaves the machine awaiting a response,
@@ -69,8 +69,16 @@ use crate::source_string::SourceString;
 /// independently. The clone shares the [`SourceStore`].
 pub struct Preprocessor {
     sources: Arc<SourceStore>,
-    /// Cursor for the source currently being scanned.
-    cursor: Cursor,
+    /// Cursor for the source currently being scanned. `None` when
+    /// [`Preprocessor::new`] received an empty sequence (the next
+    /// `step` completes) or after the last top-level source has
+    /// been left; in the latter case `state` is already
+    /// [`State::Completed`].
+    cursor: Option<Cursor>,
+    /// Remaining top-level sources, in scan order. Distinct from
+    /// `include_stack`, which nests `-include` inside the current
+    /// top-level source.
+    source_queue: VecDeque<SourceId>,
     /// Origin attached to every token emitted from the current cursor
     /// (`Origin::Source` at the top level, `Origin::Include { ... }`
     /// while an include source is active). Swapped in and out
@@ -267,18 +275,35 @@ pub enum Status {
 }
 
 impl Preprocessor {
-    /// Creates a preprocessor positioned at the start of `source`.
+    /// Creates a preprocessor that scans `sources` from front to back.
     ///
-    /// The source is appended to a freshly created shared
-    /// [`SourceStore`] and given the first [`crate::SourceId`].
-    pub fn new(source: Source) -> Self {
-        let sources = Arc::new(SourceStore::new());
-        let source_id = sources.append(source);
-        let arc_source = sources.get(source_id);
-        let cursor = Cursor::new(source_id, arc_source);
+    /// Each item is appended to a freshly created shared
+    /// [`SourceStore`] in iterator order. Scanning starts at the
+    /// first source; when that source's top-level cursor hits EOF
+    /// (and no include is open), the next source is activated with
+    /// [`Origin::Source`] and a fresh form boundary. An empty
+    /// sequence completes on the first [`step`](Self::step).
+    ///
+    /// The constructor does not parse or insert macros. A leading
+    /// `-define(...)` source is scanned like any other and surfaces
+    /// as [`Event::MacroDefined`].
+    pub fn new<I>(sources: I) -> Self
+    where
+        I: IntoIterator<Item = Source>,
+    {
+        let store = Arc::new(SourceStore::new());
+        let mut source_queue = VecDeque::new();
+        for source in sources {
+            source_queue.push_back(store.append(source));
+        }
+        let cursor = source_queue.pop_front().map(|id| {
+            let arc_source = store.get(id);
+            Cursor::new(id, arc_source)
+        });
         Self {
-            sources,
+            sources: store,
             cursor,
+            source_queue,
             current_origin: Arc::new(Origin::Source),
             include_stack: Vec::new(),
             branch_stack: Vec::new(),
@@ -290,6 +315,18 @@ impl Preprocessor {
         }
     }
 
+    fn cursor(&self) -> &Cursor {
+        self.cursor
+            .as_ref()
+            .expect("scan requires an active source")
+    }
+
+    fn cursor_mut(&mut self) -> &mut Cursor {
+        self.cursor
+            .as_mut()
+            .expect("scan requires an active source")
+    }
+
     /// Returns a shared handle to the underlying source store.
     pub fn sources(&self) -> &Arc<SourceStore> {
         &self.sources
@@ -298,59 +335,13 @@ impl Preprocessor {
     /// Returns a read-only view of the macro table.
     ///
     /// Entries are added by `-define(...)` directives and removed by
-    /// `-undef(...)` directives observed on the current source, and by
-    /// [`Preprocessor::define_initial`]. Once a directive is applied
-    /// the table update is visible from this method before the
-    /// caller receives the matching [`Event::MacroDefined`] or
-    /// [`Event::MacroUndefined`] — the state-then-event ordering is
-    /// fixed (see [`step`](Self::step)).
+    /// `-undef(...)` directives observed while scanning. Once a
+    /// directive is applied the table update is visible from this
+    /// method before the caller receives the matching
+    /// [`Event::MacroDefined`] or [`Event::MacroUndefined`] — the
+    /// state-then-event ordering is fixed (see [`step`](Self::step)).
     pub fn macros(&self) -> &MacroTable {
         &self.macros
-    }
-
-    /// Registers an initial macro from a pre-scanned `-define(...)`
-    /// [`Source`].
-    ///
-    /// The source is appended to the preprocessor's [`SourceStore`]
-    /// and parsed as a single `-define(...).` directive. Typically
-    /// called before the first [`step`](Self::step). When called
-    /// mid-stream it simply adds a definition to the current macro
-    /// table.
-    ///
-    /// Returns [`PreprocessError::ParseUnexpectedEof`] or
-    /// [`PreprocessError::ParseUnexpectedToken`] when the source does
-    /// not parse as a `-define(...).` directive, or
-    /// [`PreprocessError::DuplicateParameter`] when the definition
-    /// itself is invalid.
-    pub fn define_initial(&mut self, source: Source) -> Result<(), PreprocessError> {
-        let source_id = self.sources.append(source);
-        let source_arc = self.sources.get(source_id);
-        let mut cursor = Cursor::new(source_id, Arc::clone(&source_arc));
-        let parsed = match parse_directive(&mut cursor) {
-            Ok(Some(d)) => d,
-            Ok(None) => {
-                return Err(PreprocessError::ParseUnexpectedEof {
-                    directive_start: crate::source::SourceSpan::new(
-                        source_id,
-                        erl_tokenize::Position::new(),
-                        erl_tokenize::Position::new(),
-                    ),
-                    expected: "-define directive".to_owned(),
-                });
-            }
-            Err(pe) => return Err(pe.into()),
-        };
-        if !matches!(parsed, Directive::Define { .. }) {
-            return Err(PreprocessError::ParseUnexpectedToken {
-                directive_start: parsed.span(),
-                expected: "-define directive".to_owned(),
-                span: parsed.span(),
-                kind: TokenKind::Symbol(Symbol::Hyphen),
-            });
-        }
-        let def = MacroDefinition::from_directive(&parsed, source_arc, source_id, Origin::Source)?;
-        self.macros.insert(def);
-        Ok(())
     }
 
     /// Reports the current state of the state machine.
@@ -468,7 +459,10 @@ impl Preprocessor {
             include_site: pending.directive_span,
             kind: pending.kind,
         });
-        let parent_cursor = std::mem::replace(&mut self.cursor, child_cursor);
+        let parent_cursor = self
+            .cursor
+            .replace(child_cursor)
+            .expect("include resume requires an active source");
         let parent_origin = std::mem::replace(&mut self.current_origin, child_origin);
         self.include_stack.push((parent_cursor, parent_origin));
         // Fresh source starts at a form boundary.
@@ -622,11 +616,13 @@ impl Preprocessor {
     }
 
     fn handle_cursor_eof(&mut self) -> StepAction {
-        if !self.cursor.is_at_eof() {
+        if let Some(cursor) = &self.cursor
+            && !cursor.is_at_eof()
+        {
             return StepAction::Fall;
         }
         if let Some((parent_cursor, parent_origin)) = self.include_stack.pop() {
-            self.cursor = parent_cursor;
+            self.cursor = Some(parent_cursor);
             self.current_origin = parent_origin;
             // Coming back to the parent source lands on the token
             // right after the include directive, which is always a
@@ -634,10 +630,16 @@ impl Preprocessor {
             self.at_form_boundary = true;
             return StepAction::Retry;
         }
-        // Top-level EOF: an open conditional is a syntax error.
-        // Report the opening directive's span for the outermost
-        // still-open frame and clear the stack so the error does
-        // not fire twice.
+        if let Some(id) = self.source_queue.pop_front() {
+            self.cursor = Some(Cursor::new(id, self.sources.get(id)));
+            self.current_origin = Arc::new(Origin::Source);
+            self.at_form_boundary = true;
+            return StepAction::Retry;
+        }
+        // Top-level EOF after the last source: an open conditional
+        // is a syntax error. Report the opening directive's span for
+        // the outermost still-open frame and clear the stack so the
+        // error does not fire twice.
         if let Some(frame) = self.branch_stack.first() {
             let open_span = frame.open_span;
             self.branch_stack.clear();
@@ -653,7 +655,7 @@ impl Preprocessor {
         if !self.at_form_boundary {
             return StepAction::Fall;
         }
-        match parse_directive(&mut self.cursor) {
+        match parse_directive(self.cursor_mut()) {
             Ok(Some(directive)) => self.dispatch_directive(directive),
             Ok(None) => {
                 // Cursor restored to entry. Fall through — if the next
@@ -841,8 +843,8 @@ impl Preprocessor {
         arg_span: SourceSpan,
     ) -> Event {
         let parent_origin = Arc::clone(&self.current_origin);
-        let source_id = self.cursor.source_id();
-        let source_arc = Arc::clone(self.cursor.source());
+        let source_id = self.cursor().source_id();
+        let source_arc = Arc::clone(self.cursor().source());
         let arguments = arg_tokens
             .iter()
             .map(|token| {
@@ -946,8 +948,8 @@ impl Preprocessor {
         pending: PendingConditional,
         arg_tokens: &[Token],
     ) -> StepAction {
-        let source_id = self.cursor.source_id();
-        let source_arc = Arc::clone(self.cursor.source());
+        let source_id = self.cursor_mut().source_id();
+        let source_arc = Arc::clone(self.cursor_mut().source());
         let origin = (*self.current_origin).clone();
         let mut wrapped = VecDeque::with_capacity(arg_tokens.len());
         for token in arg_tokens {
@@ -1043,7 +1045,7 @@ impl Preprocessor {
             return StepAction::Fall;
         }
         let peek_is_question = matches!(
-            self.cursor.peek(),
+            self.cursor_mut().peek(),
             Some(t) if is_symbol(t, Symbol::Question)
         );
         if !peek_is_question {
@@ -1057,10 +1059,11 @@ impl Preprocessor {
     }
 
     /// Returns `Retry` (not `Fall`) when the cursor produced nothing,
-    /// so `handle_cursor_eof` gets a chance to pop the include stack
-    /// or emit `Event::Complete` on the next round.
+    /// so `handle_cursor_eof` gets a chance to pop the include stack,
+    /// activate the next top-level source, or emit `Event::Complete`
+    /// on the next round.
     fn bump_cursor(&mut self) -> StepAction {
-        let Some(token) = self.cursor.bump() else {
+        let Some(token) = self.cursor_mut().bump() else {
             return StepAction::Retry;
         };
         self.update_form_boundary_after_bump(token);
@@ -1070,8 +1073,8 @@ impl Preprocessor {
         }
         let ppt = PreprocessedToken::new(
             token,
-            Arc::clone(self.cursor.source()),
-            self.cursor.source_id(),
+            Arc::clone(self.cursor_mut().source()),
+            self.cursor_mut().source_id(),
             (*self.current_origin).clone(),
         );
         StepAction::Emit(Box::new(Event::Token(ppt)))
@@ -1085,23 +1088,23 @@ impl Preprocessor {
     /// and reported as [`MacroCallOutcome::NotACall`] with the cursor
     /// restored.
     fn try_recognize_macro_call(&mut self) -> MacroCallOutcome {
-        let entry = self.cursor.checkpoint();
+        let entry = self.cursor_mut().checkpoint();
         let question_tok = self
-            .cursor
+            .cursor_mut()
             .bump()
             .expect("caller checked next token is `?`");
 
-        let Some(name_tok) = self.cursor.peek_lexical() else {
-            self.cursor.restore(entry);
+        let Some(name_tok) = self.cursor_mut().peek_lexical() else {
+            self.cursor_mut().restore(entry);
             return MacroCallOutcome::NotACall;
         };
         // `??` prefix is a stringification — deferred to a later phase.
         if is_symbol(name_tok, Symbol::Question) {
-            self.cursor.restore(entry);
+            self.cursor_mut().restore(entry);
             return MacroCallOutcome::NotACall;
         }
         if !matches!(name_tok.kind(), TokenKind::Atom | TokenKind::Variable) {
-            self.cursor.restore(entry);
+            self.cursor_mut().restore(entry);
             return MacroCallOutcome::NotACall;
         }
 
@@ -1109,21 +1112,21 @@ impl Preprocessor {
         // it. Any hidden tokens between `?` and the name are absorbed
         // by the call and dropped from the output stream (matching
         // OTP epp's behaviour on a whitespace-free token stream).
-        while let Some(t) = self.cursor.bump() {
+        while let Some(t) = self.cursor_mut().bump() {
             if t.start() == name_tok.start() {
                 break;
             }
         }
 
-        let source_id = self.cursor.source_id();
-        let source_text = self.cursor.source_text();
+        let source_id = self.cursor_mut().source_id();
+        let source_text = self.cursor_mut().source_text();
         let name_text = match name_tok.value(source_text) {
             TokenValue::Atom(cow) => cow.into_owned(),
             TokenValue::Variable(name) => name.to_owned(),
             _ => {
                 // Shouldn't happen given the kind check above, but
                 // fall back to non-call rather than panic.
-                self.cursor.restore(entry);
+                self.cursor_mut().restore(entry);
                 return MacroCallOutcome::NotACall;
             }
         };
@@ -1132,12 +1135,12 @@ impl Preprocessor {
 
         // Peek one lexical token ahead. `(` starts a function-like
         // call; anything else keeps the constant-like shape.
-        let inner = self.cursor.checkpoint();
+        let inner = self.cursor_mut().checkpoint();
         let is_function_like = matches!(
-            self.cursor.peek_lexical(),
+            self.cursor_mut().peek_lexical(),
             Some(t) if is_symbol(t, Symbol::OpenParen)
         );
-        self.cursor.restore(inner);
+        self.cursor_mut().restore(inner);
 
         if !is_function_like {
             // Constant-like call.
@@ -1155,8 +1158,8 @@ impl Preprocessor {
         // Function-like call: consume through the opening `(` and
         // parse the argument list.
         let open_paren = 'find: loop {
-            let Some(t) = self.cursor.bump() else {
-                self.cursor.restore(entry);
+            let Some(t) = self.cursor_mut().bump() else {
+                self.cursor_mut().restore(entry);
                 return MacroCallOutcome::NotACall;
             };
             if is_symbol(t, Symbol::OpenParen) {
@@ -1166,7 +1169,7 @@ impl Preprocessor {
         let _ = open_paren; // acknowledged — position is captured via the parse result
         let current_origin = Arc::clone(&self.current_origin);
         let mut arg_source = CursorArgSource {
-            cursor: &mut self.cursor,
+            cursor: self.cursor_mut(),
             source_id,
             origin: &current_origin,
         };
@@ -1174,7 +1177,7 @@ impl Preprocessor {
             Ok(p) => p,
             Err(kind) => {
                 let end = self
-                    .cursor
+                    .cursor_mut()
                     .peek()
                     .map(|t| t.start())
                     .unwrap_or_else(|| name_tok.end());
@@ -1414,7 +1417,7 @@ impl Preprocessor {
         // trailing `?FOO` inside a body would swallow the outer
         // `(...)`.
         if after_name_lex.is_none()
-            && matches!(self.cursor.peek_lexical(), Some(t) if is_symbol(t, Symbol::OpenParen))
+            && matches!(self.cursor_mut().peek_lexical(), Some(t) if is_symbol(t, Symbol::OpenParen))
         {
             return MacroCallOutcome::NotACall;
         }
@@ -1530,8 +1533,8 @@ impl Preprocessor {
                 }))
             }
             define @ Directive::Define { .. } => {
-                let source = Arc::clone(self.cursor.source());
-                let source_id = self.cursor.source_id();
+                let source = Arc::clone(self.cursor_mut().source());
+                let source_id = self.cursor_mut().source_id();
                 let def = MacroDefinition::from_directive(
                     &define,
                     source,
@@ -1565,6 +1568,7 @@ impl Clone for Preprocessor {
         Self {
             sources: Arc::clone(&self.sources),
             cursor: self.cursor.clone(),
+            source_queue: self.source_queue.clone(),
             current_origin: Arc::clone(&self.current_origin),
             include_stack: self.include_stack.clone(),
             branch_stack: self.branch_stack.clone(),
@@ -2192,6 +2196,7 @@ impl std::fmt::Debug for Preprocessor {
         f.debug_struct("Preprocessor")
             .field("sources_len", &self.sources.len())
             .field("include_stack_depth", &self.include_stack.len())
+            .field("source_queue_len", &self.source_queue.len())
             .field("macros_len", &self.macros.len())
             .field("state", &self.state)
             .field("at_form_boundary", &self.at_form_boundary)
@@ -2206,7 +2211,7 @@ mod tests {
     use crate::error::PreprocessError;
 
     fn make(text: &str) -> Preprocessor {
-        Preprocessor::new(Source::from_text("main.erl", text))
+        Preprocessor::new([Source::from_text("main.erl", text)])
     }
 
     fn define_source(text: &str) -> Source {
@@ -2680,36 +2685,77 @@ mod tests {
     }
 
     #[test]
-    fn define_initial_registers_before_step() {
-        let mut pp = make("");
-        pp.define_initial(define_source("-define(FOO, 1)."))
-            .expect("valid define text");
-        pp.define_initial(define_source("-define(BAR(A), A)."))
-            .expect("valid define text");
-        assert_eq!(pp.macros().len(), 2);
-        assert!(pp.macros().get_constant("FOO").is_some());
-        assert!(pp.macros().get_function("BAR", 1).is_some());
-        let event = pp.step().expect("no protocol error");
-        assert!(matches!(event, Event::Complete));
+    fn empty_sequence_returns_complete() {
+        let mut pp = Preprocessor::new([]);
+        let events = drain(&mut pp);
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0], Event::Complete));
+        assert!(matches!(pp.status(), Status::Completed));
     }
 
     #[test]
-    fn define_initial_uses_source_origin() {
-        let mut pp = make("");
-        pp.define_initial(define_source("-define(FOO, 1)."))
-            .expect("valid define text");
-        let def = pp.macros().get_constant("FOO").expect("defined");
-        assert!(matches!(def.origin, Origin::Source));
+    fn source_sequence_scans_in_order_and_carries_macros() {
+        let mut pp = Preprocessor::new([
+            define_source("-define(FOO, 1)."),
+            Source::from_text("main.erl", "?FOO."),
+        ]);
+        assert!(pp.macros().is_empty());
+        let mut saw_defined = false;
+        let mut texts = Vec::new();
+        loop {
+            match pp.step().expect("no protocol error") {
+                Event::MacroDefined(def) => {
+                    assert_eq!(def.key.name, "FOO");
+                    assert!(pp.macros().get_constant("FOO").is_some());
+                    saw_defined = true;
+                }
+                Event::Token(ppt) if ppt.token().kind().is_lexical() => {
+                    texts.push(ppt.text().to_owned());
+                }
+                Event::Token(_) => {}
+                Event::Complete => break,
+                other => panic!("unexpected event: {other:?}"),
+            }
+        }
+        assert!(saw_defined);
+        assert!(texts.contains(&"1".to_owned()));
     }
 
     #[test]
-    fn define_initial_rejects_non_define_text() {
-        let mut pp = make("");
-        // A recognised but non-define directive is rejected.
-        let err = pp
-            .define_initial(define_source("-endif."))
-            .expect_err("preprocess error expected");
-        assert!(matches!(err, PreprocessError::ParseUnexpectedToken { .. }));
+    fn leading_define_uses_source_origin() {
+        let mut pp = Preprocessor::new([define_source("-define(FOO, 1).")]);
+        match pp.step().expect("no protocol error") {
+            Event::MacroDefined(_) => {
+                let def = pp.macros().get_constant("FOO").expect("defined");
+                assert!(matches!(def.origin, Origin::Source));
+            }
+            other => panic!("expected MacroDefined, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn broken_leading_source_continues_to_next() {
+        let mut pp = Preprocessor::new([
+            define_source("-endif."),
+            Source::from_text("main.erl", "ok."),
+        ]);
+        let mut saw_error = false;
+        let mut texts = Vec::new();
+        loop {
+            match pp.step().expect("no protocol error") {
+                Event::PreprocessError(PreprocessError::StrayEndif { .. }) => {
+                    saw_error = true;
+                }
+                Event::Token(ppt) if ppt.token().kind().is_lexical() => {
+                    texts.push(ppt.text().to_owned());
+                }
+                Event::Token(_) => {}
+                Event::Complete => break,
+                other => panic!("unexpected event: {other:?}"),
+            }
+        }
+        assert!(saw_error);
+        assert_eq!(texts, ["ok", "."]);
     }
 
     // ---- Phase 7: rescan --------------------------------------------
@@ -3176,18 +3222,24 @@ mod tests {
 
     #[test]
     fn clone_isolates_macro_table_updates() {
-        let mut original = make("-define(FOO, 1).");
-        original.step().expect("no protocol error");
+        let mut original = Preprocessor::new([
+            define_source("-define(FOO, 1)."),
+            define_source("-define(BAR, 2)."),
+        ]);
+        match original.step().expect("no protocol error") {
+            Event::MacroDefined(_) => {}
+            other => panic!("expected MacroDefined, got {other:?}"),
+        }
         assert!(original.macros().get_constant("FOO").is_some());
-
-        // Clone before original scans further.
-        let mut clone = original.clone();
-        // Add another define into the clone.
-        clone
-            .define_initial(define_source("-define(BAR, 2)."))
-            .expect("valid define text");
-
-        assert!(clone.macros().get_constant("BAR").is_some());
         assert!(original.macros().get_constant("BAR").is_none());
+
+        let mut clone = original.clone();
+        drain(&mut original);
+        assert!(original.macros().get_constant("BAR").is_some());
+        assert!(clone.macros().get_constant("FOO").is_some());
+        assert!(clone.macros().get_constant("BAR").is_none());
+
+        drain(&mut clone);
+        assert!(clone.macros().get_constant("BAR").is_some());
     }
 }

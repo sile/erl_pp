@@ -1,7 +1,7 @@
 //! Erlang source code preprocessor.
 //!
 //! The crate is built around a Sans-I/O state machine. The caller feeds
-//! a [`Source`] into [`Preprocessor`] and drives it by calling
+//! a sequence of [`Source`]s into [`Preprocessor`] and drives it by calling
 //! [`Preprocessor::step`] in a loop; each call returns one [`Event`]
 //! describing the next transition (a scanned token, a macro
 //! definition or undef, a caller-driven include / conditional /
@@ -26,7 +26,7 @@
 //!     tokens.push(t);
 //! }
 //! let source = Source::new("example.erl", text.to_string(), tokens);
-//! let mut pp = Preprocessor::new(source);
+//! let mut pp = Preprocessor::new([source]);
 //!
 //! let mut lexical = Vec::<String>::new();
 //! loop {

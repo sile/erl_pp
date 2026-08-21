@@ -70,7 +70,7 @@ fn sample_simple_program(ctx: &mut TestCaseContext) -> String {
 }
 
 fn run_simple(source: Source) -> Vec<Event> {
-    let mut pp = Preprocessor::new(source);
+    let mut pp = Preprocessor::new([source]);
     let mut events = Vec::new();
     for _ in 0..MAX_STEPS {
         let ev = step_expect_ok(&mut pp);
@@ -141,7 +141,7 @@ fn complete_after_step_is_stable() -> TestResult {
     let mut runner = Runner::new(seed);
     runner.run(CASES, |ctx| {
         let text = sample_simple_program(ctx);
-        let mut pp = Preprocessor::new(build_source("stable.erl", &text));
+        let mut pp = Preprocessor::new([build_source("stable.erl", &text)]);
         loop {
             let ev = step_expect_ok(&mut pp);
             if matches!(ev, Event::Complete) {
@@ -268,7 +268,7 @@ fn ifdef_then_and_else_select_effective_branch() -> TestResult {
              -define({else_def}, ok).\n\
              -endif.\n"
         );
-        let mut pp = Preprocessor::new(build_source("c.erl", &text));
+        let mut pp = Preprocessor::new([build_source("c.erl", &text)]);
         let mut resumed = false;
         for _ in 0..MAX_STEPS {
             match step_expect_ok(&mut pp) {
@@ -344,7 +344,7 @@ fn conditional_fork_yields_independent_macro_tables() -> TestResult {
              -define({else_def}, ok).\n\
              -endif.\n"
         );
-        let mut pp = Preprocessor::new(build_source("fork.erl", &text));
+        let mut pp = Preprocessor::new([build_source("fork.erl", &text)]);
         loop {
             match step_expect_ok(&mut pp) {
                 Event::AwaitingConditional(_) => break,
@@ -406,7 +406,7 @@ fn include_response_streams_include_tokens_before_parent_resume() -> TestResult 
             IncludeKind::IncludeLib => r#"-include_lib("app/include/hdr.hrl")."#.to_owned(),
         };
         let text = format!("{include_directive}\n{outer_atom}.\n");
-        let mut pp = Preprocessor::new(build_source("main.erl", &text));
+        let mut pp = Preprocessor::new([build_source("main.erl", &text)]);
         let mut inner_first_atom: Option<String> = None;
         let mut outer_atom_after: Option<String> = None;
         for _ in 0..MAX_STEPS {
@@ -470,7 +470,7 @@ fn include_reject_returns_directly_to_parent() -> TestResult {
     runner.run(CASES, |ctx| {
         let outer_atom = noprop::sample_choice(ctx, &ATOMS);
         let text = format!("-include(\"hdr.hrl\").\n{outer_atom}.\n");
-        let mut pp = Preprocessor::new(build_source("main.erl", &text));
+        let mut pp = Preprocessor::new([build_source("main.erl", &text)]);
         let mut got_outer = false;
         for _ in 0..MAX_STEPS {
             match step_expect_ok(&mut pp) {
@@ -514,7 +514,7 @@ fn include_scoped_define_reaches_parent() -> TestResult {
         let atom = noprop::sample_choice(ctx, &ATOMS);
         let text = format!("-include(\"hdr.hrl\").\n?{name}.\n");
         let inner_text = format!("-define({name}, {atom}).\n");
-        let mut pp = Preprocessor::new(build_source("main.erl", &text));
+        let mut pp = Preprocessor::new([build_source("main.erl", &text)]);
         let mut expanded = false;
         for _ in 0..MAX_STEPS {
             match step_expect_ok(&mut pp) {
@@ -561,7 +561,7 @@ fn nested_include_forms_origin_chain() -> TestResult {
         let outer = format!(r#"-include("mid.hrl").{atom}."#);
         let mid = format!(r#"-include("inner.hrl").{atom}."#);
         let inner = format!("{atom}.");
-        let mut pp = Preprocessor::new(build_source("outer.erl", &outer));
+        let mut pp = Preprocessor::new([build_source("outer.erl", &outer)]);
         let mut awaiting_stack = vec![mid.clone(), inner.clone()];
         let mut deepest_depth = 0usize;
         for _ in 0..MAX_STEPS {
@@ -634,7 +634,7 @@ fn nested_conditional_selects_inner_branch_correctly() -> TestResult {
              -endif.\n\
              -endif.\n"
         );
-        let mut pp = Preprocessor::new(build_source("n.erl", &text));
+        let mut pp = Preprocessor::new([build_source("n.erl", &text)]);
         let mut await_count = 0usize;
         for _ in 0..MAX_STEPS {
             match step_expect_ok(&mut pp) {
@@ -684,7 +684,7 @@ fn caller_macro_expansion_substitutes_response_source() -> TestResult {
         let substitute = noprop::sample_choice(ctx, &ATOMS);
         // Undefined macro forces AwaitingMacroExpansion.
         let text = format!("?{name}.\n");
-        let mut pp = Preprocessor::new(build_source("m.erl", &text));
+        let mut pp = Preprocessor::new([build_source("m.erl", &text)]);
         let mut saw_substitute = false;
         for _ in 0..MAX_STEPS {
             match step_expect_ok(&mut pp) {
@@ -739,7 +739,7 @@ fn error_and_warning_surface_as_diagnostics() -> TestResult {
         };
         let atom = noprop::sample_choice(ctx, &ATOMS);
         let text = format!("{directive}({atom}).\n{atom}.\n");
-        let mut pp = Preprocessor::new(build_source("d.erl", &text));
+        let mut pp = Preprocessor::new([build_source("d.erl", &text)]);
         let mut got_diag = false;
         let mut got_post_diag_atom = false;
         for _ in 0..MAX_STEPS {
@@ -798,7 +798,7 @@ fn source_info_macros_emit_synthesized_tokens() -> TestResult {
     runner.run(CASES, |ctx| {
         let use_file = noprop::sample_bool(ctx);
         let text = if use_file { "?FILE.\n" } else { "?LINE.\n" };
-        let mut pp = Preprocessor::new(build_source("info.erl", text));
+        let mut pp = Preprocessor::new([build_source("info.erl", text)]);
         for _ in 0..MAX_STEPS {
             match step_expect_ok(&mut pp) {
                 Event::Token(t) if t.token().kind().is_lexical() => {
@@ -848,7 +848,7 @@ fn wrong_response_kind_returns_protocol_error_without_state_damage() -> TestResu
             Branch::Else
         };
         let text = format!("-ifdef({name}).\nfoo.\n-else.\nbar.\n-endif.\n");
-        let mut pp = Preprocessor::new(build_source("t.erl", &text));
+        let mut pp = Preprocessor::new([build_source("t.erl", &text)]);
         let mut awaiting = false;
         for _ in 0..MAX_STEPS {
             match step_expect_ok(&mut pp) {

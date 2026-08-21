@@ -174,6 +174,10 @@ pub(crate) enum Directive {
 impl Directive {
     /// Returns the span that covers the whole directive from `-`
     /// through `.`.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "used by directive parser tests")
+    )]
     pub(crate) fn span(&self) -> SourceSpan {
         match self {
             Directive::Include { span, .. }
