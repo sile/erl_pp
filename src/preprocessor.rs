@@ -2635,12 +2635,12 @@ mod tests {
         let Event::MacroDefined(def) = event else {
             panic!("expected MacroDefined, got {event:?}");
         };
-        assert_eq!(def.key.name, "FOO");
+        assert_eq!(def.name, "FOO");
         // State-then-event contract: when the caller observes the
         // event, the macro table already contains the definition.
         let table = pp.macros().get_constant("FOO").expect("defined");
-        assert_eq!(table.key.name, def.key.name);
-        assert_eq!(table.key.arity, def.key.arity);
+        assert_eq!(table.name, def.name);
+        assert_eq!(table.arity, def.arity);
         assert_eq!(pp.macros().len(), 1);
     }
 
@@ -2705,7 +2705,7 @@ mod tests {
         loop {
             match pp.step().expect("no protocol error") {
                 Event::MacroDefined(def) => {
-                    assert_eq!(def.key.name, "FOO");
+                    assert_eq!(def.name, "FOO");
                     assert!(pp.macros().get_constant("FOO").is_some());
                     saw_defined = true;
                 }

@@ -55,7 +55,7 @@ pub use crate::event::{
     Event, ExpressionConditional, IncludeRequest, MacroExpansionRequest, Severity, UndefinedMacro,
 };
 pub use crate::include_path::{OpenIncludeError, open_include};
-pub use crate::macros::{MacroDefinition, MacroKey, MacroTable};
+pub use crate::macros::{MacroDefinition, MacroTable};
 pub use crate::origin::{IncludeKind, Origin, SourceInfoMacroKind};
 pub use crate::preprocessor::{Preprocessor, Status};
 pub use crate::source::{Source, SourceId, SourceSpan, SourceStore};

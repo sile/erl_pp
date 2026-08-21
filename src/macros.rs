@@ -1,11 +1,11 @@
 //! Macro definition storage and lookup.
 //!
-//! The state machine holds a [`MacroTable`] that maps a [`MacroKey`]
-//! (name plus optional arity) to a [`MacroDefinition`]. Constant-like
+//! The state machine holds a [`MacroTable`] that maps a name plus
+//! optional arity to a [`MacroDefinition`]. Constant-like
 //! (`-define(FOO, ...)`) and function-like (`-define(FOO(A, B), ...)`)
 //! macros with the same name coexist because they carry different
-//! arities; a bare name (`?FOO`) selects the constant-like key and a
-//! call (`?FOO(x, y)`) selects the arity-matching function-like key.
+//! arities; a bare name (`?FOO`) selects the constant-like entry and a
+//! call (`?FOO(x, y)`) selects the arity-matching function-like entry.
 //!
 //! This module owns the definition side of macros only; expansion is
 //! carried out by later work.
@@ -34,27 +34,24 @@ use crate::source_token::SourceToken;
 /// function-like macros with `n` parameters. Arity-0 function-like
 /// macros (`-define(FOO(), 1).`) are `Some(0)` and are distinct from
 /// the constant-like `FOO`.
+///
+/// Crate-internal HashMap key only; public lookup goes through
+/// [`MacroTable::get_constant`] / [`MacroTable::get_function`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct MacroKey {
-    /// Macro name as written in the directive.
-    pub name: String,
-    /// `None` for constant-like macros, `Some(n)` for function-like
-    /// macros with `n` parameters.
-    pub arity: Option<usize>,
+pub(crate) struct MacroKey {
+    name: String,
+    arity: Option<usize>,
 }
 
 impl MacroKey {
-    /// Creates a constant-like macro key (`-define(NAME, ...)`).
-    pub fn constant<N: Into<String>>(name: N) -> Self {
+    pub(crate) fn constant<N: Into<String>>(name: N) -> Self {
         Self {
             name: name.into(),
             arity: None,
         }
     }
 
-    /// Creates a function-like macro key (`-define(NAME(...), ...)`)
-    /// with the given arity.
-    pub fn function<N: Into<String>>(name: N, arity: usize) -> Self {
+    pub(crate) fn function<N: Into<String>>(name: N, arity: usize) -> Self {
         Self {
             name: name.into(),
             arity: Some(arity),
@@ -70,11 +67,16 @@ impl MacroKey {
 ///
 /// The replacement is kept as [`SourceToken`]s so that later
 /// expansion can hand a caller tokens whose text, span, and origin are
-/// already resolved.
+/// already resolved. [`name`](Self::name) plus [`arity`](Self::arity)
+/// identify the table slot (`None` is constant-like, `Some(0)` is
+/// `-define(NAME(), ...)`).
 #[derive(Debug, Clone)]
 pub struct MacroDefinition {
-    /// Table key (name plus optional arity).
-    pub key: MacroKey,
+    /// Macro name as written in the directive.
+    pub name: String,
+    /// `None` for constant-like macros, `Some(n)` for function-like
+    /// macros with `n` parameters.
+    pub arity: Option<usize>,
     /// Parameter names in declaration order. Empty for constant-like
     /// macros; carries the arity-matching parameters for function-like
     /// macros (empty vector for arity 0).
@@ -90,6 +92,13 @@ pub struct MacroDefinition {
 }
 
 impl MacroDefinition {
+    fn key(&self) -> MacroKey {
+        MacroKey {
+            name: self.name.clone(),
+            arity: self.arity,
+        }
+    }
+
     /// Builds a definition from a parsed directive.
     ///
     /// `source` is the [`Source`] the directive was scanned from; it
@@ -128,16 +137,13 @@ impl MacroDefinition {
             }
             None => (Vec::new(), None),
         };
-        let key = MacroKey {
-            name: name.value.clone(),
-            arity,
-        };
         let replacement = replacement
             .iter()
             .map(|t| build_source_token(*t, &source, source_id, &origin))
             .collect();
         Ok(Self {
-            key,
+            name: name.value.clone(),
+            arity,
             params,
             replacement,
             directive_span: *span,
@@ -199,30 +205,20 @@ impl MacroTable {
         self.entries.is_empty()
     }
 
-    /// Returns the definition matching the exact key, if any.
-    pub fn get(&self, key: &MacroKey) -> Option<&MacroDefinition> {
+    /// Returns the definition matching the exact name and arity, if any.
+    pub(crate) fn get(&self, key: &MacroKey) -> Option<&MacroDefinition> {
         self.entries.get(key)
     }
 
     /// Returns the constant-like definition for `name`, if any.
-    ///
-    /// Shorthand for `self.get(&MacroKey::constant(name))`.
     pub fn get_constant(&self, name: &str) -> Option<&MacroDefinition> {
-        self.get(&MacroKey {
-            name: name.to_owned(),
-            arity: None,
-        })
+        self.get(&MacroKey::constant(name))
     }
 
     /// Returns the function-like definition for `name` with the given
     /// arity, if any.
-    ///
-    /// Shorthand for `self.get(&MacroKey::function(name, arity))`.
     pub fn get_function(&self, name: &str, arity: usize) -> Option<&MacroDefinition> {
-        self.get(&MacroKey {
-            name: name.to_owned(),
-            arity: Some(arity),
-        })
+        self.get(&MacroKey::function(name, arity))
     }
 
     /// Returns `true` when any definition (constant-like or
@@ -303,7 +299,7 @@ impl MacroTable {
     /// statically collected references from the new definition's
     /// replacement body.
     pub(crate) fn insert(&mut self, def: MacroDefinition) -> Option<MacroDefinition> {
-        let key = def.key.clone();
+        let key = def.key();
         let uses = collect_uses(&def.replacement);
         self.uses.insert(key.clone(), uses);
         self.entries.insert(key, def)
@@ -461,7 +457,8 @@ mod tests {
     #[test]
     fn constant_like_key_has_no_arity() {
         let def = definition("-define(FOO, 1).");
-        assert_eq!(def.key, MacroKey::constant("FOO"));
+        assert_eq!(def.name, "FOO");
+        assert_eq!(def.arity, None);
         assert!(def.params.is_empty());
         // "1" plus surrounding hidden tokens depending on parser; at
         // minimum the atom-like token exists.
@@ -472,15 +469,18 @@ mod tests {
     fn arity_0_function_like_differs_from_constant_like() {
         let constant = definition("-define(FOO, 1).");
         let arity0 = definition("-define(FOO(), 1).");
-        assert_eq!(constant.key, MacroKey::constant("FOO"));
-        assert_eq!(arity0.key, MacroKey::function("FOO", 0));
-        assert_ne!(constant.key, arity0.key);
+        assert_eq!(constant.name, "FOO");
+        assert_eq!(constant.arity, None);
+        assert_eq!(arity0.name, "FOO");
+        assert_eq!(arity0.arity, Some(0));
+        assert_ne!(constant.arity, arity0.arity);
     }
 
     #[test]
     fn function_like_key_carries_arity() {
         let def = definition("-define(BAR(A, B, C), A).");
-        assert_eq!(def.key, MacroKey::function("BAR", 3));
+        assert_eq!(def.name, "BAR");
+        assert_eq!(def.arity, Some(3));
         assert_eq!(def.params.len(), 3);
         assert_eq!(def.params[0].name.as_str(), "A");
         assert_eq!(def.params[1].name.as_str(), "B");
@@ -541,7 +541,8 @@ mod tests {
         let mut table = MacroTable::new();
         assert!(table.insert(definition("-define(FOO, 1).")).is_none());
         let prev = table.insert(definition("-define(FOO, 2).")).expect("some");
-        assert_eq!(prev.key, MacroKey::constant("FOO"));
+        assert_eq!(prev.name, "FOO");
+        assert_eq!(prev.arity, None);
     }
 
     #[test]
