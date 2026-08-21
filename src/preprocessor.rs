@@ -38,10 +38,10 @@ use crate::directive::{Directive, parse_directive};
 use crate::error::{ConditionalErrorKind, MacroCallErrorKind, PreprocessError, ProtocolError};
 use crate::event::{
     Branch, BranchBoundary, BranchBoundaryKind, ConditionalRequest, DefinedConditional, Diagnostic,
-    Event, ExpressionConditional, IncludeKind, MacroExpansionRequest, Severity,
+    Event, ExpressionConditional, MacroExpansionRequest, Severity,
 };
 use crate::macros::{MacroDefinition, MacroKey, MacroTable};
-use crate::origin::{Origin, SourceInfoMacroKind};
+use crate::origin::{IncludeKind, Origin, SourceInfoMacroKind};
 use crate::preprocessed_token::PreprocessedToken;
 use crate::source::{Source, SourceId, SourceSpan, SourceStore};
 use crate::source_string::SourceString;
@@ -339,20 +339,17 @@ impl Preprocessor {
             }
             Err(pe) => return Err(pe.into()),
         };
-        let define = match parsed {
-            Directive::Define(d) => d,
-            other => {
-                return Err(PreprocessError::Parse {
-                    directive_start: directive_span_of(&other),
-                    expected: "-define directive".to_owned(),
-                    actual: crate::error::PreprocessParseFailure::UnexpectedToken {
-                        span: directive_span_of(&other),
-                        kind: TokenKind::Symbol(Symbol::Hyphen),
-                    },
-                });
-            }
-        };
-        let def = MacroDefinition::from_directive(&define, source_arc, source_id, Origin::Source)?;
+        if !matches!(parsed, Directive::Define { .. }) {
+            return Err(PreprocessError::Parse {
+                directive_start: parsed.span(),
+                expected: "-define directive".to_owned(),
+                actual: crate::error::PreprocessParseFailure::UnexpectedToken {
+                    span: parsed.span(),
+                    kind: TokenKind::Symbol(Symbol::Hyphen),
+                },
+            });
+        }
+        let def = MacroDefinition::from_directive(&parsed, source_arc, source_id, Origin::Source)?;
         self.macros.insert(def);
         Ok(())
     }
@@ -699,52 +696,56 @@ impl Preprocessor {
         let inactive = self.is_in_inactive_branch();
         // Conditional directives must be tracked in both branches
         // so `-else` / `-endif` line up correctly.
-        match directive {
-            Directive::Ifdef(d) => {
+        match &directive {
+            Directive::Ifdef { span, name } => {
                 if inactive {
-                    self.push_nested_inactive_frame(d.span, false);
+                    self.push_nested_inactive_frame(*span, false);
                     return StepAction::Retry;
                 }
                 return StepAction::Emit(Box::new(self.fire_awaiting_defined(
-                    d.name.clone(),
-                    d.span,
+                    name.clone(),
+                    *span,
                     DefinedKind::Ifdef,
                 )));
             }
-            Directive::Ifndef(d) => {
+            Directive::Ifndef { span, name } => {
                 if inactive {
-                    self.push_nested_inactive_frame(d.span, false);
+                    self.push_nested_inactive_frame(*span, false);
                     return StepAction::Retry;
                 }
                 return StepAction::Emit(Box::new(self.fire_awaiting_defined(
-                    d.name.clone(),
-                    d.span,
+                    name.clone(),
+                    *span,
                     DefinedKind::Ifndef,
                 )));
             }
-            Directive::If(d) => {
+            Directive::If {
+                span, arg_tokens, ..
+            } => {
                 if inactive {
-                    self.push_nested_inactive_frame(d.span, true);
+                    self.push_nested_inactive_frame(*span, true);
                     return StepAction::Retry;
                 }
                 return self.start_condition_collect(
                     ExprKind::If,
-                    d.span,
+                    *span,
                     PendingConditional::OpenNew {
-                        directive_span: d.span,
+                        directive_span: *span,
                         is_if_chain: true,
                     },
-                    &d.arg_tokens,
+                    arg_tokens,
                 );
             }
-            Directive::Elif(d) => {
-                return self.dispatch_elif(d);
+            Directive::Elif {
+                span, arg_tokens, ..
+            } => {
+                return self.dispatch_elif(*span, arg_tokens);
             }
-            Directive::Else(d) => {
-                return self.dispatch_else(d.span);
+            Directive::Else { span } => {
+                return self.dispatch_else(*span);
             }
-            Directive::Endif(d) => {
-                return self.dispatch_endif(d.span);
+            Directive::Endif { span } => {
+                return self.dispatch_endif(*span);
             }
             _ => {}
         }
@@ -759,35 +760,36 @@ impl Preprocessor {
         // for them, matching how Event::AwaitingMacroExpansion
         // swallows the observation event. `-error` / `-warning` are
         // folded into Event::Diagnostic for the same reason.
-        match directive {
-            Directive::Include(d) => {
+        match &directive {
+            Directive::Include { kind, path, span } => {
                 return StepAction::Emit(Box::new(self.fire_awaiting_include(
-                    IncludeKind::Include,
-                    d.path.clone(),
-                    d.span,
+                    *kind,
+                    path.clone(),
+                    *span,
                 )));
             }
-            Directive::IncludeLib(d) => {
-                return StepAction::Emit(Box::new(self.fire_awaiting_include(
-                    IncludeKind::IncludeLib,
-                    d.path.clone(),
-                    d.span,
-                )));
-            }
-            Directive::Error(d) => {
+            Directive::Error {
+                arg_tokens,
+                span,
+                arg_span,
+            } => {
                 return StepAction::Emit(Box::new(self.fire_diagnostic(
                     Severity::Error,
-                    &d.arg_tokens,
-                    d.span,
-                    d.arg_span,
+                    arg_tokens,
+                    *span,
+                    *arg_span,
                 )));
             }
-            Directive::Warning(d) => {
+            Directive::Warning {
+                arg_tokens,
+                span,
+                arg_span,
+            } => {
                 return StepAction::Emit(Box::new(self.fire_diagnostic(
                     Severity::Warning,
-                    &d.arg_tokens,
-                    d.span,
-                    d.arg_span,
+                    arg_tokens,
+                    *span,
+                    *arg_span,
                 )));
             }
             _ => {}
@@ -910,11 +912,11 @@ impl Preprocessor {
     }
 
     /// Handles an `-elif(...)` directive according to the open frame.
-    fn dispatch_elif(&mut self, d: crate::directive::ElifDirective) -> StepAction {
+    fn dispatch_elif(&mut self, span: SourceSpan, arg_tokens: &[Token]) -> StepAction {
         let Some(frame) = self.branch_stack.last() else {
             return StepAction::Emit(Box::new(Event::PreprocessError(
                 PreprocessError::Conditional {
-                    span: d.span,
+                    span,
                     kind: ConditionalErrorKind::StrayElif,
                 },
             )));
@@ -922,7 +924,7 @@ impl Preprocessor {
         if !frame.is_if_chain {
             return StepAction::Emit(Box::new(Event::PreprocessError(
                 PreprocessError::Conditional {
-                    span: d.span,
+                    span,
                     kind: ConditionalErrorKind::StrayElif,
                 },
             )));
@@ -930,7 +932,7 @@ impl Preprocessor {
         if frame.else_seen {
             return StepAction::Emit(Box::new(Event::PreprocessError(
                 PreprocessError::Conditional {
-                    span: d.span,
+                    span,
                     kind: ConditionalErrorKind::ElifAfterElse,
                 },
             )));
@@ -950,9 +952,9 @@ impl Preprocessor {
         }
         self.start_condition_collect(
             ExprKind::Elif,
-            d.span,
+            span,
             PendingConditional::ContinueElif,
-            &d.arg_tokens,
+            arg_tokens,
         )
     }
 
@@ -1546,11 +1548,11 @@ impl Preprocessor {
 
     fn apply_directive_effects(&mut self, directive: &Directive) -> Result<(), PreprocessError> {
         match directive {
-            Directive::Define(d) => {
+            Directive::Define { .. } => {
                 let source = Arc::clone(self.cursor.source());
                 let source_id = self.cursor.source_id();
                 let def = MacroDefinition::from_directive(
-                    d,
+                    directive,
                     source,
                     source_id,
                     (*self.current_origin).clone(),
@@ -1558,8 +1560,8 @@ impl Preprocessor {
                 self.macros.insert(def);
                 Ok(())
             }
-            Directive::Undef(u) => {
-                self.macros.remove_all_by_name(u.name.as_str());
+            Directive::Undef { name, .. } => {
+                self.macros.remove_all_by_name(name.as_str());
                 Ok(())
             }
             _ => Ok(()),
@@ -2218,23 +2220,6 @@ impl std::fmt::Debug for Preprocessor {
     }
 }
 
-fn directive_span_of(directive: &Directive) -> crate::source::SourceSpan {
-    match directive {
-        Directive::Include(d) => d.span,
-        Directive::IncludeLib(d) => d.span,
-        Directive::Define(d) => d.span,
-        Directive::Undef(d) => d.span,
-        Directive::Ifdef(d) => d.span,
-        Directive::Ifndef(d) => d.span,
-        Directive::If(d) => d.span,
-        Directive::Elif(d) => d.span,
-        Directive::Else(d) => d.span,
-        Directive::Endif(d) => d.span,
-        Directive::Error(d) => d.span,
-        Directive::Warning(d) => d.span,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2320,7 +2305,7 @@ mod tests {
         loop {
             match pp.step().expect("no protocol errors") {
                 Event::Token(ppt) => texts.push(ppt.text().to_owned()),
-                Event::Directive(Directive::Define(_)) => {}
+                Event::Directive(Directive::Define { .. }) => {}
                 Event::Complete => break,
                 other => panic!("unexpected event: {other:?}"),
             }
@@ -2593,7 +2578,7 @@ mod tests {
     fn recognised_directive_becomes_event() {
         let mut pp = make("-undef(foo).");
         let first = pp.step().expect("no protocol error");
-        assert!(matches!(first, Event::Directive(Directive::Undef(_))));
+        assert!(matches!(first, Event::Directive(Directive::Undef { .. })));
         // Directive tokens are consumed by the parser, not streamed.
         let complete = pp.step().expect("no protocol error");
         assert!(matches!(complete, Event::Complete));
@@ -2606,7 +2591,9 @@ mod tests {
         loop {
             match pp.step().expect("no protocol error") {
                 Event::Token(ppt) => description.push(format!("token:{}", ppt.text())),
-                Event::Directive(Directive::Undef(_)) => description.push("directive:undef".into()),
+                Event::Directive(Directive::Undef { .. }) => {
+                    description.push("directive:undef".into())
+                }
                 Event::Complete => {
                     description.push("complete".into());
                     break;
@@ -2658,7 +2645,7 @@ mod tests {
         let mut pp = make("-define(FOO, 1).");
         assert!(pp.macros().is_empty());
         let event = pp.step().expect("no protocol error");
-        assert!(matches!(event, Event::Directive(Directive::Define(_))));
+        assert!(matches!(event, Event::Directive(Directive::Define { .. })));
         // State-then-event contract: when the caller observes the
         // event, the macro table already contains the definition.
         assert!(pp.macros().get_constant("FOO").is_some());
@@ -2671,8 +2658,8 @@ mod tests {
         // Drain define/undef; the table should end empty.
         loop {
             match pp.step().expect("no protocol error") {
-                Event::Directive(Directive::Define(_)) => {}
-                Event::Directive(Directive::Undef(_)) => {
+                Event::Directive(Directive::Define { .. }) => {}
+                Event::Directive(Directive::Undef { .. }) => {
                     // At the moment we observe the Undef event, all
                     // FOO entries are already gone.
                     assert!(pp.macros().is_empty());

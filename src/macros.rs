@@ -20,7 +20,7 @@ use std::sync::Arc;
 
 use erl_tokenize::{Symbol, Token, TokenKind};
 
-use crate::directive::{DefineDirective, Param};
+use crate::directive::{Directive, Param};
 use crate::error::{MacroDefinitionErrorKind, PreprocessError};
 use crate::origin::Origin;
 use crate::preprocessed_token::PreprocessedToken;
@@ -64,7 +64,7 @@ impl MacroKey {
 
 /// A macro definition, ready to be looked up and expanded.
 ///
-/// Built by the preprocessor from a parsed [`DefineDirective`] with
+/// Built by the preprocessor from a parsed [`Directive::Define`] with
 /// the parameter list validated (duplicate parameter names are
 /// rejected as [`PreprocessError::MacroDefinition`]).
 ///
@@ -103,17 +103,27 @@ impl MacroDefinition {
     /// list is invalid (duplicate names today; more kinds may be added
     /// later).
     pub(crate) fn from_directive(
-        directive: &DefineDirective,
+        directive: &Directive,
         source: Arc<Source>,
         source_id: SourceId,
         origin: Origin,
     ) -> Result<Self, PreprocessError> {
-        let (params, arity) = match &directive.params {
+        let Directive::Define {
+            span,
+            name,
+            params,
+            replacement,
+            ..
+        } = directive
+        else {
+            unreachable!("from_directive requires Directive::Define");
+        };
+        let (params, arity) = match params {
             Some(params) => {
-                if let Some(name) = first_duplicate_param(params) {
+                if let Some(dup) = first_duplicate_param(params) {
                     return Err(PreprocessError::MacroDefinition {
-                        span: directive.span,
-                        kind: MacroDefinitionErrorKind::DuplicateParameter { name },
+                        span: *span,
+                        kind: MacroDefinitionErrorKind::DuplicateParameter { name: dup },
                     });
                 }
                 (params.clone(), Some(params.len()))
@@ -121,11 +131,10 @@ impl MacroDefinition {
             None => (Vec::new(), None),
         };
         let key = MacroKey {
-            name: directive.name.value.clone(),
+            name: name.value.clone(),
             arity,
         };
-        let replacement = directive
-            .replacement
+        let replacement = replacement
             .iter()
             .map(|t| build_source_token(*t, &source, source_id, &origin))
             .collect();
@@ -133,8 +142,8 @@ impl MacroDefinition {
             key,
             params,
             replacement,
-            directive_span: directive.span,
-            name_span: directive.name.span,
+            directive_span: *span,
+            name_span: name.span,
             origin,
         })
     }
@@ -443,11 +452,11 @@ mod tests {
         let dir = parse_directive(&mut cursor)
             .expect("parse ok")
             .expect("recognised");
-        let define = match dir {
-            Directive::Define(d) => d,
+        let define = match &dir {
+            Directive::Define { .. } => &dir,
             other => panic!("expected Define, got {other:?}"),
         };
-        MacroDefinition::from_directive(&define, source, source_id, Origin::Source)
+        MacroDefinition::from_directive(define, source, source_id, Origin::Source)
             .expect("valid definition")
     }
 
@@ -487,11 +496,7 @@ mod tests {
         let dir = parse_directive(&mut cursor)
             .expect("parse ok")
             .expect("recognised");
-        let define = match dir {
-            Directive::Define(d) => d,
-            other => panic!("expected Define, got {other:?}"),
-        };
-        let err = MacroDefinition::from_directive(&define, source, source_id, Origin::Source)
+        let err = MacroDefinition::from_directive(&dir, source, source_id, Origin::Source)
             .expect_err("duplicate should fail");
         match err {
             PreprocessError::MacroDefinition {
@@ -509,13 +514,8 @@ mod tests {
         let dir = parse_directive(&mut cursor)
             .expect("parse ok")
             .expect("recognised");
-        let define = match dir {
-            Directive::Define(d) => d,
-            other => panic!("expected Define, got {other:?}"),
-        };
-        let def =
-            MacroDefinition::from_directive(&define, source.clone(), source_id, Origin::Source)
-                .expect("ok");
+        let def = MacroDefinition::from_directive(&dir, source.clone(), source_id, Origin::Source)
+            .expect("ok");
         assert!(def.replacement.iter().any(|t| t.text() == "bar"));
         for t in &def.replacement {
             assert_eq!(t.source_span().source_id, source_id);

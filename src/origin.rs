@@ -7,9 +7,19 @@
 
 use std::sync::Arc;
 
-use crate::event::IncludeKind;
 use crate::source::SourceSpan;
 use crate::source_string::SourceString;
+
+/// Distinguishes `-include` from `-include_lib` in
+/// [`crate::Directive::Include`], [`crate::IncludeRequest`], and
+/// [`Origin::Include`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum IncludeKind {
+    /// `-include("path").`
+    Include,
+    /// `-include_lib("app/include/hdr.hrl").`
+    IncludeLib,
+}
 
 /// Which source-info macro a synthesized token came from.
 ///
