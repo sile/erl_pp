@@ -4,8 +4,6 @@
 //! one transition and returns one [`Event`] describing what happened.
 //! When the event leaves the machine awaiting a response, the caller
 //! invokes the matching response method before calling `step` again.
-//! [`crate::Preprocessor::status`] reports which response (if any) the
-//! machine is currently awaiting.
 
 use std::sync::Arc;
 
@@ -22,8 +20,7 @@ use crate::source_token::SourceToken;
 /// event. Some variants leave the machine in an awaiting state; while
 /// the machine is awaiting a response, the caller must invoke the
 /// corresponding response method before `step` will return another
-/// event. Inspect [`crate::Preprocessor::status`] to see which
-/// response is expected.
+/// event. The event itself names which response is expected.
 #[derive(Debug, Clone)]
 pub enum Event {
     /// A token was scanned from the input.

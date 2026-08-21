@@ -153,7 +153,6 @@ fn complete_after_step_is_stable() -> TestResult {
             );
         }
         assert_eq!(pp.macros().len(), len_before);
-        assert_eq!(pp.status(), erl_pp::Status::Completed);
         Ok(())
     })?;
     Ok(())
@@ -877,9 +876,12 @@ fn wrong_response_kind_returns_protocol_error_without_state_damage() -> TestResu
         // Feed the wrong response kind: include instead of conditional.
         let wrong = pp.resume_include(build_source("dummy.hrl", ""));
         assert!(wrong.is_err(), "wrong resume_include should error");
-        // erl_pp::Status must still be AwaitingConditionalDecision.
-        assert_eq!(pp.status(), erl_pp::Status::AwaitingConditionalDecision);
-        // Correct response now works.
+        // The wait was not consumed: step still fails, and the
+        // matching resume still works.
+        assert!(
+            pp.step().is_err(),
+            "step while still awaiting conditional must protocol-error"
+        );
         pp.resume_conditional(branch)
             .expect("recover after protocol error");
         // Drain to Complete.

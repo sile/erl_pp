@@ -121,10 +121,3 @@ pub fn step_expect_ok(pp: &mut erl_pp::Preprocessor) -> erl_pp::Event {
     pp.step()
         .expect("preprocessor was in Scanning; step must not protocol-error")
 }
-
-/// Assert the preprocessor is currently in the given `erl_pp::Status`. The
-/// caller writes the message; `erl_pp::Status` implements `PartialEq`.
-pub fn assert_status(pp: &erl_pp::Preprocessor, want: erl_pp::Status) {
-    let got = pp.status();
-    assert_eq!(got, want, "preprocessor status: got {got:?}, want {want:?}");
-}

@@ -109,7 +109,6 @@ fn argument_preserves_hidden_tokens() {
 fn diagnostic_does_not_pend_the_state_machine() {
     let mut pp = make("-warning(hi).\nafter.");
     let _ = step(&mut pp); // erl_pp::Diagnostic
-    assert!(matches!(pp.status(), erl_pp::Status::Scanning));
     let mut saw_after = false;
     loop {
         match step(&mut pp) {
@@ -156,9 +155,15 @@ fn argument_macros_are_not_expanded() {
         .map(|t| t.text().to_owned())
         .collect();
     assert_eq!(lex_texts, vec!["?", "FOO"]);
-    // And the state machine must not have transitioned into
+    // The state machine must not have transitioned into
     // AwaitingMacroExpansion while producing the diagnostic.
-    assert!(matches!(pp.status(), erl_pp::Status::Scanning));
+    match step(&mut pp) {
+        erl_pp::Event::AwaitingMacroExpansion(_) => {
+            panic!("diagnostic arguments must not fire AwaitingMacroExpansion")
+        }
+        erl_pp::Event::Token(_) | erl_pp::Event::Complete => {}
+        other => panic!("unexpected event after diagnostic: {other:?}"),
+    }
 }
 
 // ---------------------------------------------------------------------

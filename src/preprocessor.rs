@@ -4,10 +4,8 @@
 //! small state variable that tracks whether the machine is currently
 //! awaiting a response. Callers drive the machine one step at a time
 //! with [`Preprocessor::step`] and, when the returned event leaves the
-//! machine awaiting a response (include and conditional responses in
-//! later work), respond through one of the response methods before
-//! calling `step` again. [`Preprocessor::status`] reports the current
-//! state without advancing it.
+//! machine awaiting a response, respond through one of the response
+//! methods before calling `step` again.
 //!
 //! The preprocessor consumes pre-scanned [`Source`] token streams;
 //! tokenization is the caller's responsibility (scan with
@@ -55,8 +53,7 @@ use crate::source_token::SourceToken;
 ///    machine by one transition and returns exactly one [`Event`].
 /// 3. When the returned event leaves the machine awaiting a response,
 ///    invoke the matching response method before calling `step` again.
-///    Use [`status`](Self::status) to inspect what response, if any, is
-///    expected.
+///    The event names which response is expected.
 /// 4. When [`Event::Complete`] is returned, later `step` calls keep
 ///    returning `Event::Complete`.
 ///
@@ -250,30 +247,6 @@ struct PendingExpansion {
     parent_origin: Arc<Origin>,
 }
 
-/// Public view of the preprocessor's state.
-///
-/// Returned by [`Preprocessor::status`]. Payload for awaiting variants
-/// is deliberately empty: the payload of the last event already
-/// carries the information the caller needs to respond.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Status {
-    /// The machine is ready to advance; call
-    /// [`Preprocessor::step`] for the next event.
-    Scanning,
-    /// The machine paused waiting for an include to be resolved.
-    /// Reserved for future work; not produced in this release.
-    AwaitingIncludeResolution,
-    /// The machine paused waiting for a conditional-branch decision.
-    /// Reserved for future work; not produced in this release.
-    AwaitingConditionalDecision,
-    /// The machine paused waiting for the caller to expand a macro
-    /// through [`Preprocessor::resume_macro_expansion`].
-    AwaitingMacroExpansion,
-    /// All input has been consumed; further `step` calls
-    /// return [`Event::Complete`].
-    Completed,
-}
-
 impl Preprocessor {
     /// Creates a preprocessor that scans `sources` from front to back.
     ///
@@ -344,26 +317,11 @@ impl Preprocessor {
         &self.macros
     }
 
-    /// Reports the current state of the state machine.
-    ///
-    /// This is a read-only view; call the appropriate response method
-    /// to advance state.
-    pub fn status(&self) -> Status {
-        match &self.state {
-            State::Scanning => Status::Scanning,
-            State::AwaitingIncludeResolution(_) => Status::AwaitingIncludeResolution,
-            State::AwaitingConditionalDecision(_) => Status::AwaitingConditionalDecision,
-            State::AwaitingMacroExpansion(_) => Status::AwaitingMacroExpansion,
-            State::Completed => Status::Completed,
-        }
-    }
-
     /// Advances the state machine and returns one [`Event`].
     ///
     /// Returns `Err(ProtocolError)` when the machine is awaiting a
     /// response; the caller must respond before calling this method
-    /// again. Inspect [`Preprocessor::status`] to see which response
-    /// is expected.
+    /// again. The last [`Event`] names which response is expected.
     pub fn step(&mut self) -> Result<Event, ProtocolError> {
         match &self.state {
             State::AwaitingIncludeResolution(_)
@@ -385,8 +343,8 @@ impl Preprocessor {
     ///
     /// Returns `Err(ProtocolError)` when no macro-expansion response
     /// is expected (the machine is scanning, completed, or awaiting a
-    /// different response). Inspect [`Preprocessor::status`] to
-    /// distinguish the exact case.
+    /// different response). The last [`Event`] names which wait, if
+    /// any, is in force.
     pub fn resume_macro_expansion(&mut self, source: Source) -> Result<(), ProtocolError> {
         match &self.state {
             State::AwaitingMacroExpansion(_) => {}
@@ -432,8 +390,8 @@ impl Preprocessor {
     ///
     /// Returns `Err(ProtocolError)` when no include response is
     /// expected (the machine is scanning, completed, or awaiting a
-    /// different response). Inspect [`Preprocessor::status`] to
-    /// distinguish the exact case.
+    /// different response). The last [`Event`] names which wait, if
+    /// any, is in force.
     pub fn resume_include(&mut self, source: Source) -> Result<(), ProtocolError> {
         match &self.state {
             State::AwaitingIncludeResolution(_) => {}
@@ -482,8 +440,8 @@ impl Preprocessor {
     ///
     /// Returns `Err(ProtocolError)` when no conditional response is
     /// expected (the machine is scanning, completed, or awaiting a
-    /// different response). Inspect [`Preprocessor::status`] to
-    /// distinguish the exact case.
+    /// different response). The last [`Event`] names which wait, if
+    /// any, is in force.
     pub fn resume_conditional(&mut self, branch: Branch) -> Result<(), ProtocolError> {
         match &self.state {
             State::AwaitingConditionalDecision(_) => {}
@@ -2238,7 +2196,6 @@ mod tests {
         let events = drain(&mut pp);
         assert_eq!(events.len(), 1);
         assert!(matches!(events[0], Event::Complete));
-        assert!(matches!(pp.status(), Status::Completed));
     }
 
     #[test]
@@ -2329,7 +2286,6 @@ mod tests {
         assert_eq!(call.name.as_str(), "UNKNOWN");
         assert_eq!(call.arity, None);
         assert!(call.arguments.is_empty());
-        assert!(matches!(pp.status(), Status::AwaitingMacroExpansion));
     }
 
     #[test]
@@ -2691,7 +2647,6 @@ mod tests {
         let events = drain(&mut pp);
         assert_eq!(events.len(), 1);
         assert!(matches!(events[0], Event::Complete));
-        assert!(matches!(pp.status(), Status::Completed));
     }
 
     #[test]

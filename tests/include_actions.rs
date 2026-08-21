@@ -41,10 +41,6 @@ fn include_fires_awaiting_include_with_kind_and_path() {
     };
     assert_eq!(include.kind, erl_pp::IncludeKind::Include);
     assert_eq!(include.path.as_str(), "foo.hrl");
-    assert!(matches!(
-        pp.status(),
-        erl_pp::Status::AwaitingIncludeResolution
-    ));
 }
 
 // ---------------------------------------------------------------------
@@ -255,16 +251,16 @@ a_after."#,
 }
 
 // ---------------------------------------------------------------------
-// 9. Protocol error: resume_include in erl_pp::Status::Scanning.
+// 9. Protocol error: resume_include while scanning.
 #[test]
 fn resume_include_in_scanning_is_protocol_error() {
     let mut pp = make("just_a_token.");
     let err = pp
         .resume_include(build_source("x.hrl", "x."))
-        .expect_err("resume_include in Scanning should fail");
+        .expect_err("resume_include while scanning should fail");
     assert_eq!(err, erl_pp::ProtocolError);
-    // Caller checks the exact case via status() — still Scanning here.
-    assert!(matches!(pp.status(), erl_pp::Status::Scanning));
+    pp.step()
+        .expect("wrong resume_include must not leave Scanning");
 }
 
 // ---------------------------------------------------------------------
@@ -278,11 +274,10 @@ fn resume_include_while_awaiting_macro_is_protocol_error() {
         .resume_include(build_source("x.hrl", "x."))
         .expect_err("resume_include while awaiting macro should fail");
     assert_eq!(err, erl_pp::ProtocolError);
-    // Macro pending state was not consumed — caller sees this via status().
-    assert!(matches!(
-        pp.status(),
-        erl_pp::Status::AwaitingMacroExpansion
-    ));
+    assert_eq!(
+        pp.step().expect_err("still awaiting macro expansion"),
+        erl_pp::ProtocolError
+    );
 }
 
 // ---------------------------------------------------------------------

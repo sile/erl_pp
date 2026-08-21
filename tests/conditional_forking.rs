@@ -63,10 +63,6 @@ fn ifdef_defined_recommends_then() {
     assert_eq!(d.name.as_str(), "FOO");
     assert!(d.defined);
     assert_eq!(d.recommended, erl_pp::Branch::Then);
-    assert!(matches!(
-        pp.status(),
-        erl_pp::Status::AwaitingConditionalDecision
-    ));
 }
 
 // ---------------------------------------------------------------------
@@ -411,7 +407,8 @@ fn resume_conditional_in_scanning_is_protocol_error() {
         .resume_conditional(erl_pp::Branch::Then)
         .expect_err("should fail");
     assert_eq!(err, erl_pp::ProtocolError);
-    assert!(matches!(pp.status(), erl_pp::Status::Scanning));
+    pp.step()
+        .expect("wrong resume_conditional must not leave Scanning");
 }
 
 // ---------------------------------------------------------------------
@@ -425,10 +422,10 @@ fn resume_conditional_while_awaiting_include_is_protocol_error() {
         .resume_conditional(erl_pp::Branch::Then)
         .expect_err("should fail");
     assert_eq!(err, erl_pp::ProtocolError);
-    assert!(matches!(
-        pp.status(),
-        erl_pp::Status::AwaitingIncludeResolution
-    ));
+    assert_eq!(
+        pp.step().expect_err("still awaiting include"),
+        erl_pp::ProtocolError
+    );
 }
 
 // ---------------------------------------------------------------------
