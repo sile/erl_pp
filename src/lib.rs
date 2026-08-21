@@ -29,10 +29,9 @@
 //! let mut lexical = Vec::<String>::new();
 //! loop {
 //!     match pp.step()? {
-//!         erl_pp::Event::Token(t) if t.token().kind().is_lexical() => {
+//!         erl_pp::Event::Token(t) => {
 //!             lexical.push(t.text().to_owned());
 //!         }
-//!         erl_pp::Event::Token(_) => {} // hidden (whitespace / comments)
 //!         erl_pp::Event::Complete => break,
 //!         other => unreachable!("unexpected event: {other:?}"),
 //!     }

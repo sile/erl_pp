@@ -14,25 +14,28 @@ used while implementing this crate).
 
 ## Design choices that intentionally differ
 
-### Hidden tokens are preserved end to end
+### Hidden tokens stay in `Source`, not in `Event::Token`
 
 OTP's epp receives a token stream from `erl_scan` that has already
-dropped whitespace and comments. erl_pp keeps them so that source-
-preserving tools (formatters, IDE tooling, editor macros) can walk
-the same token stream the preprocessor consumes.
+dropped whitespace and comments. erl_pp's caller tokenizes first and
+hands the full stream to `Source`, so the preprocessor can walk
+hidden tokens for recognition without re-emitting them. `Event::Token`
+is lexical only, which matches the stream OTP tools see.
 
 Consequences:
 
-- **Whitespace-only arguments count.** `?FOO(   )` is treated as
-  arity 1 with an argument that carries only hidden tokens. OTP
-  would see this as arity 0 because whitespace was already gone by
-  the time epp got the tokens. If you need arity 0, write `?FOO()`.
+- **`?FOO(   )` is arity 0**, the same as `?FOO()` and the same as
+  OTP. Hidden tokens between `(` and `)` are not an argument.
 - **`??Param` still ignores hidden.** The stringification step
   filters to lexical tokens before emitting, so the OTP-style output
   is preserved.
 - **Hidden tokens between `?` and the macro name are absorbed by
   the call.** Both scan-time and rescan recognition skip hidden
   tokens to find the name, matching OTP.
+- Argument payloads (`MacroCall::arguments`, diagnostic arguments,
+  `-define` replacement bodies) still carry hidden tokens for
+  substitution and span reconstruction. They do not appear as
+  `Event::Token`.
 
 ### Argument-parsing delimiter set
 

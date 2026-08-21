@@ -23,13 +23,14 @@ use crate::source_token::SourceToken;
 /// event. The event itself names which response is expected.
 #[derive(Debug, Clone)]
 pub enum Event {
-    /// A token was scanned from the input.
+    /// A lexical token was scanned from the input.
     ///
-    /// The bundled [`SourceToken`] carries the token itself, the
-    /// [`Source`](crate::Source) it indexes, its [`SourceSpan`](crate::SourceSpan), and
-    /// its [`Origin`](crate::Origin). Callers that need the whole stream keep
-    /// their own accumulator; the preprocessor does not retain scanned
-    /// tokens.
+    /// Whitespace and comments are not emitted; they remain on the
+    /// [`Source`](crate::Source) the caller already supplied. The bundled
+    /// [`SourceToken`] carries the token itself, the [`Source`](crate::Source)
+    /// it indexes, its [`SourceSpan`](crate::SourceSpan), and its
+    /// [`Origin`](crate::Origin). Callers that need the whole stream keep
+    /// their own accumulator.
     Token(SourceToken),
 
     /// A `-define(...)` was applied to the macro table.
@@ -294,9 +295,10 @@ pub struct Diagnostic {
 /// `None` for a bare `?NAME` and `Some(n)` for `?NAME(a1, ..., an)`;
 /// when `arity` is `Some(n)`, `arguments` holds the `n` argument
 /// token streams (each may include hidden tokens like whitespace and
-/// comments). An arity-0 call `?NAME()` is `arity: Some(0)` with an
-/// empty `arguments`, distinct from a constant-like `?NAME` where
-/// `arity` is `None` and `arguments` is also empty.
+/// comments). An arity-0 call (`?NAME()` or `?NAME(   )`) is
+/// `arity: Some(0)` with an empty `arguments`, distinct from a
+/// constant-like `?NAME` where `arity` is `None` and `arguments` is
+/// also empty.
 #[derive(Debug, Clone)]
 pub struct MacroCall {
     /// Decoded name of the macro (the token following `?`).

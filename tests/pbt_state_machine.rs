@@ -159,17 +159,16 @@ fn complete_after_step_is_stable() -> TestResult {
 }
 
 // ------------------------------------------------------------
-// Property: hidden tokens (comments / whitespace) are not lost
+// Property: Event::Token is lexical only
 // ------------------------------------------------------------
 #[test]
-fn hidden_tokens_survive_the_event_stream() -> TestResult {
+fn event_stream_omits_hidden_tokens() -> TestResult {
     let seed = noprop::seed_from_env_or_time(SEED_ENV)?;
-    let saw_hidden = Counter::default();
+    let saw_input_hidden = Counter::default();
     let mut runner = Runner::new(seed);
     runner.run(CASES, |ctx| {
         // Generate a program that always contains some whitespace and
-        // possibly a comment, then check both the input tokens and the
-        // output events have the same hidden-token count.
+        // possibly a comment, then check that none of it is re-emitted.
         let atom = noprop::sample_choice(ctx, &ATOMS);
         let with_comment = noprop::sample_bool(ctx);
         let text = if with_comment {
@@ -178,7 +177,7 @@ fn hidden_tokens_survive_the_event_stream() -> TestResult {
             format!("  {atom} ,  {atom}.\n")
         };
         let source = build_source("h.erl", &text);
-        let expected_hidden = source
+        let input_hidden = source
             .tokens()
             .iter()
             .filter(|t| !t.kind().is_lexical())
@@ -189,16 +188,16 @@ fn hidden_tokens_survive_the_event_stream() -> TestResult {
             .filter(|e| matches!(e, erl_pp::Event::Token(t) if !t.token().kind().is_lexical()))
             .count();
         assert_eq!(
-            seen_hidden, expected_hidden,
-            "hidden token count differs (text={text:?})"
+            seen_hidden, 0,
+            "hidden tokens leaked into Event::Token (text={text:?})"
         );
-        if seen_hidden > 0 {
-            saw_hidden.hit();
+        if input_hidden > 0 {
+            saw_input_hidden.hit();
         }
         Ok(())
     })?;
     assert!(
-        saw_hidden.get() > 0,
+        saw_input_hidden.get() > 0,
         "no case exercised a hidden-token bearing program\n{runner}"
     );
     Ok(())

@@ -257,10 +257,10 @@ fn stringification_of_string_literal_argument() {
 }
 
 // ---------------------------------------------------------------------
-// 12. Whitespace-only argument — stringifies to an empty string.
+// 12. Empty middle argument stringifies to an empty string.
 #[test]
-fn stringification_of_whitespace_only_argument() {
-    let mut pp = make("-define(S(A), ??A).\n?S(  ).");
+fn stringification_of_empty_middle_argument() {
+    let mut pp = make("-define(S(A, B, C), ??B).\n?S(x, , y).");
     let value = drive_until(&mut pp, |e| match e {
         erl_pp::Event::Token(ppt) if ppt.token().kind() == erl_tokenize::TokenKind::String => {
             match ppt.value() {

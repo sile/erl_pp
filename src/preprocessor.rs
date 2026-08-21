@@ -13,10 +13,9 @@
 //! [`Source::new`]). Lexical errors surface only when the caller
 //! scans, never through [`Preprocessor::step`].
 //!
-//! The preprocessor does not retain scanned tokens; each
-//! [`Event::Token`](crate::Event::Token) carries a self-contained
-//! [`SourceToken`] and the caller keeps whatever accumulator
-//! they need.
+//! [`Event::Token`](crate::Event::Token) is lexical only. Whitespace
+//! and comments stay in the caller's [`Source`]; they are walked for
+//! recognition but never re-emitted.
 //!
 //! This module intentionally does no I/O and holds no runtime, path,
 //! or logging dependency.
@@ -57,9 +56,8 @@ use crate::source_token::SourceToken;
 /// 4. When [`Event::Complete`] is returned, later `step` calls keep
 ///    returning `Event::Complete`.
 ///
-/// The preprocessor does not retain scanned tokens; each
-/// [`Event::Token`] carries a self-contained [`SourceToken`]
-/// and the caller keeps whatever accumulator they need.
+/// [`Event::Token`] is lexical only. Whitespace and comments remain
+/// in the caller's [`Source`] and are not re-emitted.
 ///
 /// The preprocessor implements [`Clone`] so that state machine forks
 /// (used by later conditional-branching work) can drive the two sides
@@ -554,7 +552,7 @@ impl Preprocessor {
             // Silently discard queued tokens while skipping.
             return StepAction::Retry;
         }
-        StepAction::Emit(Box::new(Event::Token(ppt)))
+        emit_lexical_token(ppt)
     }
 
     /// When condition expansion has drained the queue, fire
@@ -1037,7 +1035,7 @@ impl Preprocessor {
             self.cursor_mut().source_id(),
             (*self.current_origin).clone(),
         );
-        StepAction::Emit(Box::new(Event::Token(ppt)))
+        emit_lexical_token(ppt)
     }
 
     /// Attempts to recognize a `?NAME` macro call at the cursor.
@@ -1849,6 +1847,17 @@ fn expand_function_like(
     Ok(out)
 }
 
+/// Emits `ppt` as [`Event::Token`] when it is lexical; otherwise
+/// retries so whitespace and comments never surface on the event
+/// stream. The caller already holds those tokens in [`Source`].
+fn emit_lexical_token(ppt: SourceToken) -> StepAction {
+    if ppt.token().kind().is_lexical() {
+        StepAction::Emit(Box::new(Event::Token(ppt)))
+    } else {
+        StepAction::Retry
+    }
+}
+
 /// Returns the index of the next lexical token in `tokens` at or
 /// after `start`, or `None` if none is found before the slice runs
 /// out.
@@ -2009,7 +2018,9 @@ impl ArgTokenSource for QueueArgSource<'_> {
 /// leading empty (`?NAME(, ...)`) and trailing empty (`?NAME(..., )`)
 /// arguments are rejected as errors, middle empties (`?NAME(A, , B)`)
 /// are valid arity-`N` groups. Hidden tokens (whitespace and comments)
-/// are preserved inside the returned argument streams.
+/// are preserved inside arguments that contain lexical tokens, but a
+/// hidden-only group between `(` and `)` is arity 0 (`?NAME(   )`
+/// matches `?NAME()`).
 ///
 /// Generic over [`ArgTokenSource`] so the same delimiter-tracking
 /// logic serves both the source-cursor call site (initial recognition)
@@ -2052,16 +2063,14 @@ fn parse_macro_arguments<S: ArgTokenSource>(
                     let close_end = token.end();
                     source.bump();
                     stack.clear();
-                    if before_first_content && current.is_empty() {
-                        // `?NAME()` — arity 0.
+                    if before_first_content && !current_has_lexical {
+                        // `?NAME()` and `?NAME(   )` are both arity 0.
+                        // Hidden tokens between the parentheses are
+                        // not an argument; OTP epp never sees them
+                        // because `erl_scan` has already dropped
+                        // whitespace and comments.
                     } else if !current_has_lexical {
-                        if before_first_content {
-                            // `?NAME(  )` — arity 1, hidden-only
-                            // argument (valid, semantically empty).
-                            arguments.push(current);
-                        } else {
-                            return Err(MacroCallErrorKind::TrailingEmptyArgument);
-                        }
+                        return Err(MacroCallErrorKind::TrailingEmptyArgument);
                     } else {
                         arguments.push(current);
                     }
@@ -2367,6 +2376,15 @@ mod tests {
     }
 
     #[test]
+    fn function_like_call_whitespace_only_parens_is_arity_zero() {
+        let mut pp = make("?FOO(   ).");
+        let call = expect_awaiting(&mut pp);
+        assert_eq!(call.name.as_str(), "FOO");
+        assert_eq!(call.arity, Some(0));
+        assert!(call.arguments.is_empty());
+    }
+
+    #[test]
     fn function_like_call_single_argument() {
         let mut pp = make("?FOO(bar).");
         let call = expect_awaiting(&mut pp);
@@ -2480,9 +2498,10 @@ mod tests {
                 other => panic!("unexpected event: {other:?}"),
             }
         }
-        // foo, whitespace, bar
+        // Whitespace between `foo` and `bar` is not re-emitted.
         let texts: Vec<&str> = streamed.iter().map(|t| t.text()).collect();
-        assert_eq!(texts, ["foo", " ", "bar"]);
+        assert_eq!(texts, ["foo", "bar"]);
+        assert!(streamed.iter().all(|t| t.token().kind().is_lexical()));
         assert!(matches!(
             streamed[0].origin(),
             crate::origin::Origin::Source
@@ -2565,11 +2584,12 @@ mod tests {
         let pp_tokens = collect_token_texts(&mut pp);
         let fork_tokens = collect_token_texts(&mut fork);
 
-        // pp already emitted `foo`; the remainder is ` ` and `bar`.
-        assert_eq!(pp_tokens, [" ", "bar"]);
+        // pp already emitted `foo`; the space is not re-emitted, so
+        // the remainder is `bar`.
+        assert_eq!(pp_tokens, ["bar"]);
         // The fork resumes from the same cursor position pp had at
         // clone time.
-        assert_eq!(fork_tokens, [" ", "bar"]);
+        assert_eq!(fork_tokens, ["bar"]);
     }
 
     fn collect_token_texts(pp: &mut Preprocessor) -> Vec<String> {
@@ -2827,6 +2847,14 @@ mod tests {
     #[test]
     fn function_like_arity_zero_hit_expands_body() {
         let mut pp = make("-define(FOO(), bar).\n?FOO().");
+        let texts = lexical_texts_from_source(&mut pp);
+        assert!(texts.contains(&"bar".to_owned()));
+        assert!(!texts.contains(&"?".to_owned()));
+    }
+
+    #[test]
+    fn whitespace_only_parens_match_arity_zero_define() {
+        let mut pp = make("-define(FOO(), bar).\n?FOO(   ).");
         let texts = lexical_texts_from_source(&mut pp);
         assert!(texts.contains(&"bar".to_owned()));
         assert!(!texts.contains(&"?".to_owned()));
