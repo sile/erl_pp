@@ -70,6 +70,18 @@ compiler has all of them).
 `?FILE` and `?LINE` are shadowable by a matching `-define`, which
 is what OTP does as well.
 
+### Empty resume deletes the call
+
+OTP's epp treats an undefined macro as a preprocessor error. erl_pp
+never does: an unknown `?NAME` becomes
+`Event::AwaitingMacroExpansion`, and a token-free `Source` passed to
+`resume_macro_expansion` removes the call from the stream. The
+machine succeeds and emits nothing.
+
+Callers that skip unknown macros this way must record the failure
+themselves. A parser downstream of `Event::Token` may otherwise
+treat the hole as a grammar error and look like an erl_pp bug.
+
 ### `?LINE` returns the outermost caller's line
 
 When `?LINE` is invoked from inside a macro body (or a chain of

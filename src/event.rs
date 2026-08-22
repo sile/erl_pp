@@ -69,8 +69,14 @@ pub enum Event {
     /// caller inspects the [`MacroCall`] and resumes via
     /// [`Preprocessor::resume_macro_expansion`](crate::Preprocessor::resume_macro_expansion) with a
     /// [`Source`](crate::Source) whose token stream is spliced in as the
-    /// expansion result. An empty [`Source`](crate::Source) effectively
-    /// skips the call.
+    /// expansion result.
+    ///
+    /// An empty [`Source`](crate::Source) deletes the call from the
+    /// stream. That is not OTP epp's undef error, and it is not a
+    /// [`PreprocessError`]. If the caller uses emptiness for an
+    /// unknown macro, a downstream parser may see a hole and report a
+    /// grammar error. The diagnostic belongs to the caller. See
+    /// [`crate::docs::otp_differences`].
     AwaitingMacroExpansion(MacroCall),
 
     /// The preprocessor is crossing a conditional branch boundary
