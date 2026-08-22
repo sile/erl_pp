@@ -1,10 +1,12 @@
 //! Integration tests for the public [`erl_pp::Source::from_text`] API.
 
+use core::assert_matches;
+
 #[test]
 fn from_text_returns_lexical_error() {
     let err = erl_pp::Source::from_text("bad.erl", "\"unclosed")
         .expect_err("unclosed string must fail tokenization");
-    assert!(matches!(err, erl_tokenize::Error { .. }));
+    assert_matches!(err, erl_tokenize::Error { .. });
 }
 
 #[test]

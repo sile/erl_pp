@@ -415,6 +415,8 @@ mod tests {
     use crate::source::{Source, SourceSpan, SourceStore};
     use crate::source_string::SourceString;
 
+    use core::assert_matches;
+
     use super::*;
 
     struct TempDir {
@@ -557,7 +559,7 @@ mod tests {
         );
         let e = open_include_with_env(&req, &[], &[], |_| None)
             .expect_err("missing absolute path should not resolve");
-        assert!(matches!(e, OpenIncludeError::NotFound));
+        assert_matches!(e, OpenIncludeError::NotFound);
     }
 
     // relative search -------------------------------------------------------
@@ -593,7 +595,7 @@ mod tests {
         let req = dummy_include(IncludeKind::Include, "missing.hrl");
         let e = open_include_with_env(&req, std::slice::from_ref(&tmp.path), &[], |_| None)
             .expect_err("missing relative path should not resolve");
-        assert!(matches!(e, OpenIncludeError::NotFound));
+        assert_matches!(e, OpenIncludeError::NotFound);
     }
 
     #[test]
@@ -620,7 +622,7 @@ mod tests {
         let req = dummy_include(IncludeKind::Include, "hdr.hrl");
         let e = open_include_with_env(&req, std::slice::from_ref(&tmp.path), &[], |_| None)
             .expect_err("symlink loop should surface as an I/O error");
-        assert!(matches!(e, OpenIncludeError::Io(_)), "got {e:?}");
+        assert_matches!(e, OpenIncludeError::Io(_), "got {e:?}");
     }
 
     #[test]

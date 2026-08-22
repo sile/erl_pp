@@ -804,6 +804,8 @@ fn directive_name_text<'a>(token: Token, source: &'a str) -> Option<Cow<'a, str>
 mod tests {
     use super::*;
 
+    use core::assert_matches;
+
     use crate::cursor::Cursor;
     use crate::source::{Source, SourceStore};
 
@@ -827,7 +829,7 @@ mod tests {
     #[test]
     fn non_directive_returns_none() {
         let (cursor, result) = parse("foo() -> ok.");
-        assert!(matches!(result, Ok(None)));
+        assert_matches!(result, Ok(None));
         // Cursor should be at the very start (unchanged).
         assert_eq!(cursor.peek().expect("token available").start().offset(), 0);
     }
@@ -835,7 +837,7 @@ mod tests {
     #[test]
     fn unknown_name_rolls_back() {
         let (mut cursor, result) = parse("-module(m).");
-        assert!(matches!(result, Ok(None)));
+        assert_matches!(result, Ok(None));
         // The very first token in the stream is still `-`.
         assert_eq!(
             cursor.bump().expect("token available").text("-module(m)."),
@@ -846,7 +848,7 @@ mod tests {
     #[test]
     fn unknown_name_rolls_back_hidden_tokens() {
         let (mut cursor, result) = parse("- % ??\n module (m).");
-        assert!(matches!(result, Ok(None)));
+        assert_matches!(result, Ok(None));
         // Hidden tokens before the `-` (none here) and between `-`
         // and `module` should still be visible when we walk the
         // cursor from scratch.
@@ -976,19 +978,19 @@ mod tests {
     #[test]
     fn ifdef_ifndef_directives() {
         let d = parse_ok("-ifdef(FOO).");
-        assert!(matches!(d, Directive::Ifdef { name, .. } if name.as_str() == "FOO"));
+        assert_matches!(d, Directive::Ifdef { name, .. } if name.as_str() == "FOO");
 
         let d = parse_ok("-ifndef(FOO).");
-        assert!(matches!(d, Directive::Ifndef { name, .. } if name.as_str() == "FOO"));
+        assert_matches!(d, Directive::Ifndef { name, .. } if name.as_str() == "FOO");
     }
 
     #[test]
     fn else_endif_directives() {
         let d = parse_ok("-else.");
-        assert!(matches!(d, Directive::Else { .. }));
+        assert_matches!(d, Directive::Else { .. });
 
         let d = parse_ok("-endif.");
-        assert!(matches!(d, Directive::Endif { .. }));
+        assert_matches!(d, Directive::Endif { .. });
     }
 
     #[test]
@@ -1010,7 +1012,7 @@ mod tests {
     fn missing_dot_errors() {
         let (_c, result) = parse("-endif");
         let err = result.expect_err("missing `.` should be a parse error");
-        assert!(matches!(err.actual, ParseFailure::UnexpectedEof));
+        assert_matches!(err.actual, ParseFailure::UnexpectedEof);
         assert!(err.expected.contains('.'));
     }
 
@@ -1018,7 +1020,7 @@ mod tests {
     fn missing_close_paren_errors() {
         let (_c, result) = parse("-define(FOO, 1");
         let err = result.expect_err("missing `)` should be a parse error");
-        assert!(matches!(err.actual, ParseFailure::UnexpectedEof));
+        assert_matches!(err.actual, ParseFailure::UnexpectedEof);
     }
 
     #[test]
@@ -1178,6 +1180,6 @@ mod tests {
         // `-error(...)` benefits from the same fix.
         let text = "-error([ ) ]).";
         let d = parse_ok(text);
-        assert!(matches!(d, Directive::Error { .. }));
+        assert_matches!(d, Directive::Error { .. });
     }
 }

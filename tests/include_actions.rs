@@ -6,6 +6,7 @@
 //! nested include order, `erl_pp::Origin::Include` chain, empty-`erl_pp::Source`
 //! skip, and protocol-error paths.
 
+use core::assert_matches;
 use std::sync::Arc;
 
 fn build_source(name: &str, text: &str) -> erl_pp::Source {
@@ -81,7 +82,7 @@ fn resume_include_splices_include_before_parent_resumes() {
 after."#,
     );
     let event = step(&mut pp);
-    assert!(matches!(event, erl_pp::Event::AwaitingInclude(_)));
+    assert_matches!(event, erl_pp::Event::AwaitingInclude(_));
     pp.resume_include(build_source("h.hrl", "inside."))
         .expect("resume ok");
     // Include source: `inside.`
@@ -122,7 +123,7 @@ fn resume_include_with_empty_source_skips_content() {
 after."#,
     );
     let event = step(&mut pp);
-    assert!(matches!(event, erl_pp::Event::AwaitingInclude(_)));
+    assert_matches!(event, erl_pp::Event::AwaitingInclude(_));
     pp.resume_include(build_source("h.hrl", ""))
         .expect("resume ok");
     // Parent source next lexical token should be `after`.
@@ -170,7 +171,7 @@ fn include_source_tokens_carry_origin_include_chain() {
     };
     assert_eq!(*include_site, directive_span);
     assert_eq!(*kind, expected_kind);
-    assert!(matches!(**parent, erl_pp::Origin::Source));
+    assert_matches!(**parent, erl_pp::Origin::Source);
 }
 
 // ---------------------------------------------------------------------
@@ -261,7 +262,7 @@ fn resume_include_in_scanning_is_protocol_error() {
 fn resume_include_while_awaiting_macro_is_protocol_error() {
     let mut pp = make("?UNKNOWN.");
     let event = step(&mut pp);
-    assert!(matches!(event, erl_pp::Event::AwaitingMacroExpansion(_)));
+    assert_matches!(event, erl_pp::Event::AwaitingMacroExpansion(_));
     let err = pp
         .resume_include(build_source("x.hrl", "x."))
         .expect_err("resume_include while awaiting macro should fail");

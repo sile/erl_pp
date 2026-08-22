@@ -8,6 +8,7 @@
 #[expect(dead_code)]
 mod pbt_harness;
 
+use core::assert_matches;
 use noprop::{Ratio, Runner, TestCaseContext, TestResult};
 
 use pbt_harness::{
@@ -216,7 +217,7 @@ fn simple_program_reaches_complete_within_bounded_steps() -> TestResult {
         let text = sample_simple_program(ctx);
         let events = run_simple(build_source("b.erl", &text));
         assert!(events.len() < MAX_STEPS);
-        assert!(matches!(events.last(), Some(erl_pp::Event::Complete)));
+        assert_matches!(events.last(), Some(erl_pp::Event::Complete));
         if events.len() > 1 {
             saw_nonempty.hit();
         }
@@ -704,7 +705,7 @@ fn caller_macro_expansion_substitutes_response_source() -> TestResult {
                 erl_pp::Event::Token(t)
                     if t.token().kind().is_lexical() && t.text() == substitute =>
                 {
-                    assert!(matches!(t.origin(), erl_pp::Origin::CallerExpansion { .. }));
+                    assert_matches!(t.origin(), erl_pp::Origin::CallerExpansion { .. });
                     saw_substitute = true;
                 }
                 erl_pp::Event::Token(_) => {}
@@ -761,7 +762,7 @@ fn error_and_warning_surface_as_diagnostics() -> TestResult {
                             .any(|t| t.token().kind().is_lexical() && t.text() == atom),
                         "diagnostic did not carry the atom argument"
                     );
-                    assert!(matches!(*d.parent_origin, erl_pp::Origin::Source));
+                    assert_matches!(*d.parent_origin, erl_pp::Origin::Source);
                     got_diag = true;
                     match severity {
                         erl_pp::Severity::Error => saw_error.hit(),
