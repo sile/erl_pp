@@ -145,7 +145,9 @@ mod tests {
 
     fn make_cursor(text: &str) -> Cursor {
         let store = SourceStore::new();
-        let id = store.append(Source::from_text("main.erl", text));
+        let id = store.append(
+            Source::from_text("main.erl", text).expect("test input must scan without lex errors"),
+        );
         Cursor::new(id, store.get(id))
     }
 

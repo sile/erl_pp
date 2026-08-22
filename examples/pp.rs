@@ -56,14 +56,13 @@ fn main() -> noargs::Result<ExitCode> {
         include_paths.insert(0, dir.to_path_buf());
     }
 
-    let tokens = match scan_source(&text) {
-        Ok(tokens) => tokens,
+    let source = match erl_pp::Source::from_text(display, text) {
+        Ok(source) => source,
         Err(e) => {
             eprintln!("scan_token: {e}");
             return Ok(ExitCode::FAILURE);
         }
     };
-    let source = erl_pp::Source::new(display, text, tokens);
     let mut pp = erl_pp::Preprocessor::new([source]);
 
     loop {
@@ -117,19 +116,9 @@ fn main() -> noargs::Result<ExitCode> {
     Ok(ExitCode::SUCCESS)
 }
 
-fn scan_source(text: &str) -> Result<Vec<erl_tokenize::Token>, String> {
-    let mut tokens = Vec::new();
-    let mut pos = erl_tokenize::Position::new();
-    loop {
-        match erl_tokenize::scan_token(text, pos) {
-            Ok(Some(t)) => {
-                pos = t.end();
-                tokens.push(t);
-            }
-            Ok(None) => return Ok(tokens),
-            Err(e) => return Err(format!("{e}")),
-        }
-    }
+fn load_source(path: &Path) -> Result<erl_pp::Source, String> {
+    let text = fs::read_to_string(path).map_err(|e| format!("read: {e}"))?;
+    erl_pp::Source::from_text(path.to_string_lossy().into_owned(), text).map_err(|e| format!("{e}"))
 }
 
 fn resolve_include(
@@ -150,16 +139,6 @@ fn resolve_include(
             empty_source(raw_path)
         }
     }
-}
-
-fn load_source(path: &Path) -> Result<erl_pp::Source, String> {
-    let text = fs::read_to_string(path).map_err(|e| format!("read: {e}"))?;
-    let tokens = scan_source(&text)?;
-    Ok(erl_pp::Source::new(
-        path.to_string_lossy().into_owned(),
-        text,
-        tokens,
-    ))
 }
 
 fn empty_source(name: &str) -> erl_pp::Source {

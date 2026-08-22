@@ -117,7 +117,9 @@ mod tests {
     fn methods_expose_bundled_state() {
         let store = SourceStore::new();
         let text = "foo";
-        let source_id = store.append(Source::from_text("m.erl", text));
+        let source_id = store.append(
+            Source::from_text("m.erl", text).expect("test input must scan without lex errors"),
+        );
         let source = store.get(source_id);
         let token = scan_one(text);
 
@@ -138,7 +140,9 @@ mod tests {
     fn text_survives_source_store_growth() {
         let store = Arc::new(SourceStore::new());
         let text = "bar";
-        let source_id = store.append(Source::from_text("m.erl", text));
+        let source_id = store.append(
+            Source::from_text("m.erl", text).expect("test input must scan without lex errors"),
+        );
         let source = store.get(source_id);
         let token = scan_one(text);
 
@@ -147,10 +151,10 @@ mod tests {
         // Grow the store from another handle; the token still resolves
         // through the Arc<Source> it captured.
         for i in 0..32 {
-            store.append(Source::from_text(
-                format!("extra{i}.erl"),
-                format!("body {i}"),
-            ));
+            store.append(
+                Source::from_text(format!("extra{i}.erl"), format!("body {i}"))
+                    .expect("test input must scan without lex errors"),
+            );
         }
         assert_eq!(tok.text(), "bar");
     }
@@ -158,7 +162,9 @@ mod tests {
     #[test]
     fn clone_shares_source_arc() {
         let store = SourceStore::new();
-        let source_id = store.append(Source::from_text("m.erl", "baz"));
+        let source_id = store.append(
+            Source::from_text("m.erl", "baz").expect("test input must scan without lex errors"),
+        );
         let source = store.get(source_id);
         let token = scan_one("baz");
 

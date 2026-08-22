@@ -46,10 +46,13 @@ impl SourceId {
 /// Synthesized "pseudo" sources used for macro expansion also live here
 /// with a display name that marks them as synthesized.
 ///
-/// Tokenization is the caller's responsibility. Scan `text` with
-/// [`erl_tokenize::scan_token`] (or a compatible tokenizer, or a
-/// shared cache) and pass the resulting [`Vec<Token>`] to
-/// [`Source::new`].
+/// Build with [`Source::from_text`] to scan Erlang text using
+/// [`erl_tokenize::scan_token`], or with [`Source::new`] when you
+/// already have a token stream from a custom tokenizer or cache, or
+/// when your caller scans manually and keeps going after lexical errors
+/// (formatters, linters, and language servers that tolerate partial
+/// input often do this). Lexical errors from [`Source::from_text`] are
+/// returned to the caller; they never reach [`crate::Preprocessor::step`].
 #[derive(Debug, Clone)]
 pub struct Source {
     display_name: Arc<str>,
@@ -92,26 +95,27 @@ impl Source {
     pub fn tokens(&self) -> &[Token] {
         &self.tokens
     }
-}
 
-#[cfg(test)]
-impl Source {
-    /// Test-only convenience: scans `text` with
-    /// [`erl_tokenize::scan_token`] and returns a `Source`. Panics on
-    /// a lexical failure so tests do not need to name a well-formed
-    /// token stream inline.
-    pub(crate) fn from_text<N, T>(display_name: N, text: T) -> Self
+    /// Scans `text` with [`erl_tokenize::scan_token`] and returns a
+    /// [`Source`].
+    ///
+    /// Convenience for callers that do not need a custom tokenizer or
+    /// cached token stream. Use [`Source::new`] when you already have
+    /// tokens from another path, or when you scan manually and resume
+    /// past lexical errors for partial-error tolerance (e.g. formatters,
+    /// linters, or LSP servers). Lexical errors are returned here;
+    /// they never reach [`crate::Preprocessor::step`].
+    pub fn from_text<N, T>(display_name: N, text: T) -> Result<Self, erl_tokenize::Error>
     where
         N: Into<Arc<str>>,
         T: Into<Arc<str>>,
     {
         let text = text.into();
+        let display_name = display_name.into();
         let mut tokens = Vec::new();
         let mut position = Position::new();
         loop {
-            match erl_tokenize::scan_token(&text, position)
-                .expect("test input must scan without lex errors")
-            {
+            match erl_tokenize::scan_token(&text, position)? {
                 None => break,
                 Some(token) => {
                     position = token.end();
@@ -119,7 +123,7 @@ impl Source {
                 }
             }
         }
-        Self::new(display_name, text, tokens)
+        Ok(Self::new(display_name, text, tokens))
     }
 }
 
@@ -215,7 +219,8 @@ mod tests {
 
     #[test]
     fn clone_shares_text() {
-        let src = Source::from_text("main.erl", "foo");
+        let src =
+            Source::from_text("main.erl", "foo").expect("test input must scan without lex errors");
         let cloned = src.clone();
         assert!(std::ptr::eq(src.text(), cloned.text()));
         assert!(std::ptr::eq(src.display_name(), cloned.display_name()));
@@ -227,7 +232,8 @@ mod tests {
 
     #[test]
     fn from_text_scans_tokens() {
-        let src = Source::from_text("main.erl", "foo bar");
+        let src = Source::from_text("main.erl", "foo bar")
+            .expect("test input must scan without lex errors");
         // foo, whitespace, bar
         assert_eq!(src.tokens().len(), 3);
     }
@@ -236,7 +242,8 @@ mod tests {
     fn new_accepts_external_tokens() {
         // Same tokens as would come from from_text but constructed via
         // Source::new to prove the two paths converge.
-        let scanned = Source::from_text("main.erl", "foo bar");
+        let scanned = Source::from_text("main.erl", "foo bar")
+            .expect("test input must scan without lex errors");
         let by_new = Source::new("main.erl", "foo bar", scanned.tokens().to_vec());
         assert_eq!(by_new.tokens().len(), scanned.tokens().len());
     }
@@ -246,8 +253,12 @@ mod tests {
         let store = SourceStore::new();
         assert!(store.is_empty());
 
-        let id_a = store.append(Source::from_text("a.erl", "a"));
-        let id_b = store.append(Source::from_text("b.erl", "bb"));
+        let id_a = store.append(
+            Source::from_text("a.erl", "a").expect("test input must scan without lex errors"),
+        );
+        let id_b = store.append(
+            Source::from_text("b.erl", "bb").expect("test input must scan without lex errors"),
+        );
         assert_ne!(id_a, id_b);
         assert_eq!(store.len(), 2);
 
@@ -259,12 +270,17 @@ mod tests {
     #[test]
     fn stable_addresses_after_further_append() {
         let store = SourceStore::new();
-        let id = store.append(Source::from_text("a.erl", "hello"));
+        let id = store.append(
+            Source::from_text("a.erl", "hello").expect("test input must scan without lex errors"),
+        );
         let first = store.get(id);
         let first_ptr = first.text().as_ptr();
 
         for i in 0..64 {
-            store.append(Source::from_text(format!("f{i}.erl"), format!("body {i}")));
+            store.append(
+                Source::from_text(format!("f{i}.erl"), format!("body {i}"))
+                    .expect("test input must scan without lex errors"),
+            );
         }
 
         let after = store.get(id);
@@ -278,10 +294,16 @@ mod tests {
         let store = Arc::new(SourceStore::new());
         let fork = Arc::clone(&store);
 
-        let id = store.append(Source::from_text("main.erl", "-module(m)."));
+        let id = store.append(
+            Source::from_text("main.erl", "-module(m).")
+                .expect("test input must scan without lex errors"),
+        );
         assert_eq!(fork.get(id).text(), "-module(m).");
 
-        let fork_id = fork.append(Source::from_text("inc.hrl", "-define(X, 1)."));
+        let fork_id = fork.append(
+            Source::from_text("inc.hrl", "-define(X, 1).")
+                .expect("test input must scan without lex errors"),
+        );
         assert_eq!(store.get(fork_id).text(), "-define(X, 1).");
         assert_eq!(store.len(), 2);
         assert_eq!(fork.len(), 2);

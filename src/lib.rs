@@ -32,13 +32,7 @@
 //! ```
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let text = "atom, foo, bar.";
-//! let mut tokens = Vec::new();
-//! let mut position = erl_tokenize::Position::new();
-//! while let Some(t) = erl_tokenize::scan_token(text, position)? {
-//!     position = t.end();
-//!     tokens.push(t);
-//! }
-//! let source = erl_pp::Source::new("example.erl", text, tokens);
+//! let source = erl_pp::Source::from_text("example.erl", text)?;
 //! let mut pp = erl_pp::Preprocessor::new([source]);
 //!
 //! let mut lexical = Vec::<String>::new();
