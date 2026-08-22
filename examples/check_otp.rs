@@ -102,11 +102,11 @@ fn run_one(
             };
         }
     };
-    let source = match erl_pp::Source::from_text(display, src) {
-        Ok(source) => source,
+    let source = match erl_tokenize::scan_tokens(&src) {
+        Ok(tokens) => erl_pp::Source::new(display, src, tokens),
         Err(e) => {
             return FileOutcome::Failed {
-                reason: format!("scan_token: {e}"),
+                reason: format!("scan_tokens: {e}"),
             };
         }
     };
@@ -184,18 +184,19 @@ fn resolve_include(
     let raw_path = include.path.as_str();
     match erl_pp::open_include(include, include_paths, erl_libs) {
         Ok(path) => match fs::read_to_string(&path) {
-            Ok(text) => {
-                match erl_pp::Source::from_text(path.to_string_lossy().into_owned(), text) {
-                    Ok(source) => (source, None),
-                    Err(e) => (
-                        empty_source(raw_path),
-                        Some(format!(
-                            "include scan_token failed for {}: {e}",
-                            path.display()
-                        )),
-                    ),
-                }
-            }
+            Ok(text) => match erl_tokenize::scan_tokens(&text) {
+                Ok(tokens) => (
+                    erl_pp::Source::new(path.to_string_lossy().into_owned(), text, tokens),
+                    None,
+                ),
+                Err(e) => (
+                    empty_source(raw_path),
+                    Some(format!(
+                        "include scan_tokens failed for {}: {e}",
+                        path.display()
+                    )),
+                ),
+            },
             Err(e) => (
                 empty_source(raw_path),
                 Some(format!("include read failed for {}: {e}", path.display())),

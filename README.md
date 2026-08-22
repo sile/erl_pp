@@ -7,7 +7,7 @@ erl_pp
 ![License](https://img.shields.io/crates/l/erl_pp)
 
 Erlang source code preprocessor. A Sans-I/O state machine for language
-tools: the caller tokenizes (`erl_tokenize::scan_token`), performs I/O,
+tools: the caller tokenizes (`erl_tokenize::scan_tokens`), performs I/O,
 include search, `-if` / `-elif` evaluation, and unknown-macro meaning.
 This crate advances directives, the macro table, and the condition stack.
 
@@ -20,7 +20,7 @@ Tokenize, wrap in `Source`, loop on `Preprocessor::step`.
 ```rust
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let text = "atom, foo, bar.";
-    let source = erl_pp::Source::from_text("example.erl", text)?;
+    let source = erl_pp::Source::new("example.erl", text, erl_tokenize::scan_tokens(text)?);
     let mut pp = erl_pp::Preprocessor::new([source]);
 
     let mut lexical = Vec::<String>::new();

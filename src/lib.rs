@@ -1,7 +1,7 @@
 //! Erlang source code preprocessor.
 //!
 //! A Sans-I/O state machine for language tools. The caller tokenizes
-//! ([`erl_tokenize::scan_token`]), performs I/O, searches for includes,
+//! ([`erl_tokenize::scan_tokens`]), performs I/O, searches for includes,
 //! evaluates `-if` / `-elif`, and decides what unknown macros mean.
 //! This crate advances directives, the macro table, and the condition
 //! stack.
@@ -32,7 +32,7 @@
 //! ```
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let text = "atom, foo, bar.";
-//! let source = erl_pp::Source::from_text("example.erl", text)?;
+//! let source = erl_pp::Source::new("example.erl", text, erl_tokenize::scan_tokens(text)?);
 //! let mut pp = erl_pp::Preprocessor::new([source]);
 //!
 //! let mut lexical = Vec::<String>::new();

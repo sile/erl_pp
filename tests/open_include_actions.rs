@@ -46,8 +46,11 @@ impl Drop for TempDir {
 }
 
 fn take_include_directive(source_text: &str) -> erl_pp::IncludeDirective {
-    let source = erl_pp::Source::from_text("caller.erl", source_text.to_string())
-        .expect("tokenize test input");
+    let source = erl_pp::Source::new(
+        "caller.erl",
+        source_text,
+        erl_tokenize::scan_tokens(source_text).expect("tokenize test input"),
+    );
     let mut pp = erl_pp::Preprocessor::new([source]);
     loop {
         match pp.step().expect("no protocol error") {

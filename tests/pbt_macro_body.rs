@@ -188,13 +188,7 @@ fn parse_define_body(body: &str) -> Result<usize, DriveError> {
 }
 
 fn scan_all(text: &str) -> Result<Vec<erl_tokenize::Token>, erl_tokenize::Error> {
-    let mut tokens = Vec::new();
-    let mut position = erl_tokenize::Position::new();
-    while let Some(token) = erl_tokenize::scan_token(text, position)? {
-        position = token.end();
-        tokens.push(token);
-    }
-    Ok(tokens)
+    erl_tokenize::scan_tokens(text)
 }
 
 #[derive(Debug)]
