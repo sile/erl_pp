@@ -1,3 +1,5 @@
+mod predef;
+
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -26,6 +28,7 @@ fn main() -> noargs::Result<ExitCode> {
 
     let erl_libs = vec![root.join("lib")];
     let global_include_dirs = collect_app_include_dirs(&root);
+    let otp_release = predef::otp_release_from_env();
     let mut ok_files = 0usize;
     let mut err_files = 0usize;
     let mut event_total = 0usize;
@@ -41,7 +44,7 @@ fn main() -> noargs::Result<ExitCode> {
             .to_string_lossy()
             .into_owned();
         let include_paths = build_include_paths(path, &root, &global_include_dirs);
-        match run_one(path, &display, &include_paths, &erl_libs) {
+        match run_one(path, &display, &include_paths, &erl_libs, otp_release) {
             FileOutcome::Ok {
                 events,
                 tokens,
@@ -93,6 +96,7 @@ fn run_one(
     display: &str,
     include_paths: &[PathBuf],
     erl_libs: &[PathBuf],
+    otp_release: Option<u32>,
 ) -> FileOutcome {
     let src = match fs::read_to_string(path) {
         Ok(s) => s,
@@ -111,6 +115,7 @@ fn run_one(
         }
     };
     let mut pp = erl_pp::Preprocessor::new([source]);
+    let mut predef = predef::PredefContext::new(otp_release);
 
     let mut events = 0usize;
     let mut token_count = 0usize;
@@ -124,7 +129,10 @@ fn run_one(
             .expect("Preprocessor::step must not return ProtocolError");
         events += 1;
         match event {
-            erl_pp::Event::Token(_) => token_count += 1,
+            erl_pp::Event::Token(t) => {
+                token_count += 1;
+                predef.on_token(&t);
+            }
             erl_pp::Event::MacroDefined(_) | erl_pp::Event::MacroUndefined(_) => {}
             erl_pp::Event::AwaitingInclude(req) => {
                 let (included_source, load_failure) =
@@ -139,16 +147,32 @@ fn run_one(
             }
             erl_pp::Event::AwaitingConditional(req) => {
                 let branch = match req {
-                    erl_pp::Conditional::Ifdef(d) | erl_pp::Conditional::Ifndef(d) => d.recommended,
-                    erl_pp::Conditional::If(_) | erl_pp::Conditional::Elif(_) => {
-                        erl_pp::Branch::Else
-                    }
+                    erl_pp::Conditional::Ifdef(d) => match predef.ifdef_defined(d.name.as_str()) {
+                        Some(true) => erl_pp::Branch::Then,
+                        Some(false) => erl_pp::Branch::Else,
+                        None => d.recommended,
+                    },
+                    erl_pp::Conditional::Ifndef(d) => match predef.ifdef_defined(d.name.as_str()) {
+                        Some(true) => erl_pp::Branch::Else,
+                        Some(false) => erl_pp::Branch::Then,
+                        None => d.recommended,
+                    },
+                    erl_pp::Conditional::If(c) | erl_pp::Conditional::Elif(c) => predef
+                        .if_branch(&c.condition_tokens, pp.macros())
+                        .unwrap_or(erl_pp::Branch::Else),
                 };
                 pp.resume_conditional(branch)
                     .expect("resume_conditional after AwaitingConditional");
             }
-            erl_pp::Event::AwaitingMacroExpansion(_) => {
-                pp.resume_macro_expansion(empty_source("<caller-driven>"))
+            erl_pp::Event::AwaitingMacroExpansion(call) => {
+                let source = match predef.expansion_text(&call) {
+                    Ok(text) => match erl_tokenize::scan_tokens(&text) {
+                        Ok(tokens) => erl_pp::Source::new("<predef>", text, tokens),
+                        Err(_) => empty_source("<predef>"),
+                    },
+                    Err(_) => empty_source("<caller-driven>"),
+                };
+                pp.resume_macro_expansion(source)
                     .expect("resume_macro_expansion after AwaitingMacroExpansion");
             }
             erl_pp::Event::BranchBoundary(_) => {}
@@ -351,17 +375,9 @@ fn is_skipped(path: &Path) -> bool {
         return true;
     }
     // Individual files inside the target set that reach for a header
-    // produced by the OTP build, a cross-application bare
-    // `-include(...)`, or use `-if` / `-elif` (not supported by the
-    // preprocessor and left as raw tokens, unbalancing the
-    // surrounding `-endif` / `-else`).
+    // produced by the OTP build or a cross-application bare
+    // `-include(...)`.
     const INDIVIDUAL_SKIPS: &[&str] = &[
-        // -if / -elif (unsupported by the preprocessor).
-        "/lib/compiler/src/beam_ssa_alias.erl",
-        "/lib/compiler/src/beam_ssa_alias_debug.hrl",
-        "/lib/compiler/src/beam_ssa_ss.erl",
-        "/lib/stdlib/src/graph.erl",
-        "/lib/stdlib/src/peer.erl",
         // Build-generated `beam_opcodes.hrl`.
         "/lib/compiler/src/beam_asm.erl",
         "/lib/compiler/src/beam_disasm.erl",
