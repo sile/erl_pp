@@ -257,7 +257,9 @@ impl Preprocessor {
     ///
     /// The constructor does not parse or insert macros. A leading
     /// `-define(...)` source is scanned like any other and surfaces
-    /// as [`Event::MacroDefined`].
+    /// as [`Event::MacroDefined`]. To seed environment macros such as
+    /// `?MACHINE` / `?OTP_RELEASE` before the main file, prepend that
+    /// source to the iterator; see [`crate::docs::recipes`].
     pub fn new<I>(sources: I) -> Self
     where
         I: IntoIterator<Item = Source>,

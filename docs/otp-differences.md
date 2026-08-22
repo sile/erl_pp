@@ -70,6 +70,9 @@ compiler has all of them).
 `?FILE` and `?LINE` are shadowable by a matching `-define`, which
 is what OTP does as well.
 
+**See also.** [`docs::recipes`](crate::docs::recipes) — seed
+`?MACHINE` / `?OTP_RELEASE` with a leading `-define` source.
+
 ### Empty resume deletes the call
 
 OTP's epp treats an undefined macro as a preprocessor error. erl_pp

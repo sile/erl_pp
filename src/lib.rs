@@ -99,6 +99,9 @@
 //! error. Drop without `resume_*` if abandoning a wait; do not
 //! [`Preprocessor::step`] while awaiting.
 //!
+//! Copy-paste driver recipes (seed macros, and more as they are added)
+//! live in [`docs::recipes`].
+//!
 //! Lexical errors never reach [`Preprocessor::step`]. Inactive-branch
 //! `-define`, includes, diagnostics, unknown macros, and parse failures
 //! do not surface. Include failure is not a preprocessor error. A
