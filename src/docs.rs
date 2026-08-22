@@ -8,3 +8,7 @@
 /// between erl_pp and OTP `epp`.
 #[doc = include_str!("../docs/otp-differences.md")]
 pub mod otp_differences {}
+
+/// Task-oriented recipes for building preprocessor drivers.
+#[doc = include_str!("../docs/recipes.md")]
+pub mod recipes {}

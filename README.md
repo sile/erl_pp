@@ -41,7 +41,9 @@ OTP 29.0 path resolution and returns a path, not a file handle.
 
 Each `Event` variant documents its contract. The [crate rustdoc](https://docs.rs/erl_pp)
 covers the `step` driver, typical compiler vs formatter / linter
-policies, and how to continue after input failure.
+policies, how to continue after input failure, and
+[`docs::recipes`](https://docs.rs/erl_pp/erl_pp/docs/recipes/index.html)
+for task-oriented driver patterns.
 
 `examples/pp.rs` prints lexical tokens from a file or stdin.
 `examples/check_otp.rs` walks an OTP tree; it is not an introduction.
