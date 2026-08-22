@@ -56,10 +56,10 @@ fn main() -> noargs::Result<ExitCode> {
         include_paths.insert(0, dir.to_path_buf());
     }
 
-    let source = match erl_pp::Source::from_text(display, text) {
-        Ok(source) => source,
+    let source = match erl_tokenize::scan_tokens(&text) {
+        Ok(tokens) => erl_pp::Source::new(display, text, tokens),
         Err(e) => {
-            eprintln!("scan_token: {e}");
+            eprintln!("scan_tokens: {e}");
             return Ok(ExitCode::FAILURE);
         }
     };
@@ -118,7 +118,12 @@ fn main() -> noargs::Result<ExitCode> {
 
 fn load_source(path: &Path) -> Result<erl_pp::Source, String> {
     let text = fs::read_to_string(path).map_err(|e| format!("read: {e}"))?;
-    erl_pp::Source::from_text(path.to_string_lossy().into_owned(), text).map_err(|e| format!("{e}"))
+    let tokens = erl_tokenize::scan_tokens(&text).map_err(|e| format!("{e}"))?;
+    Ok(erl_pp::Source::new(
+        path.to_string_lossy().into_owned(),
+        text,
+        tokens,
+    ))
 }
 
 fn resolve_include(

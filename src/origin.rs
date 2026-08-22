@@ -152,9 +152,11 @@ mod tests {
 
     fn dummy_span() -> SourceSpan {
         let store = SourceStore::new();
-        let id = store.append(
-            Source::from_text("m.erl", "x").expect("test input must scan without lex errors"),
-        );
+        let id = store.append(Source::new(
+            "m.erl",
+            "x",
+            erl_tokenize::scan_tokens("x").expect("test input must scan without lex errors"),
+        ));
         SourceSpan::new(
             id,
             erl_tokenize::Position::new(),

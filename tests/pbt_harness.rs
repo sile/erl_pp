@@ -63,7 +63,11 @@ impl LabelSet {
 
 /// Build an in-memory [`erl_pp::Source`] with the given display name and text.
 pub fn build_source(name: &str, text: &str) -> erl_pp::Source {
-    erl_pp::Source::from_text(name, text).expect("generated source scans cleanly")
+    erl_pp::Source::new(
+        name,
+        text,
+        erl_tokenize::scan_tokens(text).expect("generated source scans cleanly"),
+    )
 }
 
 // ============================================================

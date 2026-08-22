@@ -29,7 +29,7 @@ so they behave like OTP predefined macros in the caller's environment
 instead of firing [`Event::AwaitingMacroExpansion`](crate::Event::AwaitingMacroExpansion)
 on every use.
 
-**Uses.** [`Source::from_text`](crate::Source::from_text),
+**Uses.** [`erl_tokenize::scan_tokens`], [`Source::new`](crate::Source::new),
 [`Preprocessor::new`](crate::Preprocessor::new),
 [`Event::MacroDefined`](crate::Event::MacroDefined),
 [`Event::AwaitingConditional`](crate::Event::AwaitingConditional),
@@ -41,11 +41,12 @@ let seed_text = concat!(
     "-define(MACHINE, \"beam\").\n",
     "-define(OTP_RELEASE, \"29\").\n",
 );
-let seed = erl_pp::Source::from_text("<seed>", seed_text)?;
-let main = erl_pp::Source::from_text(
+let seed = erl_pp::Source::new("<seed>", seed_text, erl_tokenize::scan_tokens(seed_text)?);
+let main = erl_pp::Source::new(
     "module.erl",
     "-ifdef(MACHINE).\n?MACHINE.\n-endif.\n",
-)?;
+    erl_tokenize::scan_tokens("-ifdef(MACHINE).\n?MACHINE.\n-endif.\n")?,
+);
 let mut pp = erl_pp::Preprocessor::new([seed, main]);
 
 let mut defines = 0usize;
