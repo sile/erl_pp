@@ -445,6 +445,8 @@ fn count_call_args(rest: &[&SourceToken]) -> (usize, usize) {
 mod tests {
     use super::*;
 
+    use std::assert_matches;
+
     use crate::directive::{Directive, parse_directive};
     use crate::error::PreprocessError;
     use crate::source::SourceStore;
@@ -534,7 +536,7 @@ mod tests {
         assert!(def.replacement.iter().any(|t| t.text() == "bar"));
         for t in &def.replacement {
             assert_eq!(t.source_span().source_id, source_id);
-            assert!(matches!(t.origin(), Origin::Source));
+            assert_matches!(t.origin(), Origin::Source);
             assert!(Arc::ptr_eq(t.source(), &source));
         }
     }

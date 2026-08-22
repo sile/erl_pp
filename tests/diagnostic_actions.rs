@@ -1,6 +1,7 @@
 //! Integration tests for `-error` / `-warning` surfacing as
 //! `erl_pp::Event::Diagnostic`.
 
+use std::assert_matches;
 use std::sync::Arc;
 
 fn build_source(name: &str, text: &str) -> erl_pp::Source {
@@ -123,7 +124,7 @@ fn diagnostic_does_not_pend_the_state_machine() {
 fn error_directive_does_not_emit_macro_events() {
     let mut pp = make("-error(oops).");
     let event = step(&mut pp);
-    assert!(matches!(event, erl_pp::Event::Diagnostic(_)));
+    assert_matches!(event, erl_pp::Event::Diagnostic(_));
     loop {
         match step(&mut pp) {
             erl_pp::Event::Complete => break,
@@ -217,7 +218,7 @@ fn diagnostic_parent_origin_matches_current_source() {
     let mut pp = make(r#"-error("x")."#);
     let diag = diagnostic_or_panic(step(&mut pp));
     // Top-level source: parent_origin is erl_pp::Origin::Source.
-    assert!(matches!(*diag.parent_origin, erl_pp::Origin::Source));
+    assert_matches!(*diag.parent_origin, erl_pp::Origin::Source);
     // directive_span sits on the top-level source; every argument
     // token also shares that SourceId.
     let src_id = diag.directive_span.source_id;
@@ -238,13 +239,13 @@ fn diagnostic_inside_include_carries_include_origin() {
     let diag = diagnostic_or_panic(step(&mut pp));
     match &*diag.parent_origin {
         erl_pp::Origin::Include { parent, .. } => {
-            assert!(matches!(**parent, erl_pp::Origin::Source));
+            assert_matches!(**parent, erl_pp::Origin::Source);
         }
         other => panic!("expected erl_pp::Origin::Include, got {other:?}"),
     }
     // Every argument token also gets the same include origin.
     for t in &diag.arguments {
-        assert!(matches!(t.origin(), erl_pp::Origin::Include { .. }));
+        assert_matches!(t.origin(), erl_pp::Origin::Include { .. });
     }
     // Sanity: Arc-share between diag.parent_origin and the token's origin.
     if let Some(first_arg) = diag.arguments.first() {

@@ -103,6 +103,8 @@ impl SourceToken {
 mod tests {
     use super::*;
 
+    use std::assert_matches;
+
     use erl_tokenize::{Position, scan_token};
 
     use crate::source::SourceStore;
@@ -127,13 +129,13 @@ mod tests {
 
         assert_eq!(*tok.token(), token);
         assert_eq!(tok.text(), "foo");
-        assert!(matches!(tok.value(), TokenValue::Atom(a) if a.as_ref() == "foo"));
+        assert_matches!(tok.value(), TokenValue::Atom(a) if a.as_ref() == "foo");
         assert!(Arc::ptr_eq(tok.source(), &source));
         let span = tok.source_span();
         assert_eq!(span.source_id, source_id);
         assert_eq!(span.start.offset(), 0);
         assert_eq!(span.end.offset(), text.len());
-        assert!(matches!(tok.origin(), Origin::Source));
+        assert_matches!(tok.origin(), Origin::Source);
     }
 
     #[test]

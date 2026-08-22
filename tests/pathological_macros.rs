@@ -7,6 +7,8 @@
 //! test either locks a currently-working behaviour or documents a
 //! known limitation that a follow-up change will lift.
 
+use std::assert_matches;
+
 fn build_source(name: &str, text: &str) -> erl_pp::Source {
     erl_pp::Source::from_text(name, text).expect("test input scans without lex errors")
 }
@@ -294,13 +296,13 @@ fn line_inside_macro_body_uses_outer_caller_line() {
         erl_pp::Event::Complete => panic!("expected integer synth token `3`"),
         _ => None,
     });
-    assert!(matches!(
+    assert_matches!(
         ppt.origin(),
         erl_pp::Origin::SourceInfo {
             kind: erl_pp::SourceInfoMacroKind::Line,
             ..
         }
-    ));
+    );
 }
 
 // ---------------------------------------------------------------------

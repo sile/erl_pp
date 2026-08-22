@@ -527,11 +527,11 @@ impl Preprocessor {
         if self.condition_collect.is_none() && self.is_in_inactive_branch() {
             return StepAction::Fall;
         }
-        let head_is_question = matches!(
-            self.expansion_queue.front(),
-            Some(ppt) if is_symbol(*ppt.token(), Symbol::Question)
-        );
-        if !head_is_question {
+        if !self
+            .expansion_queue
+            .front()
+            .is_some_and(|ppt| is_symbol(*ppt.token(), Symbol::Question))
+        {
             return StepAction::Fall;
         }
         match self.try_rescan_queue_call() {
@@ -1010,11 +1010,11 @@ impl Preprocessor {
         if self.is_in_inactive_branch() {
             return StepAction::Fall;
         }
-        let peek_is_question = matches!(
-            self.cursor_mut().peek(),
-            Some(t) if is_symbol(t, Symbol::Question)
-        );
-        if !peek_is_question {
+        if !self
+            .cursor_mut()
+            .peek()
+            .is_some_and(|t| is_symbol(t, Symbol::Question))
+        {
             return StepAction::Fall;
         }
         match self.try_recognize_macro_call() {
@@ -1102,10 +1102,10 @@ impl Preprocessor {
         // Peek one lexical token ahead. `(` starts a function-like
         // call; anything else keeps the constant-like shape.
         let inner = self.cursor_mut().checkpoint();
-        let is_function_like = matches!(
-            self.cursor_mut().peek_lexical(),
-            Some(t) if is_symbol(t, Symbol::OpenParen)
-        );
+        let is_function_like = self
+            .cursor_mut()
+            .peek_lexical()
+            .is_some_and(|t| is_symbol(t, Symbol::OpenParen));
         self.cursor_mut().restore(inner);
 
         if !is_function_like {
@@ -1376,14 +1376,17 @@ impl Preprocessor {
             found
         };
         let is_function_like_in_queue =
-            matches!(after_name_lex, Some(t) if is_symbol(t, Symbol::OpenParen));
+            after_name_lex.is_some_and(|t| is_symbol(t, Symbol::OpenParen));
         // Ambiguous straddling case: the queue holds `?NAME` (plus
         // maybe hidden tokens) with no lexical follow-up, and the
         // source cursor immediately shows `(`. Bail — otherwise a
         // trailing `?FOO` inside a body would swallow the outer
         // `(...)`.
         if after_name_lex.is_none()
-            && matches!(self.cursor_mut().peek_lexical(), Some(t) if is_symbol(t, Symbol::OpenParen))
+            && self
+                .cursor_mut()
+                .peek_lexical()
+                .is_some_and(|t| is_symbol(t, Symbol::OpenParen))
         {
             return MacroCallOutcome::NotACall;
         }
@@ -2108,25 +2111,25 @@ fn parse_macro_arguments<S: ArgTokenSource>(
                 Symbol::DoubleLeftAngle => stack.push(Delimiter::CloseDoubleAngle),
                 Symbol::CloseParen => {
                     pop_fun_ends(&mut stack);
-                    if matches!(stack.last(), Some(Delimiter::CloseParen)) {
+                    if stack.last() == Some(&Delimiter::CloseParen) {
                         stack.pop();
                     }
                 }
                 Symbol::CloseSquare => {
                     pop_fun_ends(&mut stack);
-                    if matches!(stack.last(), Some(Delimiter::CloseSquare)) {
+                    if stack.last() == Some(&Delimiter::CloseSquare) {
                         stack.pop();
                     }
                 }
                 Symbol::CloseBrace => {
                     pop_fun_ends(&mut stack);
-                    if matches!(stack.last(), Some(Delimiter::CloseBrace)) {
+                    if stack.last() == Some(&Delimiter::CloseBrace) {
                         stack.pop();
                     }
                 }
                 Symbol::DoubleRightAngle => {
                     pop_fun_ends(&mut stack);
-                    if matches!(stack.last(), Some(Delimiter::CloseDoubleAngle)) {
+                    if stack.last() == Some(&Delimiter::CloseDoubleAngle) {
                         stack.pop();
                     }
                 }
@@ -2143,7 +2146,9 @@ fn parse_macro_arguments<S: ArgTokenSource>(
                 | Keyword::Cond => stack.push(Delimiter::End),
                 Keyword::Fun => stack.push(Delimiter::FunEnd),
                 Keyword::End => {
-                    if matches!(stack.last(), Some(Delimiter::End) | Some(Delimiter::FunEnd)) {
+                    if stack.last() == Some(&Delimiter::End)
+                        || stack.last() == Some(&Delimiter::FunEnd)
+                    {
                         stack.pop();
                     }
                 }
@@ -2156,7 +2161,7 @@ fn parse_macro_arguments<S: ArgTokenSource>(
 }
 
 fn pop_fun_ends(stack: &mut Vec<Delimiter>) {
-    while matches!(stack.last(), Some(Delimiter::FunEnd)) {
+    while stack.last() == Some(&Delimiter::FunEnd) {
         stack.pop();
     }
 }
@@ -2185,6 +2190,8 @@ impl std::fmt::Debug for Preprocessor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::assert_matches;
 
     use crate::error::PreprocessError;
 
@@ -2216,24 +2223,15 @@ mod tests {
         let mut pp = make("");
         let events = drain(&mut pp);
         assert_eq!(events.len(), 1);
-        assert!(matches!(events[0], Event::Complete));
+        assert_matches!(events[0], Event::Complete);
     }
 
     #[test]
     fn complete_is_idempotent() {
         let mut pp = make("");
-        assert!(matches!(
-            pp.step().expect("no protocol error"),
-            Event::Complete
-        ));
-        assert!(matches!(
-            pp.step().expect("no protocol error"),
-            Event::Complete
-        ));
-        assert!(matches!(
-            pp.step().expect("no protocol error"),
-            Event::Complete
-        ));
+        assert_matches!(pp.step().expect("no protocol error"), Event::Complete);
+        assert_matches!(pp.step().expect("no protocol error"), Event::Complete);
+        assert_matches!(pp.step().expect("no protocol error"), Event::Complete);
     }
 
     #[test]
@@ -2489,21 +2487,21 @@ mod tests {
     fn function_like_call_leading_empty_is_error() {
         let mut pp = make("?FOO(, a).");
         let err = expect_preprocess_error(&mut pp);
-        assert!(matches!(err, PreprocessError::LeadingEmptyArgument { .. }));
+        assert_matches!(err, PreprocessError::LeadingEmptyArgument { .. });
     }
 
     #[test]
     fn function_like_call_trailing_empty_is_error() {
         let mut pp = make("?FOO(a, ).");
         let err = expect_preprocess_error(&mut pp);
-        assert!(matches!(err, PreprocessError::TrailingEmptyArgument { .. }));
+        assert_matches!(err, PreprocessError::TrailingEmptyArgument { .. });
     }
 
     #[test]
     fn function_like_call_unclosed_argument_is_error() {
         let mut pp = make("?FOO(a, b");
         let err = expect_preprocess_error(&mut pp);
-        assert!(matches!(err, PreprocessError::UnclosedArgument { .. }));
+        assert_matches!(err, PreprocessError::UnclosedArgument { .. });
     }
 
     #[test]
@@ -2545,10 +2543,7 @@ mod tests {
         let texts: Vec<&str> = streamed.iter().map(|t| t.text()).collect();
         assert_eq!(texts, ["foo", "bar"]);
         assert!(streamed.iter().all(|t| t.token().kind().is_lexical()));
-        assert!(matches!(
-            streamed[0].origin(),
-            crate::origin::Origin::Source
-        ));
+        assert_matches!(streamed[0].origin(), crate::origin::Origin::Source);
     }
 
     #[test]
@@ -2589,7 +2584,7 @@ mod tests {
         assert!(pp.macros().is_empty());
         // Directive tokens are consumed by the parser, not streamed.
         let complete = pp.step().expect("no protocol error");
-        assert!(matches!(complete, Event::Complete));
+        assert_matches!(complete, Event::Complete);
     }
 
     #[test]
@@ -2619,7 +2614,7 @@ mod tests {
         // the SourceStore but their cursors advance independently.
         let mut pp = make("foo bar");
         let first = pp.step().expect("no protocol error");
-        assert!(matches!(first, Event::Token(_)));
+        assert_matches!(first, Event::Token(_));
 
         let mut fork = pp.clone();
         assert!(Arc::ptr_eq(pp.sources(), fork.sources()));
@@ -2696,10 +2691,10 @@ mod tests {
     fn duplicate_parameter_surfaces_as_preprocess_error() {
         let mut pp = make("-define(BAD(A, A), A).");
         let event = pp.step().expect("no protocol error");
-        assert!(matches!(
+        assert_matches!(
             event,
             Event::PreprocessError(PreprocessError::DuplicateParameter { .. })
-        ));
+        );
         // The failing definition is not added to the table.
         assert!(pp.macros().is_empty());
     }
@@ -2709,7 +2704,7 @@ mod tests {
         let mut pp = Preprocessor::new([]);
         let events = drain(&mut pp);
         assert_eq!(events.len(), 1);
-        assert!(matches!(events[0], Event::Complete));
+        assert_matches!(events[0], Event::Complete);
     }
 
     #[test]
@@ -2747,7 +2742,7 @@ mod tests {
         match pp.step().expect("no protocol error") {
             Event::MacroDefined(_) => {
                 let def = pp.macros().get_constant("FOO").expect("defined");
-                assert!(matches!(def.origin, Origin::Source));
+                assert_matches!(def.origin, Origin::Source);
             }
             other => panic!("expected MacroDefined, got {other:?}"),
         }
@@ -2813,7 +2808,7 @@ mod tests {
                     };
                     // Parent is the `?BAR` token's origin, which was
                     // itself a MacroBody from the ?FOO expansion.
-                    assert!(matches!(**parent, Origin::MacroBody { .. }));
+                    assert_matches!(**parent, Origin::MacroBody { .. });
                     return;
                 }
                 Event::Complete => panic!("expected token `1` before Complete"),
@@ -2966,7 +2961,7 @@ mod tests {
             match pp.step().expect("no protocol errors") {
                 Event::Token(ppt) if ppt.text() == "[" => {
                     // `[` came from the definition body, not from an argument.
-                    assert!(matches!(ppt.origin(), Origin::MacroBody { .. }));
+                    assert_matches!(ppt.origin(), Origin::MacroBody { .. });
                     return;
                 }
                 Event::Complete => panic!("expected `[` token"),
@@ -3084,17 +3079,17 @@ mod tests {
                 Event::Token(ppt) if ppt.token().kind().is_lexical() => {
                     // The synth token should be a String whose decoded
                     // value is "main.erl".
-                    assert!(matches!(
+                    assert_matches!(
                         ppt.value(),
                         erl_tokenize::TokenValue::String(ref cow) if cow.as_ref() == "main.erl"
-                    ));
-                    assert!(matches!(
+                    );
+                    assert_matches!(
                         ppt.origin(),
                         Origin::SourceInfo {
                             kind: SourceInfoMacroKind::File,
                             ..
                         }
-                    ));
+                    );
                     return;
                 }
                 Event::Complete => panic!("expected ?FILE synth token"),
@@ -3110,17 +3105,14 @@ mod tests {
         loop {
             match pp.step().expect("no protocol errors") {
                 Event::Token(ppt) if ppt.text() == "2" => {
-                    assert!(matches!(
-                        ppt.token().kind(),
-                        erl_tokenize::TokenKind::Integer
-                    ));
-                    assert!(matches!(
+                    assert_matches!(ppt.token().kind(), erl_tokenize::TokenKind::Integer);
+                    assert_matches!(
                         ppt.origin(),
                         Origin::SourceInfo {
                             kind: SourceInfoMacroKind::Line,
                             ..
                         }
-                    ));
+                    );
                     return;
                 }
                 Event::Complete => panic!("expected ?LINE synth token"),
@@ -3154,7 +3146,7 @@ mod tests {
         loop {
             match pp.step().expect("no protocol errors") {
                 Event::Token(ppt) if ppt.text() == "custom" => {
-                    assert!(matches!(ppt.origin(), Origin::MacroBody { .. }));
+                    assert_matches!(ppt.origin(), Origin::MacroBody { .. });
                     return;
                 }
                 Event::Complete => panic!("expected `custom` token"),

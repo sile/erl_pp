@@ -2,7 +2,7 @@
 name = "erl_pp"
 version = "0.3.2"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.96"
 description = "Erlang source code preprocessor"
 homepage = "https://github.com/sile/erl_pp"
 repository = "https://github.com/sile/erl_pp"

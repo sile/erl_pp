@@ -1,6 +1,8 @@
 //! Integration tests for `-ifdef` / `-ifndef` / `-else` / `-endif`
 //! and the Sans-I/O fork / resume_conditional protocol.
 
+use std::assert_matches;
+
 fn build_source(name: &str, text: &str) -> erl_pp::Source {
     erl_pp::Source::from_text(name, text).expect("test input scans without lex errors")
 }
@@ -44,7 +46,7 @@ fn lexical_texts(pp: &mut erl_pp::Preprocessor) -> Vec<String> {
 fn ifdef_defined_recommends_then() {
     let mut pp = make("-define(FOO, 1).\n-ifdef(FOO).\nthen_side.\n-endif.\n");
     // consume -define
-    assert!(matches!(step(&mut pp), erl_pp::Event::MacroDefined(_)));
+    assert_matches!(step(&mut pp), erl_pp::Event::MacroDefined(_));
     let conditional = match step(&mut pp) {
         erl_pp::Event::AwaitingConditional(r) => r,
         other => panic!("expected AwaitingConditional, got {other:?}"),
@@ -80,7 +82,7 @@ fn ifndef_undefined_recommends_then() {
 fn ifdef_does_not_emit_event_directive() {
     let mut pp = make("-ifdef(FOO).\n-endif.\n");
     let first = step(&mut pp);
-    assert!(matches!(first, erl_pp::Event::AwaitingConditional(_)));
+    assert_matches!(first, erl_pp::Event::AwaitingConditional(_));
 }
 
 // ---------------------------------------------------------------------
@@ -99,7 +101,7 @@ fn resume_conditional_then_scans_then_side() {
             erl_pp::Event::Token(t) if t.text() == "then_side" => saw_then = true,
             erl_pp::Event::Token(_) => {}
             erl_pp::Event::BranchBoundary(b) => {
-                assert!(matches!(b, erl_pp::BranchBoundary::Endif { .. }));
+                assert_matches!(b, erl_pp::BranchBoundary::Endif { .. });
                 saw_endif_boundary = true;
             }
             erl_pp::Event::Complete => break,
@@ -409,7 +411,7 @@ fn resume_conditional_in_scanning_is_protocol_error() {
 fn resume_conditional_while_awaiting_include_is_protocol_error() {
     let mut pp = make(r#"-include("h.hrl")."#);
     let event = step(&mut pp);
-    assert!(matches!(event, erl_pp::Event::AwaitingInclude(_)));
+    assert_matches!(event, erl_pp::Event::AwaitingInclude(_));
     let err = pp
         .resume_conditional(erl_pp::Branch::Then)
         .expect_err("should fail");
@@ -429,7 +431,7 @@ fn active_branch_parse_error_still_fires() {
     // Malformed directive parses fail in the active branch.
     let mut pp = make("-include.\n");
     let event = step(&mut pp);
-    assert!(matches!(event, erl_pp::Event::PreprocessError(_)));
+    assert_matches!(event, erl_pp::Event::PreprocessError(_));
 }
 
 // ---------------------------------------------------------------------
@@ -511,7 +513,7 @@ fn if_elif_chain_first_active_skips_later_elif() {
         erl_pp::Event::AwaitingConditional(r) => r,
         other => panic!("expected opening -if, got {other:?}"),
     };
-    assert!(matches!(req, erl_pp::Conditional::If(_)));
+    assert_matches!(req, erl_pp::Conditional::If(_));
     pp.resume_conditional(erl_pp::Branch::Then)
         .expect("resume if");
 
@@ -548,12 +550,12 @@ fn if_elif_chain_first_inactive_awaits_elif() {
          b.\n\
          -endif.\n",
     );
-    assert!(matches!(step(&mut pp), erl_pp::Event::MacroDefined(_)));
+    assert_matches!(step(&mut pp), erl_pp::Event::MacroDefined(_));
     let req = match step(&mut pp) {
         erl_pp::Event::AwaitingConditional(r) => r,
         other => panic!("expected -if, got {other:?}"),
     };
-    assert!(matches!(req, erl_pp::Conditional::If(_)));
+    assert_matches!(req, erl_pp::Conditional::If(_));
     pp.resume_conditional(erl_pp::Branch::Else)
         .expect("skip if");
 
@@ -685,7 +687,7 @@ fn if_fork_independent_branches() {
 #[test]
 fn if_condition_expands_defined_macro() {
     let mut pp = make("-define(V, 27).\n-if(?V >= 27).\nok.\n-endif.\n");
-    assert!(matches!(step(&mut pp), erl_pp::Event::MacroDefined(_)));
+    assert_matches!(step(&mut pp), erl_pp::Event::MacroDefined(_));
     let req = match step(&mut pp) {
         erl_pp::Event::AwaitingConditional(r) => r,
         other => panic!("expected -if, got {other:?}"),
