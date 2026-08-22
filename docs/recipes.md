@@ -29,7 +29,7 @@ so they behave like OTP predefined macros in the caller's environment
 instead of firing [`Event::AwaitingMacroExpansion`](crate::Event::AwaitingMacroExpansion)
 on every use.
 
-**Uses.** [`erl_tokenize::scan_token`], [`Source::new`](crate::Source::new),
+**Uses.** [`Source::from_text`](crate::Source::from_text),
 [`Preprocessor::new`](crate::Preprocessor::new),
 [`Event::MacroDefined`](crate::Event::MacroDefined),
 [`Event::AwaitingConditional`](crate::Event::AwaitingConditional),
@@ -37,22 +37,12 @@ on every use.
 
 ```rust
 # fn main() -> Result<(), Box<dyn std::error::Error>> {
-fn scan_source(name: &str, text: &str) -> Result<erl_pp::Source, erl_tokenize::Error> {
-    let mut tokens = Vec::new();
-    let mut position = erl_tokenize::Position::new();
-    while let Some(token) = erl_tokenize::scan_token(text, position)? {
-        position = token.end();
-        tokens.push(token);
-    }
-    Ok(erl_pp::Source::new(name, text, tokens))
-}
-
 let seed_text = concat!(
     "-define(MACHINE, \"beam\").\n",
     "-define(OTP_RELEASE, \"29\").\n",
 );
-let seed = scan_source("<seed>", seed_text)?;
-let main = scan_source(
+let seed = erl_pp::Source::from_text("<seed>", seed_text)?;
+let main = erl_pp::Source::from_text(
     "module.erl",
     "-ifdef(MACHINE).\n?MACHINE.\n-endif.\n",
 )?;
