@@ -334,7 +334,11 @@ impl Preprocessor {
     /// [`Event::AwaitingMacroExpansion`] event.
     ///
     /// `source` is the caller-supplied expansion result whose tokens
-    /// are spliced into the token stream. Pass a token-free
+    /// are spliced into the token stream **in front of** any tokens
+    /// already queued (for example the rest of a `-define` body that
+    /// still contains nested `?NAME` calls). Appending them would
+    /// emit those remaining body tokens first and leave holes such as
+    /// `{, ,}` followed by the replacements. Pass a token-free
     /// [`Source`] to skip the call without emitting any expansion
     /// tokens; the caller is responsible for surfacing any error
     /// diagnostic in its own error stream.
@@ -358,19 +362,21 @@ impl Preprocessor {
         };
         let source_id = self.sources.append(source);
         let source_arc = self.sources.get(source_id);
+        let mut response = VecDeque::new();
         for token in source_arc.tokens() {
             let origin = Origin::CallerExpansion {
                 parent: Arc::clone(&pending.parent_origin),
                 call_site: pending.call_site,
                 name: pending.name.clone(),
             };
-            self.expansion_queue.push_back(SourceToken::new(
+            response.push_back(SourceToken::new(
                 *token,
                 Arc::clone(&source_arc),
                 source_id,
                 origin,
             ));
         }
+        self.prepend_to_queue(response);
         Ok(())
     }
 
@@ -2342,6 +2348,30 @@ mod tests {
             other => panic!("expected token, got {other:?}"),
         };
         assert_eq!(ppt.text(), ".");
+    }
+
+    #[test]
+    fn resume_nested_caller_expansion_splices_in_place() {
+        // `?FOO` expands to `{?BAR}`. The caller fills `?BAR` with
+        // `x`. The `{` is already on the expansion queue when BAR is
+        // awaited; the response must land between `{` and `}`, not
+        // after the closing `}`.
+        let mut pp = make("-define(FOO, {?BAR}).\n?FOO.");
+        let mut texts = Vec::new();
+        loop {
+            match pp.step().expect("no protocol errors") {
+                Event::AwaitingMacroExpansion(req) => {
+                    assert_eq!(req.name.as_str(), "BAR");
+                    pp.resume_macro_expansion(Source::from_text("<synth:BAR>", "x"))
+                        .expect("resume accepts");
+                }
+                Event::Token(t) => texts.push(t.text().to_string()),
+                Event::Complete => break,
+                Event::MacroDefined(_) => {}
+                other => panic!("unexpected event: {other:?}"),
+            }
+        }
+        assert_eq!(texts, ["{", "x", "}", "."]);
     }
 
     #[test]
