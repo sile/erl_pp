@@ -8,7 +8,7 @@
 #[expect(dead_code)]
 mod pbt_harness;
 
-use core::assert_matches;
+use std::assert_matches;
 use noprop::{Ratio, Runner, TestCaseContext, TestResult};
 
 use pbt_harness::{

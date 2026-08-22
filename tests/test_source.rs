@@ -1,6 +1,6 @@
 //! Integration tests for the public [`erl_pp::Source::from_text`] API.
 
-use core::assert_matches;
+use std::assert_matches;
 
 #[test]
 fn from_text_returns_lexical_error() {

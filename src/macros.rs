@@ -445,7 +445,7 @@ fn count_call_args(rest: &[&SourceToken]) -> (usize, usize) {
 mod tests {
     use super::*;
 
-    use core::assert_matches;
+    use std::assert_matches;
 
     use crate::directive::{Directive, parse_directive};
     use crate::error::PreprocessError;

@@ -1,7 +1,7 @@
 //! Integration tests for `-error` / `-warning` surfacing as
 //! `erl_pp::Event::Diagnostic`.
 
-use core::assert_matches;
+use std::assert_matches;
 use std::sync::Arc;
 
 fn build_source(name: &str, text: &str) -> erl_pp::Source {

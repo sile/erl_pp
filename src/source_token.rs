@@ -103,7 +103,7 @@ impl SourceToken {
 mod tests {
     use super::*;
 
-    use core::assert_matches;
+    use std::assert_matches;
 
     use erl_tokenize::{Position, scan_token};
 

@@ -1,7 +1,7 @@
 //! Integration tests for `-ifdef` / `-ifndef` / `-else` / `-endif`
 //! and the Sans-I/O fork / resume_conditional protocol.
 
-use core::assert_matches;
+use std::assert_matches;
 
 fn build_source(name: &str, text: &str) -> erl_pp::Source {
     erl_pp::Source::from_text(name, text).expect("test input scans without lex errors")

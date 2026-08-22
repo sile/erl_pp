@@ -2191,7 +2191,7 @@ impl std::fmt::Debug for Preprocessor {
 mod tests {
     use super::*;
 
-    use core::assert_matches;
+    use std::assert_matches;
 
     use crate::error::PreprocessError;
 

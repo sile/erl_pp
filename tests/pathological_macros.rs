@@ -7,7 +7,7 @@
 //! test either locks a currently-working behaviour or documents a
 //! known limitation that a follow-up change will lift.
 
-use core::assert_matches;
+use std::assert_matches;
 
 fn build_source(name: &str, text: &str) -> erl_pp::Source {
     erl_pp::Source::from_text(name, text).expect("test input scans without lex errors")

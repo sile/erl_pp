@@ -415,7 +415,7 @@ mod tests {
     use crate::source::{Source, SourceSpan, SourceStore};
     use crate::source_string::SourceString;
 
-    use core::assert_matches;
+    use std::assert_matches;
 
     use super::*;
 

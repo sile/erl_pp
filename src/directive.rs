@@ -804,7 +804,7 @@ fn directive_name_text<'a>(token: Token, source: &'a str) -> Option<Cow<'a, str>
 mod tests {
     use super::*;
 
-    use core::assert_matches;
+    use std::assert_matches;
 
     use crate::cursor::Cursor;
     use crate::source::{Source, SourceStore};

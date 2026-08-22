@@ -6,7 +6,7 @@
 //! nested include order, `erl_pp::Origin::Include` chain, empty-`erl_pp::Source`
 //! skip, and protocol-error paths.
 
-use core::assert_matches;
+use std::assert_matches;
 use std::sync::Arc;
 
 fn build_source(name: &str, text: &str) -> erl_pp::Source {
