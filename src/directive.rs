@@ -17,15 +17,12 @@
               boxing every Result would add allocation overhead on every parse"
 )]
 
-use std::borrow::Cow;
-
-use erl_tokenize::{Position, Symbol, Token, TokenKind, TokenValue};
-
 use crate::cursor::Cursor;
 use crate::error::{ParseError, ParseFailure};
 use crate::origin::IncludeKind;
 use crate::source::{SourceId, SourceSpan};
 use crate::source_string::SourceString;
+use std::borrow::Cow;
 
 /// A parsed preprocessor directive.
 ///
@@ -43,7 +40,7 @@ pub(crate) enum Directive {
     /// (`$FOO`), relative-path resolution, and any OS-specific path
     /// handling are the resolver's job (see [`open_include`](crate::open_include)).
     ///
-    /// Stored as a decoded [`SourceString`] rather than `Vec<Token>`
+    /// Stored as a decoded [`SourceString`] rather than `Vec<erl_tokenize::Token>`
     /// because `-include("foo" ".hrl")` collapses one or more adjacent
     /// string literals into a single logical path with no single owning
     /// token. The [`SourceString`] span covers all path string literal
@@ -72,7 +69,7 @@ pub(crate) enum Directive {
         /// function-like macro (`-define(FOO(), 1).`).
         params: Option<Vec<SourceString>>,
         /// Replacement token list (may include hidden tokens).
-        replacement: Vec<Token>,
+        replacement: Vec<erl_tokenize::Token>,
         /// Span covering the replacement tokens. `None` when the
         /// replacement is empty.
         #[cfg_attr(
@@ -115,7 +112,7 @@ pub(crate) enum Directive {
         /// Span covering the whole directive.
         span: SourceSpan,
         /// Raw token list inside the parentheses.
-        arg_tokens: Vec<Token>,
+        arg_tokens: Vec<erl_tokenize::Token>,
         /// Span covering the argument tokens.
         #[expect(
             dead_code,
@@ -131,7 +128,7 @@ pub(crate) enum Directive {
         /// Span covering the whole directive.
         span: SourceSpan,
         /// Raw token list inside the parentheses.
-        arg_tokens: Vec<Token>,
+        arg_tokens: Vec<erl_tokenize::Token>,
         /// Span covering the argument tokens.
         #[expect(
             dead_code,
@@ -156,7 +153,7 @@ pub(crate) enum Directive {
         span: SourceSpan,
         /// Raw token list inside the parentheses (evaluation is not
         /// this module's responsibility).
-        arg_tokens: Vec<Token>,
+        arg_tokens: Vec<erl_tokenize::Token>,
         /// Span covering the argument tokens.
         arg_span: SourceSpan,
     },
@@ -165,7 +162,7 @@ pub(crate) enum Directive {
         /// Span covering the whole directive.
         span: SourceSpan,
         /// Raw token list inside the parentheses.
-        arg_tokens: Vec<Token>,
+        arg_tokens: Vec<erl_tokenize::Token>,
         /// Span covering the argument tokens.
         arg_span: SourceSpan,
     },
@@ -236,7 +233,7 @@ pub(crate) fn parse_directive(cursor: &mut Cursor) -> Result<Option<Directive>, 
     // reports "not a directive" and the caller falls back to the raw
     // bump path.
     let hyphen = match cursor.peek_lexical() {
-        Some(t) if is_symbol(t, Symbol::Hyphen) => t,
+        Some(t) if is_symbol(t, erl_tokenize::Symbol::Hyphen) => t,
         _ => return Ok(None),
     };
     let start_pos = hyphen.start();
@@ -345,12 +342,17 @@ pub(crate) fn parse_directive(cursor: &mut Cursor) -> Result<Option<Directive>, 
 fn parse_include(
     cursor: &mut Cursor,
     source_id: SourceId,
-    start_pos: Position,
+    start_pos: erl_tokenize::Position,
     directive_start: SourceSpan,
     kind: IncludeKind,
 ) -> Result<Directive, ParseError> {
     let path = parse_paren_string_path(cursor, source_id, &directive_start)?;
-    let dot = expect_symbol(cursor, Symbol::Dot, source_id, &directive_start)?;
+    let dot = expect_symbol(
+        cursor,
+        erl_tokenize::Symbol::Dot,
+        source_id,
+        &directive_start,
+    )?;
     Ok(Directive::Include {
         span: SourceSpan::new(source_id, start_pos, dot.end()),
         kind,
@@ -361,38 +363,73 @@ fn parse_include(
 fn parse_define(
     cursor: &mut Cursor,
     source_id: SourceId,
-    start_pos: Position,
+    start_pos: erl_tokenize::Position,
     directive_start: SourceSpan,
 ) -> Result<Directive, ParseError> {
-    expect_symbol(cursor, Symbol::OpenParen, source_id, &directive_start)?;
+    expect_symbol(
+        cursor,
+        erl_tokenize::Symbol::OpenParen,
+        source_id,
+        &directive_start,
+    )?;
     let name = parse_identifier(cursor, source_id, &directive_start, "macro name")?;
 
-    let params = if peek_is_symbol(cursor, Symbol::OpenParen) {
-        expect_symbol(cursor, Symbol::OpenParen, source_id, &directive_start)?;
+    let params = if peek_is_symbol(cursor, erl_tokenize::Symbol::OpenParen) {
+        expect_symbol(
+            cursor,
+            erl_tokenize::Symbol::OpenParen,
+            source_id,
+            &directive_start,
+        )?;
         let mut params = Vec::new();
-        if !peek_is_symbol(cursor, Symbol::CloseParen) {
+        if !peek_is_symbol(cursor, erl_tokenize::Symbol::CloseParen) {
             loop {
                 let pname =
                     parse_identifier(cursor, source_id, &directive_start, "parameter name")?;
                 params.push(pname);
-                if peek_is_symbol(cursor, Symbol::Comma) {
-                    expect_symbol(cursor, Symbol::Comma, source_id, &directive_start)?;
+                if peek_is_symbol(cursor, erl_tokenize::Symbol::Comma) {
+                    expect_symbol(
+                        cursor,
+                        erl_tokenize::Symbol::Comma,
+                        source_id,
+                        &directive_start,
+                    )?;
                     continue;
                 }
                 break;
             }
         }
-        expect_symbol(cursor, Symbol::CloseParen, source_id, &directive_start)?;
+        expect_symbol(
+            cursor,
+            erl_tokenize::Symbol::CloseParen,
+            source_id,
+            &directive_start,
+        )?;
         Some(params)
     } else {
         None
     };
 
-    expect_symbol(cursor, Symbol::Comma, source_id, &directive_start)?;
+    expect_symbol(
+        cursor,
+        erl_tokenize::Symbol::Comma,
+        source_id,
+        &directive_start,
+    )?;
     let (replacement, replacement_span) =
         collect_until_close_paren(cursor, source_id, &directive_start)?;
-    expect_symbol(cursor, Symbol::CloseParen, source_id, &directive_start)?;
-    let dot = expect_symbol(cursor, Symbol::Dot, source_id, &directive_start)?;
+    expect_symbol(
+        cursor,
+        erl_tokenize::Symbol::CloseParen,
+        source_id,
+        &directive_start,
+    )?;
+    let dot = expect_symbol(
+        cursor,
+        erl_tokenize::Symbol::Dot,
+        source_id,
+        &directive_start,
+    )?;
 
     Ok(Directive::Define {
         span: SourceSpan::new(source_id, start_pos, dot.end()),
@@ -412,15 +449,30 @@ enum NameOnlyKind {
 fn parse_name_only(
     cursor: &mut Cursor,
     source_id: SourceId,
-    start_pos: Position,
+    start_pos: erl_tokenize::Position,
     directive_start: SourceSpan,
     _name_span: SourceSpan,
     kind: NameOnlyKind,
 ) -> Result<Directive, ParseError> {
-    expect_symbol(cursor, Symbol::OpenParen, source_id, &directive_start)?;
+    expect_symbol(
+        cursor,
+        erl_tokenize::Symbol::OpenParen,
+        source_id,
+        &directive_start,
+    )?;
     let name = parse_identifier(cursor, source_id, &directive_start, "macro name")?;
-    expect_symbol(cursor, Symbol::CloseParen, source_id, &directive_start)?;
-    let dot = expect_symbol(cursor, Symbol::Dot, source_id, &directive_start)?;
+    expect_symbol(
+        cursor,
+        erl_tokenize::Symbol::CloseParen,
+        source_id,
+        &directive_start,
+    )?;
+    let dot = expect_symbol(
+        cursor,
+        erl_tokenize::Symbol::Dot,
+        source_id,
+        &directive_start,
+    )?;
 
     let span = SourceSpan::new(source_id, start_pos, dot.end());
     Ok(match kind {
@@ -438,11 +490,16 @@ enum BareKind {
 fn parse_barewords(
     cursor: &mut Cursor,
     source_id: SourceId,
-    start_pos: Position,
+    start_pos: erl_tokenize::Position,
     directive_start: SourceSpan,
     kind: BareKind,
 ) -> Result<Directive, ParseError> {
-    let dot = expect_symbol(cursor, Symbol::Dot, source_id, &directive_start)?;
+    let dot = expect_symbol(
+        cursor,
+        erl_tokenize::Symbol::Dot,
+        source_id,
+        &directive_start,
+    )?;
     let span = SourceSpan::new(source_id, start_pos, dot.end());
     Ok(match kind {
         BareKind::Else => Directive::Else { span },
@@ -453,11 +510,16 @@ fn parse_barewords(
 fn parse_diagnostic(
     cursor: &mut Cursor,
     source_id: SourceId,
-    start_pos: Position,
+    start_pos: erl_tokenize::Position,
     directive_start: SourceSpan,
     is_warning: bool,
 ) -> Result<Directive, ParseError> {
-    expect_symbol(cursor, Symbol::OpenParen, source_id, &directive_start)?;
+    expect_symbol(
+        cursor,
+        erl_tokenize::Symbol::OpenParen,
+        source_id,
+        &directive_start,
+    )?;
     let (arg_tokens, arg_span_opt) =
         collect_until_close_paren(cursor, source_id, &directive_start)?;
     if arg_tokens.is_empty() {
@@ -466,13 +528,23 @@ fn parse_diagnostic(
             expected: "at least one token before `)`".to_owned(),
             actual: ParseFailure::UnexpectedToken {
                 span: SourceSpan::new(source_id, start_pos, start_pos),
-                kind: TokenKind::Symbol(Symbol::CloseParen),
+                kind: erl_tokenize::TokenKind::Symbol(erl_tokenize::Symbol::CloseParen),
             },
         });
     }
     let arg_span = arg_span_opt.expect("non-empty arg_tokens implies a span");
-    expect_symbol(cursor, Symbol::CloseParen, source_id, &directive_start)?;
-    let dot = expect_symbol(cursor, Symbol::Dot, source_id, &directive_start)?;
+    expect_symbol(
+        cursor,
+        erl_tokenize::Symbol::CloseParen,
+        source_id,
+        &directive_start,
+    )?;
+    let dot = expect_symbol(
+        cursor,
+        erl_tokenize::Symbol::Dot,
+        source_id,
+        &directive_start,
+    )?;
     let span = SourceSpan::new(source_id, start_pos, dot.end());
     Ok(if is_warning {
         Directive::Warning {
@@ -492,11 +564,16 @@ fn parse_diagnostic(
 fn parse_if_like(
     cursor: &mut Cursor,
     source_id: SourceId,
-    start_pos: Position,
+    start_pos: erl_tokenize::Position,
     directive_start: SourceSpan,
     is_elif: bool,
 ) -> Result<Directive, ParseError> {
-    expect_symbol(cursor, Symbol::OpenParen, source_id, &directive_start)?;
+    expect_symbol(
+        cursor,
+        erl_tokenize::Symbol::OpenParen,
+        source_id,
+        &directive_start,
+    )?;
     let (arg_tokens, arg_span_opt) =
         collect_until_close_paren(cursor, source_id, &directive_start)?;
     if arg_tokens.is_empty() {
@@ -505,13 +582,23 @@ fn parse_if_like(
             expected: "at least one token before `)`".to_owned(),
             actual: ParseFailure::UnexpectedToken {
                 span: SourceSpan::new(source_id, start_pos, start_pos),
-                kind: TokenKind::Symbol(Symbol::CloseParen),
+                kind: erl_tokenize::TokenKind::Symbol(erl_tokenize::Symbol::CloseParen),
             },
         });
     }
     let arg_span = arg_span_opt.expect("non-empty arg_tokens implies a span");
-    expect_symbol(cursor, Symbol::CloseParen, source_id, &directive_start)?;
-    let dot = expect_symbol(cursor, Symbol::Dot, source_id, &directive_start)?;
+    expect_symbol(
+        cursor,
+        erl_tokenize::Symbol::CloseParen,
+        source_id,
+        &directive_start,
+    )?;
+    let dot = expect_symbol(
+        cursor,
+        erl_tokenize::Symbol::Dot,
+        source_id,
+        &directive_start,
+    )?;
     let span = SourceSpan::new(source_id, start_pos, dot.end());
     Ok(if is_elif {
         Directive::Elif {
@@ -536,7 +623,12 @@ fn parse_paren_string_path(
     source_id: SourceId,
     directive_start: &SourceSpan,
 ) -> Result<SourceString, ParseError> {
-    expect_symbol(cursor, Symbol::OpenParen, source_id, directive_start)?;
+    expect_symbol(
+        cursor,
+        erl_tokenize::Symbol::OpenParen,
+        source_id,
+        directive_start,
+    )?;
 
     let first = expect_lexical(cursor, directive_start, "string literal")?;
     let first_decoded =
@@ -548,7 +640,7 @@ fn parse_paren_string_path(
     let mut path_end = first.end();
 
     while let Some(next) = cursor.peek_lexical() {
-        if next.kind() != TokenKind::String {
+        if next.kind() != erl_tokenize::TokenKind::String {
             break;
         }
         let decoded =
@@ -558,7 +650,12 @@ fn parse_paren_string_path(
         consume_through(cursor, next, directive_start)?;
     }
 
-    expect_symbol(cursor, Symbol::CloseParen, source_id, directive_start)?;
+    expect_symbol(
+        cursor,
+        erl_tokenize::Symbol::CloseParen,
+        source_id,
+        directive_start,
+    )?;
     Ok(SourceString::new(
         path,
         SourceSpan::new(source_id, path_start, path_end),
@@ -566,12 +663,12 @@ fn parse_paren_string_path(
 }
 
 fn decode_string_literal<'a>(
-    token: Token,
+    token: erl_tokenize::Token,
     source: &'a str,
     directive_start: &SourceSpan,
 ) -> Result<Cow<'a, str>, ParseError> {
     match token.value(source) {
-        TokenValue::String(cow) => Ok(cow),
+        erl_tokenize::TokenValue::String(cow) => Ok(cow),
         other => Err(ParseError {
             directive_start: *directive_start,
             expected: "string literal".to_owned(),
@@ -583,19 +680,19 @@ fn decode_string_literal<'a>(
     }
 }
 
-fn type_of(value: &TokenValue<'_>) -> TokenKind {
+fn type_of(value: &erl_tokenize::TokenValue<'_>) -> erl_tokenize::TokenKind {
     match value {
-        TokenValue::Atom(_) => TokenKind::Atom,
-        TokenValue::Char(_) => TokenKind::Char,
-        TokenValue::Comment(_) => TokenKind::Comment,
-        TokenValue::Float(_) => TokenKind::Float,
-        TokenValue::Integer(_) => TokenKind::Integer,
-        TokenValue::Keyword(k) => TokenKind::Keyword(*k),
-        TokenValue::SigilString { .. } => TokenKind::SigilString,
-        TokenValue::String(_) => TokenKind::String,
-        TokenValue::Symbol(s) => TokenKind::Symbol(*s),
-        TokenValue::Variable(_) => TokenKind::Variable,
-        TokenValue::Whitespace(_) => TokenKind::Whitespace,
+        erl_tokenize::TokenValue::Atom(_) => erl_tokenize::TokenKind::Atom,
+        erl_tokenize::TokenValue::Char(_) => erl_tokenize::TokenKind::Char,
+        erl_tokenize::TokenValue::Comment(_) => erl_tokenize::TokenKind::Comment,
+        erl_tokenize::TokenValue::Float(_) => erl_tokenize::TokenKind::Float,
+        erl_tokenize::TokenValue::Integer(_) => erl_tokenize::TokenKind::Integer,
+        erl_tokenize::TokenValue::Keyword(k) => erl_tokenize::TokenKind::Keyword(*k),
+        erl_tokenize::TokenValue::SigilString { .. } => erl_tokenize::TokenKind::SigilString,
+        erl_tokenize::TokenValue::String(_) => erl_tokenize::TokenKind::String,
+        erl_tokenize::TokenValue::Symbol(s) => erl_tokenize::TokenKind::Symbol(*s),
+        erl_tokenize::TokenValue::Variable(_) => erl_tokenize::TokenKind::Variable,
+        erl_tokenize::TokenValue::Whitespace(_) => erl_tokenize::TokenKind::Whitespace,
     }
 }
 
@@ -607,8 +704,8 @@ fn parse_identifier(
 ) -> Result<SourceString, ParseError> {
     let token = expect_lexical(cursor, directive_start, expected)?;
     let name = match token.value(cursor.source_text()) {
-        TokenValue::Atom(cow) => cow.into_owned(),
-        TokenValue::Variable(name) => name.to_owned(),
+        erl_tokenize::TokenValue::Atom(cow) => cow.into_owned(),
+        erl_tokenize::TokenValue::Variable(name) => name.to_owned(),
         other => {
             return Err(ParseError {
                 directive_start: *directive_start,
@@ -641,15 +738,17 @@ fn collect_until_close_paren(
     cursor: &mut Cursor,
     source_id: SourceId,
     directive_start: &SourceSpan,
-) -> Result<(Vec<Token>, Option<SourceSpan>), ParseError> {
+) -> Result<(Vec<erl_tokenize::Token>, Option<SourceSpan>), ParseError> {
     let mut tokens = Vec::new();
-    let mut span_start: Option<Position> = None;
-    let mut span_end: Option<Position> = None;
+    let mut span_start: Option<erl_tokenize::Position> = None;
+    let mut span_end: Option<erl_tokenize::Position> = None;
 
     loop {
         let next = cursor_peek_ok(cursor, directive_start, "`)` before end of source")?;
-        if matches!(next.kind(), TokenKind::Symbol(Symbol::CloseParen))
-            && next_lexical_is_dot_after_close_paren(cursor, directive_start)?
+        if matches!(
+            next.kind(),
+            erl_tokenize::TokenKind::Symbol(erl_tokenize::Symbol::CloseParen)
+        ) && next_lexical_is_dot_after_close_paren(cursor, directive_start)?
         {
             return Ok((
                 tokens,
@@ -682,7 +781,7 @@ fn next_lexical_is_dot_after_close_paren(
     bump_ok(cursor, directive_start, "`)`")?; // consume the `)`
     let result = matches!(
         cursor.peek_lexical(),
-        Some(t) if t.kind() == TokenKind::Symbol(Symbol::Dot)
+        Some(t) if t.kind() == erl_tokenize::TokenKind::Symbol(erl_tokenize::Symbol::Dot)
     );
     cursor.restore(checkpoint);
     Ok(result)
@@ -697,7 +796,7 @@ fn peek_lexical_ok(
     cursor: &mut Cursor,
     directive_start: &SourceSpan,
     expected: &str,
-) -> Result<Token, ParseError> {
+) -> Result<erl_tokenize::Token, ParseError> {
     cursor
         .peek_lexical()
         .ok_or_else(|| eof_parse_error(directive_start, expected))
@@ -709,7 +808,7 @@ fn cursor_peek_ok(
     cursor: &mut Cursor,
     directive_start: &SourceSpan,
     expected: &str,
-) -> Result<Token, ParseError> {
+) -> Result<erl_tokenize::Token, ParseError> {
     cursor
         .peek()
         .ok_or_else(|| eof_parse_error(directive_start, expected))
@@ -720,7 +819,7 @@ fn bump_ok(
     cursor: &mut Cursor,
     directive_start: &SourceSpan,
     expected: &str,
-) -> Result<Token, ParseError> {
+) -> Result<erl_tokenize::Token, ParseError> {
     cursor
         .bump()
         .ok_or_else(|| eof_parse_error(directive_start, expected))
@@ -734,11 +833,11 @@ fn eof_parse_error(directive_start: &SourceSpan, expected: &str) -> ParseError {
     }
 }
 
-fn is_symbol(token: Token, sym: Symbol) -> bool {
-    matches!(token.kind(), TokenKind::Symbol(s) if s == sym)
+fn is_symbol(token: erl_tokenize::Token, sym: erl_tokenize::Symbol) -> bool {
+    matches!(token.kind(), erl_tokenize::TokenKind::Symbol(s) if s == sym)
 }
 
-fn peek_is_symbol(cursor: &mut Cursor, sym: Symbol) -> bool {
+fn peek_is_symbol(cursor: &mut Cursor, sym: erl_tokenize::Symbol) -> bool {
     cursor
         .peek_lexical()
         .map(|t| is_symbol(t, sym))
@@ -747,10 +846,10 @@ fn peek_is_symbol(cursor: &mut Cursor, sym: Symbol) -> bool {
 
 fn expect_symbol(
     cursor: &mut Cursor,
-    sym: Symbol,
+    sym: erl_tokenize::Symbol,
     source_id: SourceId,
     directive_start: &SourceSpan,
-) -> Result<Token, ParseError> {
+) -> Result<erl_tokenize::Token, ParseError> {
     let expected = format!("`{}`", sym.as_str());
     let t = peek_lexical_ok(cursor, directive_start, &expected)?;
     if is_symbol(t, sym) {
@@ -772,7 +871,7 @@ fn expect_lexical(
     cursor: &mut Cursor,
     directive_start: &SourceSpan,
     expected: &str,
-) -> Result<Token, ParseError> {
+) -> Result<erl_tokenize::Token, ParseError> {
     peek_lexical_ok(cursor, directive_start, expected)
 }
 
@@ -780,7 +879,7 @@ fn expect_lexical(
 /// has been consumed.
 fn consume_through(
     cursor: &mut Cursor,
-    target: Token,
+    target: erl_tokenize::Token,
     directive_start: &SourceSpan,
 ) -> Result<(), ParseError> {
     let expected_desc = format!("token at {:?}", target.start());
@@ -792,10 +891,10 @@ fn consume_through(
     }
 }
 
-fn directive_name_text<'a>(token: Token, source: &'a str) -> Option<Cow<'a, str>> {
+fn directive_name_text<'a>(token: erl_tokenize::Token, source: &'a str) -> Option<Cow<'a, str>> {
     match token.value(source) {
-        TokenValue::Atom(cow) => Some(cow),
-        TokenValue::Keyword(k) => Some(Cow::Borrowed(k.as_str())),
+        erl_tokenize::TokenValue::Atom(cow) => Some(cow),
+        erl_tokenize::TokenValue::Keyword(k) => Some(Cow::Borrowed(k.as_str())),
         _ => None,
     }
 }
@@ -856,8 +955,8 @@ mod tests {
         while let Some(t) = cursor.bump() {
             kinds.push(t.kind());
         }
-        assert!(kinds.contains(&TokenKind::Comment));
-        assert!(kinds.contains(&TokenKind::Whitespace));
+        assert!(kinds.contains(&erl_tokenize::TokenKind::Comment));
+        assert!(kinds.contains(&erl_tokenize::TokenKind::Whitespace));
     }
 
     #[test]
@@ -1063,7 +1162,7 @@ mod tests {
 
     struct DefineParts {
         name: SourceString,
-        replacement: Vec<Token>,
+        replacement: Vec<erl_tokenize::Token>,
     }
 
     fn define_of(text: &str) -> DefineParts {

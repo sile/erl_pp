@@ -404,16 +404,13 @@ fn split_var_ident(s: &str) -> (&str, &str) {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-    use std::sync::atomic::{AtomicU64, Ordering};
-
-    use erl_tokenize::Position;
-
     use crate::event::IncludeDirective;
     use crate::origin::IncludeKind;
     use crate::origin::Origin;
     use crate::source::{Source, SourceSpan, SourceStore};
     use crate::source_string::SourceString;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     use std::assert_matches;
 
@@ -462,7 +459,11 @@ mod tests {
             Source::from_text("m.erl", "-include(...).")
                 .expect("test input must scan without lex errors"),
         );
-        let span = SourceSpan::new(id, Position::new(), Position::new());
+        let span = SourceSpan::new(
+            id,
+            erl_tokenize::Position::new(),
+            erl_tokenize::Position::new(),
+        );
         IncludeDirective {
             kind,
             path: SourceString::new(path, span),

@@ -10,8 +10,6 @@ mod pbt_harness;
 
 use std::assert_matches;
 
-use noprop::{Ratio, Runner, TestCaseContext, TestResult};
-
 use pbt_harness::{
     CASES, Counter, LabelSet, MAX_ITEMS, MAX_STEPS, SEED_ENV, build_source, step_expect_ok,
 };
@@ -23,11 +21,13 @@ const MACROS: [&str; 4] = ["MYFOO", "MYBAR", "MYBAZ", "MYQUX"];
 // Simple program generator (no directives that request a response)
 // ============================================================
 
-fn sample_simple_program(ctx: &mut TestCaseContext) -> String {
-    let count =
-        noprop::sample_with_boundaries(ctx, &[0usize, 1, MAX_ITEMS], Ratio::one_nth(5), |ctx| {
-            noprop::sample_usize_in(ctx, 0..=MAX_ITEMS)
-        });
+fn sample_simple_program(ctx: &mut noprop::TestCaseContext) -> String {
+    let count = noprop::sample_with_boundaries(
+        ctx,
+        &[0usize, 1, MAX_ITEMS],
+        noprop::Ratio::one_nth(5),
+        |ctx| noprop::sample_usize_in(ctx, 0..=MAX_ITEMS),
+    );
     let mut buf = String::new();
     let mut defined: Vec<&'static str> = Vec::new();
     for _ in 0..count {
@@ -94,10 +94,10 @@ fn run_simple(source: erl_pp::Source) -> Vec<erl_pp::Event> {
 // Property: deterministic replay
 // ------------------------------------------------------------
 #[test]
-fn deterministic_replay_of_simple_program() -> TestResult {
+fn deterministic_replay_of_simple_program() -> noprop::TestResult {
     let seed = noprop::seed_from_env_or_time(SEED_ENV)?;
     let saw_multi_event = Counter::default();
-    let mut runner = Runner::new(seed);
+    let mut runner = noprop::Runner::new(seed);
     runner.run(CASES, |ctx| {
         let text = sample_simple_program(ctx);
         let a = run_simple(build_source("a.erl", &text));
@@ -134,9 +134,9 @@ fn deterministic_replay_of_simple_program() -> TestResult {
 // Property: Complete is stable and does not touch macro state
 // ------------------------------------------------------------
 #[test]
-fn complete_after_step_is_stable() -> TestResult {
+fn complete_after_step_is_stable() -> noprop::TestResult {
     let seed = noprop::seed_from_env_or_time(SEED_ENV)?;
-    let mut runner = Runner::new(seed);
+    let mut runner = noprop::Runner::new(seed);
     runner.run(CASES, |ctx| {
         let text = sample_simple_program(ctx);
         let mut pp = erl_pp::Preprocessor::new([build_source("stable.erl", &text)]);
@@ -164,10 +164,10 @@ fn complete_after_step_is_stable() -> TestResult {
 // Property: Event::Token is lexical only
 // ------------------------------------------------------------
 #[test]
-fn event_stream_omits_hidden_tokens() -> TestResult {
+fn event_stream_omits_hidden_tokens() -> noprop::TestResult {
     let seed = noprop::seed_from_env_or_time(SEED_ENV)?;
     let saw_input_hidden = Counter::default();
-    let mut runner = Runner::new(seed);
+    let mut runner = noprop::Runner::new(seed);
     runner.run(CASES, |ctx| {
         // Generate a program that always contains some whitespace and
         // possibly a comment, then check that none of it is re-emitted.
@@ -210,10 +210,10 @@ fn event_stream_omits_hidden_tokens() -> TestResult {
 // within MAX_STEPS.
 // ------------------------------------------------------------
 #[test]
-fn simple_program_reaches_complete_within_bounded_steps() -> TestResult {
+fn simple_program_reaches_complete_within_bounded_steps() -> noprop::TestResult {
     let seed = noprop::seed_from_env_or_time(SEED_ENV)?;
     let saw_nonempty = Counter::default();
-    let mut runner = Runner::new(seed);
+    let mut runner = noprop::Runner::new(seed);
     runner.run(CASES, |ctx| {
         let text = sample_simple_program(ctx);
         let events = run_simple(build_source("b.erl", &text));
@@ -240,13 +240,13 @@ fn simple_program_reaches_complete_within_bounded_steps() -> TestResult {
 // definitions to Complete.
 // ------------------------------------------------------------
 #[test]
-fn ifdef_then_and_else_select_effective_branch() -> TestResult {
+fn ifdef_then_and_else_select_effective_branch() -> noprop::TestResult {
     let seed = noprop::seed_from_env_or_time(SEED_ENV)?;
     let saw_then_selected = Counter::default();
     let saw_else_selected = Counter::default();
     let saw_else_boundary = Counter::default();
     let saw_endif_boundary = Counter::default();
-    let mut runner = Runner::new(seed);
+    let mut runner = noprop::Runner::new(seed);
     runner.run(CASES, |ctx| {
         let cond = noprop::sample_choice(ctx, &MACROS);
         let then_def = noprop::sample_choice(ctx, &MACROS);
@@ -325,10 +325,10 @@ fn ifdef_then_and_else_select_effective_branch() -> TestResult {
 // runs; the branches' macro tables reflect their own selection.
 // ------------------------------------------------------------
 #[test]
-fn conditional_fork_yields_independent_macro_tables() -> TestResult {
+fn conditional_fork_yields_independent_macro_tables() -> noprop::TestResult {
     let seed = noprop::seed_from_env_or_time(SEED_ENV)?;
     let saw_fork = Counter::default();
-    let mut runner = Runner::new(seed);
+    let mut runner = noprop::Runner::new(seed);
     runner.run(CASES, |ctx| {
         let cond = noprop::sample_choice(ctx, &MACROS);
         let then_def = noprop::sample_choice(ctx, &MACROS);
@@ -390,11 +390,11 @@ fn conditional_fork_yields_independent_macro_tables() -> TestResult {
 // first, then resumes the parent source with the correct token.
 // ------------------------------------------------------------
 #[test]
-fn include_response_streams_include_tokens_before_parent_resume() -> TestResult {
+fn include_response_streams_include_tokens_before_parent_resume() -> noprop::TestResult {
     let seed = noprop::seed_from_env_or_time(SEED_ENV)?;
     let saw_include = Counter::default();
     let seen_origin_kinds = LabelSet::default();
-    let mut runner = Runner::new(seed);
+    let mut runner = noprop::Runner::new(seed);
     runner.run(CASES, |ctx| {
         let kind = if noprop::sample_bool(ctx) {
             erl_pp::IncludeKind::Include
@@ -465,10 +465,10 @@ fn include_response_streams_include_tokens_before_parent_resume() -> TestResult 
 // source's next token immediately.
 // ------------------------------------------------------------
 #[test]
-fn include_reject_returns_directly_to_parent() -> TestResult {
+fn include_reject_returns_directly_to_parent() -> noprop::TestResult {
     let seed = noprop::seed_from_env_or_time(SEED_ENV)?;
     let saw_reject = Counter::default();
-    let mut runner = Runner::new(seed);
+    let mut runner = noprop::Runner::new(seed);
     runner.run(CASES, |ctx| {
         let outer_atom = noprop::sample_choice(ctx, &ATOMS);
         let text = format!("-include(\"hdr.hrl\").\n{outer_atom}.\n");
@@ -509,10 +509,10 @@ fn include_reject_returns_directly_to_parent() -> TestResult {
 // parent (macros table is a single instance across include push/pop).
 // ------------------------------------------------------------
 #[test]
-fn include_scoped_define_reaches_parent() -> TestResult {
+fn include_scoped_define_reaches_parent() -> noprop::TestResult {
     let seed = noprop::seed_from_env_or_time(SEED_ENV)?;
     let saw_inherit = Counter::default();
-    let mut runner = Runner::new(seed);
+    let mut runner = noprop::Runner::new(seed);
     runner.run(CASES, |ctx| {
         let name = noprop::sample_choice(ctx, &MACROS);
         let atom = noprop::sample_choice(ctx, &ATOMS);
@@ -559,10 +559,10 @@ fn include_scoped_define_reaches_parent() -> TestResult {
 // parent is another erl_pp::Origin::Include (not erl_pp::Origin::Source).
 // ------------------------------------------------------------
 #[test]
-fn nested_include_forms_origin_chain() -> TestResult {
+fn nested_include_forms_origin_chain() -> noprop::TestResult {
     let seed = noprop::seed_from_env_or_time(SEED_ENV)?;
     let saw_nested = Counter::default();
-    let mut runner = Runner::new(seed);
+    let mut runner = noprop::Runner::new(seed);
     runner.run(CASES, |ctx| {
         let atom = noprop::sample_choice(ctx, &ATOMS);
         let outer = format!(r#"-include("mid.hrl").{atom}."#);
@@ -625,10 +625,10 @@ fn origin_include_depth(origin: &erl_pp::Origin) -> usize {
 // outer branch works and produces the expected macro definitions.
 // ------------------------------------------------------------
 #[test]
-fn nested_conditional_selects_inner_branch_correctly() -> TestResult {
+fn nested_conditional_selects_inner_branch_correctly() -> noprop::TestResult {
     let seed = noprop::seed_from_env_or_time(SEED_ENV)?;
     let saw_nested = Counter::default();
-    let mut runner = Runner::new(seed);
+    let mut runner = noprop::Runner::new(seed);
     runner.run(CASES, |ctx| {
         let outer = noprop::sample_choice(ctx, &MACROS);
         let inner = noprop::sample_choice(ctx, &MACROS);
@@ -684,10 +684,10 @@ fn nested_conditional_selects_inner_branch_correctly() -> TestResult {
 // AwaitingMacroExpansion; the substitute source replaces the call.
 // ------------------------------------------------------------
 #[test]
-fn caller_macro_expansion_substitutes_response_source() -> TestResult {
+fn caller_macro_expansion_substitutes_response_source() -> noprop::TestResult {
     let seed = noprop::seed_from_env_or_time(SEED_ENV)?;
     let saw_expansion = Counter::default();
-    let mut runner = Runner::new(seed);
+    let mut runner = noprop::Runner::new(seed);
     runner.run(CASES, |ctx| {
         let name = noprop::sample_choice(ctx, &MACROS);
         let substitute = noprop::sample_choice(ctx, &ATOMS);
@@ -733,11 +733,11 @@ fn caller_macro_expansion_substitutes_response_source() -> TestResult {
 // expected severity; state machine keeps advancing.
 // ------------------------------------------------------------
 #[test]
-fn error_and_warning_surface_as_diagnostics() -> TestResult {
+fn error_and_warning_surface_as_diagnostics() -> noprop::TestResult {
     let seed = noprop::seed_from_env_or_time(SEED_ENV)?;
     let saw_error = Counter::default();
     let saw_warning = Counter::default();
-    let mut runner = Runner::new(seed);
+    let mut runner = noprop::Runner::new(seed);
     runner.run(CASES, |ctx| {
         let severity = if noprop::sample_bool(ctx) {
             erl_pp::Severity::Error
@@ -801,11 +801,11 @@ fn error_and_warning_surface_as_diagnostics() -> TestResult {
 // SourceInfo origin kind.
 // ------------------------------------------------------------
 #[test]
-fn source_info_macros_emit_synthesized_tokens() -> TestResult {
+fn source_info_macros_emit_synthesized_tokens() -> noprop::TestResult {
     let seed = noprop::seed_from_env_or_time(SEED_ENV)?;
     let saw_file = Counter::default();
     let saw_line = Counter::default();
-    let mut runner = Runner::new(seed);
+    let mut runner = noprop::Runner::new(seed);
     runner.run(CASES, |ctx| {
         let use_file = noprop::sample_bool(ctx);
         let text = if use_file { "?FILE.\n" } else { "?LINE.\n" };
@@ -847,10 +847,10 @@ fn source_info_macros_emit_synthesized_tokens() -> TestResult {
 // corrupt the pending state (subsequent correct response works).
 // ------------------------------------------------------------
 #[test]
-fn wrong_response_kind_returns_protocol_error_without_state_damage() -> TestResult {
+fn wrong_response_kind_returns_protocol_error_without_state_damage() -> noprop::TestResult {
     let seed = noprop::seed_from_env_or_time(SEED_ENV)?;
     let saw_wrong = Counter::default();
-    let mut runner = Runner::new(seed);
+    let mut runner = noprop::Runner::new(seed);
     runner.run(CASES, |ctx| {
         let name = noprop::sample_choice(ctx, &MACROS);
         let branch = if noprop::sample_bool(ctx) {

@@ -17,17 +17,14 @@
               boxing every Result would add allocation overhead on every define"
 )]
 
-use std::collections::HashMap;
-use std::sync::Arc;
-
-use erl_tokenize::{Symbol, Token, TokenKind};
-
 use crate::directive::Directive;
 use crate::error::PreprocessError;
 use crate::origin::Origin;
 use crate::source::{Source, SourceId, SourceSpan};
 use crate::source_string::SourceString;
 use crate::source_token::SourceToken;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Identifier of a macro entry in a [`MacroTable`].
 ///
@@ -158,7 +155,7 @@ impl MacroDefinition {
 }
 
 fn build_source_token(
-    token: Token,
+    token: erl_tokenize::Token,
     source: &Arc<Source>,
     source_id: SourceId,
     origin: &Origin,
@@ -345,14 +342,14 @@ fn collect_uses(replacement: &[SourceToken]) -> Vec<(String, Option<usize>)> {
     let mut uses = Vec::new();
     let mut i = 0;
     while i < lex.len() {
-        if !is_symbol(lex[i].token(), Symbol::Question) {
+        if !is_symbol(lex[i].token(), erl_tokenize::Symbol::Question) {
             i += 1;
             continue;
         }
         // Skip `??` stringification prefix.
         if lex
             .get(i + 1)
-            .is_some_and(|t| is_symbol(t.token(), Symbol::Question))
+            .is_some_and(|t| is_symbol(t.token(), erl_tokenize::Symbol::Question))
         {
             i += 2;
             continue;
@@ -362,7 +359,7 @@ fn collect_uses(replacement: &[SourceToken]) -> Vec<(String, Option<usize>)> {
         };
         if !matches!(
             name_tok.token().kind(),
-            TokenKind::Atom | TokenKind::Variable
+            erl_tokenize::TokenKind::Atom | erl_tokenize::TokenKind::Variable
         ) {
             i += 1;
             continue;
@@ -370,7 +367,7 @@ fn collect_uses(replacement: &[SourceToken]) -> Vec<(String, Option<usize>)> {
         let name = name_tok.text().to_owned();
         let arity = if lex
             .get(i + 2)
-            .is_some_and(|t| is_symbol(t.token(), Symbol::OpenParen))
+            .is_some_and(|t| is_symbol(t.token(), erl_tokenize::Symbol::OpenParen))
         {
             let (arity, consumed) = count_call_args(&lex[i + 3..]);
             uses.push((name, Some(arity)));
@@ -385,8 +382,8 @@ fn collect_uses(replacement: &[SourceToken]) -> Vec<(String, Option<usize>)> {
     uses
 }
 
-fn is_symbol(token: &Token, sym: Symbol) -> bool {
-    matches!(token.kind(), TokenKind::Symbol(s) if s == sym)
+fn is_symbol(token: &erl_tokenize::Token, sym: erl_tokenize::Symbol) -> bool {
+    matches!(token.kind(), erl_tokenize::TokenKind::Symbol(s) if s == sym)
 }
 
 /// Counts the top-level arguments inside a macro call whose opening
@@ -408,26 +405,26 @@ fn count_call_args(rest: &[&SourceToken]) -> (usize, usize) {
     for (i, t) in rest.iter().enumerate() {
         let kind = t.token().kind();
         match kind {
-            TokenKind::Symbol(Symbol::OpenParen)
-            | TokenKind::Symbol(Symbol::OpenSquare)
-            | TokenKind::Symbol(Symbol::OpenBrace)
-            | TokenKind::Symbol(Symbol::DoubleLeftAngle) => {
+            erl_tokenize::TokenKind::Symbol(erl_tokenize::Symbol::OpenParen)
+            | erl_tokenize::TokenKind::Symbol(erl_tokenize::Symbol::OpenSquare)
+            | erl_tokenize::TokenKind::Symbol(erl_tokenize::Symbol::OpenBrace)
+            | erl_tokenize::TokenKind::Symbol(erl_tokenize::Symbol::DoubleLeftAngle) => {
                 depth += 1;
                 has_content = true;
             }
-            TokenKind::Symbol(Symbol::CloseSquare)
-            | TokenKind::Symbol(Symbol::CloseBrace)
-            | TokenKind::Symbol(Symbol::DoubleRightAngle) => {
+            erl_tokenize::TokenKind::Symbol(erl_tokenize::Symbol::CloseSquare)
+            | erl_tokenize::TokenKind::Symbol(erl_tokenize::Symbol::CloseBrace)
+            | erl_tokenize::TokenKind::Symbol(erl_tokenize::Symbol::DoubleRightAngle) => {
                 depth = depth.saturating_sub(1);
             }
-            TokenKind::Symbol(Symbol::CloseParen) => {
+            erl_tokenize::TokenKind::Symbol(erl_tokenize::Symbol::CloseParen) => {
                 if depth == 0 {
                     let arity = if has_content { commas + 1 } else { 0 };
                     return (arity, i + 1);
                 }
                 depth -= 1;
             }
-            TokenKind::Symbol(Symbol::Comma) if depth == 0 => {
+            erl_tokenize::TokenKind::Symbol(erl_tokenize::Symbol::Comma) if depth == 0 => {
                 commas += 1;
                 has_content = true;
             }

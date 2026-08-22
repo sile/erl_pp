@@ -25,11 +25,6 @@
               boxing every Result would add allocation overhead on every define"
 )]
 
-use std::collections::VecDeque;
-use std::sync::Arc;
-
-use erl_tokenize::{Keyword, Position, Symbol, Token, TokenKind, TokenValue};
-
 use crate::cursor::Cursor;
 use crate::directive::{Directive, parse_directive};
 use crate::error::{MacroCallErrorKind, PreprocessError, ProtocolError};
@@ -42,6 +37,8 @@ use crate::origin::{IncludeKind, Origin, SourceInfoMacroKind};
 use crate::source::{Source, SourceId, SourceSpan, SourceStore};
 use crate::source_string::SourceString;
 use crate::source_token::SourceToken;
+use std::collections::VecDeque;
+use std::sync::Arc;
 
 /// Sans-I/O preprocessor state machine.
 ///
@@ -259,7 +256,7 @@ impl Preprocessor {
     /// `-define(...)` source is scanned like any other and surfaces
     /// as [`Event::MacroDefined`]. To seed environment macros such as
     /// `?MACHINE` / `?OTP_RELEASE` before the main file, prepend that
-    /// source to the iterator; see [`crate::docs::recipes`].
+    /// source to the iterator; see [`docs::recipes`](crate::docs::recipes).
     pub fn new<I>(sources: I) -> Self
     where
         I: IntoIterator<Item = Source>,
@@ -530,7 +527,7 @@ impl Preprocessor {
         if !self
             .expansion_queue
             .front()
-            .is_some_and(|ppt| is_symbol(*ppt.token(), Symbol::Question))
+            .is_some_and(|ppt| is_symbol(*ppt.token(), erl_tokenize::Symbol::Question))
         {
             return StepAction::Fall;
         }
@@ -802,7 +799,7 @@ impl Preprocessor {
     fn fire_diagnostic(
         &self,
         severity: Severity,
-        arg_tokens: &[Token],
+        arg_tokens: &[erl_tokenize::Token],
         directive_span: SourceSpan,
         arg_span: SourceSpan,
     ) -> Event {
@@ -864,7 +861,11 @@ impl Preprocessor {
     }
 
     /// Handles an `-elif(...)` directive according to the open frame.
-    fn dispatch_elif(&mut self, span: SourceSpan, arg_tokens: &[Token]) -> StepAction {
+    fn dispatch_elif(
+        &mut self,
+        span: SourceSpan,
+        arg_tokens: &[erl_tokenize::Token],
+    ) -> StepAction {
         let Some(frame) = self.branch_stack.last() else {
             return StepAction::Emit(Box::new(Event::PreprocessError(
                 PreprocessError::StrayElif { span },
@@ -908,7 +909,7 @@ impl Preprocessor {
         kind: ExprKind,
         directive_span: SourceSpan,
         pending: PendingConditional,
-        arg_tokens: &[Token],
+        arg_tokens: &[erl_tokenize::Token],
     ) -> StepAction {
         let source_id = self.cursor_mut().source_id();
         let source_arc = Arc::clone(self.cursor_mut().source());
@@ -1013,7 +1014,7 @@ impl Preprocessor {
         if !self
             .cursor_mut()
             .peek()
-            .is_some_and(|t| is_symbol(t, Symbol::Question))
+            .is_some_and(|t| is_symbol(t, erl_tokenize::Symbol::Question))
         {
             return StepAction::Fall;
         }
@@ -1065,11 +1066,14 @@ impl Preprocessor {
             return MacroCallOutcome::NotACall;
         };
         // `??` prefix is a stringification — deferred to a later phase.
-        if is_symbol(name_tok, Symbol::Question) {
+        if is_symbol(name_tok, erl_tokenize::Symbol::Question) {
             self.cursor_mut().restore(entry);
             return MacroCallOutcome::NotACall;
         }
-        if !matches!(name_tok.kind(), TokenKind::Atom | TokenKind::Variable) {
+        if !matches!(
+            name_tok.kind(),
+            erl_tokenize::TokenKind::Atom | erl_tokenize::TokenKind::Variable
+        ) {
             self.cursor_mut().restore(entry);
             return MacroCallOutcome::NotACall;
         }
@@ -1087,8 +1091,8 @@ impl Preprocessor {
         let source_id = self.cursor_mut().source_id();
         let source_text = self.cursor_mut().source_text();
         let name_text = match name_tok.value(source_text) {
-            TokenValue::Atom(cow) => cow.into_owned(),
-            TokenValue::Variable(name) => name.to_owned(),
+            erl_tokenize::TokenValue::Atom(cow) => cow.into_owned(),
+            erl_tokenize::TokenValue::Variable(name) => name.to_owned(),
             _ => {
                 // Shouldn't happen given the kind check above, but
                 // fall back to non-call rather than panic.
@@ -1105,7 +1109,7 @@ impl Preprocessor {
         let is_function_like = self
             .cursor_mut()
             .peek_lexical()
-            .is_some_and(|t| is_symbol(t, Symbol::OpenParen));
+            .is_some_and(|t| is_symbol(t, erl_tokenize::Symbol::OpenParen));
         self.cursor_mut().restore(inner);
 
         if !is_function_like {
@@ -1128,7 +1132,7 @@ impl Preprocessor {
                 self.cursor_mut().restore(entry);
                 return MacroCallOutcome::NotACall;
             };
-            if is_symbol(t, Symbol::OpenParen) {
+            if is_symbol(t, erl_tokenize::Symbol::OpenParen) {
                 break 'find t;
             }
         };
@@ -1351,10 +1355,13 @@ impl Preprocessor {
         let name_ppt = self.expansion_queue[name_idx].clone();
         let name_tok = *name_ppt.token();
         // `??` is stringification, handled elsewhere.
-        if is_symbol(name_tok, Symbol::Question) {
+        if is_symbol(name_tok, erl_tokenize::Symbol::Question) {
             return MacroCallOutcome::NotACall;
         }
-        if !matches!(name_tok.kind(), TokenKind::Atom | TokenKind::Variable) {
+        if !matches!(
+            name_tok.kind(),
+            erl_tokenize::TokenKind::Atom | erl_tokenize::TokenKind::Variable
+        ) {
             return MacroCallOutcome::NotACall;
         }
 
@@ -1376,7 +1383,7 @@ impl Preprocessor {
             found
         };
         let is_function_like_in_queue =
-            after_name_lex.is_some_and(|t| is_symbol(t, Symbol::OpenParen));
+            after_name_lex.is_some_and(|t| is_symbol(t, erl_tokenize::Symbol::OpenParen));
         // Ambiguous straddling case: the queue holds `?NAME` (plus
         // maybe hidden tokens) with no lexical follow-up, and the
         // source cursor immediately shows `(`. Bail — otherwise a
@@ -1386,7 +1393,7 @@ impl Preprocessor {
             && self
                 .cursor_mut()
                 .peek_lexical()
-                .is_some_and(|t| is_symbol(t, Symbol::OpenParen))
+                .is_some_and(|t| is_symbol(t, erl_tokenize::Symbol::OpenParen))
         {
             return MacroCallOutcome::NotACall;
         }
@@ -1410,8 +1417,8 @@ impl Preprocessor {
 
         let source_text = name_ppt.source().text();
         let name_text = match name_tok.value(source_text) {
-            TokenValue::Atom(cow) => cow.into_owned(),
-            TokenValue::Variable(name) => name.to_owned(),
+            erl_tokenize::TokenValue::Atom(cow) => cow.into_owned(),
+            erl_tokenize::TokenValue::Variable(name) => name.to_owned(),
             _ => {
                 // Should not happen given the kind check; if it does,
                 // re-emit `?` as a regular token by pushing it back.
@@ -1446,7 +1453,7 @@ impl Preprocessor {
         // the opening `(`, then consume the `(` itself.
         while let Some(front) = self.expansion_queue.front() {
             let tok = *front.token();
-            if is_symbol(tok, Symbol::OpenParen) {
+            if is_symbol(tok, erl_tokenize::Symbol::OpenParen) {
                 self.expansion_queue
                     .pop_front()
                     .expect("front peeked as `(`");
@@ -1517,7 +1524,7 @@ impl Preprocessor {
         }
     }
 
-    fn update_form_boundary_after_bump(&mut self, token: Token) {
+    fn update_form_boundary_after_bump(&mut self, token: erl_tokenize::Token) {
         // A lexical `.` symbol ends the current form; the next
         // scan step should attempt directive recognition. Any
         // other lexical token puts us mid-form. Hidden tokens
@@ -1525,7 +1532,9 @@ impl Preprocessor {
         // run of hidden tokens between the last `.` and the next
         // form still counts as a form boundary.
         match token.kind() {
-            TokenKind::Symbol(Symbol::Dot) => self.at_form_boundary = true,
+            erl_tokenize::TokenKind::Symbol(erl_tokenize::Symbol::Dot) => {
+                self.at_form_boundary = true
+            }
             kind if kind.is_lexical() => self.at_form_boundary = false,
             _ => {}
         }
@@ -1599,8 +1608,8 @@ fn recommended_defined_branch(kind: DefinedKind, defined: bool) -> Branch {
     }
 }
 
-fn is_symbol(token: Token, sym: Symbol) -> bool {
-    matches!(token.kind(), TokenKind::Symbol(s) if s == sym)
+fn is_symbol(token: erl_tokenize::Token, sym: erl_tokenize::Symbol) -> bool {
+    matches!(token.kind(), erl_tokenize::TokenKind::Symbol(s) if s == sym)
 }
 
 /// Scans `text` and appends the resulting immutable [`Source`] to
@@ -1615,7 +1624,7 @@ fn synthesize_source(
     text: String,
 ) -> Result<(Arc<Source>, SourceId), erl_tokenize::Error> {
     let mut tokens = Vec::new();
-    let mut position = Position::new();
+    let mut position = erl_tokenize::Position::new();
     while let Some(token) = erl_tokenize::scan_token(&text, position)? {
         position = token.end();
         tokens.push(token);
@@ -1783,9 +1792,9 @@ fn expand_function_like(
         // Recognize `??Param` before falling into the normal
         // parameter-substitution path. The pattern is `?` + hidden* +
         // `?` + hidden* + Variable-that-matches-a-parameter.
-        if is_symbol(token, Symbol::Question)
+        if is_symbol(token, erl_tokenize::Symbol::Question)
             && let Some(next_idx) = find_next_lexical_index(repl, i + 1)
-            && is_symbol(*repl[next_idx].token(), Symbol::Question)
+            && is_symbol(*repl[next_idx].token(), erl_tokenize::Symbol::Question)
         {
             let target_idx = match find_next_lexical_index(repl, next_idx + 1) {
                 Some(idx) => idx,
@@ -1797,7 +1806,7 @@ fn expand_function_like(
             };
             let target_ppt = &repl[target_idx];
             let target_tok = *target_ppt.token();
-            if target_tok.kind() != TokenKind::Variable {
+            if target_tok.kind() != erl_tokenize::TokenKind::Variable {
                 return Err(MacroCallErrorKind::InvalidStringificationTarget {
                     span: target_ppt.source_span(),
                 });
@@ -1825,7 +1834,7 @@ fn expand_function_like(
             continue;
         }
 
-        if token.kind() == TokenKind::Variable {
+        if token.kind() == erl_tokenize::TokenKind::Variable {
             let var_text = token.text(repl[i].source().text());
             if let Some(idx) = def.params.iter().position(|p| p.as_str() == var_text)
                 && idx < arguments.len()
@@ -1927,8 +1936,8 @@ fn stringify_token_text(ppt: &SourceToken) -> String {
     // Integer / Float use the decoded value when the tokenizer
     // produced one; other kinds pass through the source text.
     match token.value(source_text) {
-        TokenValue::Integer(Some(n)) => n.to_string(),
-        TokenValue::Float(f) => {
+        erl_tokenize::TokenValue::Integer(Some(n)) => n.to_string(),
+        erl_tokenize::TokenValue::Float(f) => {
             let s = f.to_string();
             if s.contains('.') || s.contains('e') || s.contains('E') {
                 s
@@ -1961,9 +1970,9 @@ enum Delimiter {
 struct ParsedArguments {
     /// Per-argument token streams. Empty when the call was `()` (arity 0).
     arguments: Vec<Vec<SourceToken>>,
-    /// Position of the byte after the closing `)`. Used together with
+    /// erl_tokenize::Position of the byte after the closing `)`. Used together with
     /// the call's opening `?` to build the call-site span.
-    close_end: Position,
+    close_end: erl_tokenize::Position,
 }
 
 /// A token producer that [`parse_macro_arguments`] pulls tokens from.
@@ -1974,7 +1983,7 @@ struct ParsedArguments {
 /// Origin the earlier expansion assigned them).
 trait ArgTokenSource {
     /// Returns the next token without consuming it, `None` at end.
-    fn peek(&self) -> Option<Token>;
+    fn peek(&self) -> Option<erl_tokenize::Token>;
 
     /// Consumes the next token and returns it wrapped as a
     /// [`SourceToken`], `None` at end.
@@ -1992,7 +2001,7 @@ struct CursorArgSource<'a> {
 }
 
 impl ArgTokenSource for CursorArgSource<'_> {
-    fn peek(&self) -> Option<Token> {
+    fn peek(&self) -> Option<erl_tokenize::Token> {
         self.cursor.peek()
     }
 
@@ -2014,7 +2023,7 @@ struct QueueArgSource<'a> {
 }
 
 impl ArgTokenSource for QueueArgSource<'_> {
-    fn peek(&self) -> Option<Token> {
+    fn peek(&self) -> Option<erl_tokenize::Token> {
         self.queue.front().map(|ppt| *ppt.token())
     }
 
@@ -2061,7 +2070,7 @@ fn parse_macro_arguments<S: ArgTokenSource>(
 
         if effective_top && token.kind().is_lexical() {
             match token.kind() {
-                TokenKind::Symbol(Symbol::Comma) => {
+                erl_tokenize::TokenKind::Symbol(erl_tokenize::Symbol::Comma) => {
                     source.bump();
                     stack.clear();
                     if before_first_content {
@@ -2072,7 +2081,7 @@ fn parse_macro_arguments<S: ArgTokenSource>(
                     before_first_content = false;
                     continue;
                 }
-                TokenKind::Symbol(Symbol::CloseParen) => {
+                erl_tokenize::TokenKind::Symbol(erl_tokenize::Symbol::CloseParen) => {
                     let close_end = token.end();
                     source.bump();
                     stack.clear();
@@ -2104,55 +2113,55 @@ fn parse_macro_arguments<S: ArgTokenSource>(
         }
 
         match token.kind() {
-            TokenKind::Symbol(sym) => match sym {
-                Symbol::OpenParen => stack.push(Delimiter::CloseParen),
-                Symbol::OpenSquare => stack.push(Delimiter::CloseSquare),
-                Symbol::OpenBrace => stack.push(Delimiter::CloseBrace),
-                Symbol::DoubleLeftAngle => stack.push(Delimiter::CloseDoubleAngle),
-                Symbol::CloseParen => {
+            erl_tokenize::TokenKind::Symbol(sym) => match sym {
+                erl_tokenize::Symbol::OpenParen => stack.push(Delimiter::CloseParen),
+                erl_tokenize::Symbol::OpenSquare => stack.push(Delimiter::CloseSquare),
+                erl_tokenize::Symbol::OpenBrace => stack.push(Delimiter::CloseBrace),
+                erl_tokenize::Symbol::DoubleLeftAngle => stack.push(Delimiter::CloseDoubleAngle),
+                erl_tokenize::Symbol::CloseParen => {
                     pop_fun_ends(&mut stack);
                     if stack.last() == Some(&Delimiter::CloseParen) {
                         stack.pop();
                     }
                 }
-                Symbol::CloseSquare => {
+                erl_tokenize::Symbol::CloseSquare => {
                     pop_fun_ends(&mut stack);
                     if stack.last() == Some(&Delimiter::CloseSquare) {
                         stack.pop();
                     }
                 }
-                Symbol::CloseBrace => {
+                erl_tokenize::Symbol::CloseBrace => {
                     pop_fun_ends(&mut stack);
                     if stack.last() == Some(&Delimiter::CloseBrace) {
                         stack.pop();
                     }
                 }
-                Symbol::DoubleRightAngle => {
+                erl_tokenize::Symbol::DoubleRightAngle => {
                     pop_fun_ends(&mut stack);
                     if stack.last() == Some(&Delimiter::CloseDoubleAngle) {
                         stack.pop();
                     }
                 }
-                Symbol::RightArrow => promote_fun_end_to_end(&mut stack),
+                erl_tokenize::Symbol::RightArrow => promote_fun_end_to_end(&mut stack),
                 _ => {}
             },
-            TokenKind::Keyword(kw) => match kw {
-                Keyword::Begin
-                | Keyword::If
-                | Keyword::Case
-                | Keyword::Maybe
-                | Keyword::Receive
-                | Keyword::Try
-                | Keyword::Cond => stack.push(Delimiter::End),
-                Keyword::Fun => stack.push(Delimiter::FunEnd),
-                Keyword::End => {
+            erl_tokenize::TokenKind::Keyword(kw) => match kw {
+                erl_tokenize::Keyword::Begin
+                | erl_tokenize::Keyword::If
+                | erl_tokenize::Keyword::Case
+                | erl_tokenize::Keyword::Maybe
+                | erl_tokenize::Keyword::Receive
+                | erl_tokenize::Keyword::Try
+                | erl_tokenize::Keyword::Cond => stack.push(Delimiter::End),
+                erl_tokenize::Keyword::Fun => stack.push(Delimiter::FunEnd),
+                erl_tokenize::Keyword::End => {
                     if stack.last() == Some(&Delimiter::End)
                         || stack.last() == Some(&Delimiter::FunEnd)
                     {
                         stack.pop();
                     }
                 }
-                Keyword::When => promote_fun_end_to_end(&mut stack),
+                erl_tokenize::Keyword::When => promote_fun_end_to_end(&mut stack),
                 _ => {}
             },
             _ => {}
@@ -2564,12 +2573,18 @@ mod tests {
             }
         }
         assert!(!kinds.is_empty());
-        let has_hyphen = kinds
-            .iter()
-            .any(|k| matches!(k, TokenKind::Symbol(Symbol::Hyphen)));
-        let has_dot = kinds
-            .iter()
-            .any(|k| matches!(k, TokenKind::Symbol(Symbol::Dot)));
+        let has_hyphen = kinds.iter().any(|k| {
+            matches!(
+                k,
+                erl_tokenize::TokenKind::Symbol(erl_tokenize::Symbol::Hyphen)
+            )
+        });
+        let has_dot = kinds.iter().any(|k| {
+            matches!(
+                k,
+                erl_tokenize::TokenKind::Symbol(erl_tokenize::Symbol::Dot)
+            )
+        });
         assert!(has_hyphen && has_dot);
     }
 

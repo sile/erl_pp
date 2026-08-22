@@ -13,11 +13,8 @@
 //! the state machine builds a new [`Cursor`] for each entered source
 //! and pushes the parent cursor onto its own stack.
 
-use std::sync::Arc;
-
-use erl_tokenize::Token;
-
 use crate::source::{Source, SourceId};
+use std::sync::Arc;
 
 /// Walks one [`Source`]'s token stream with lookahead and
 /// checkpoint/rollback.
@@ -87,7 +84,7 @@ impl Cursor {
     /// `Some(token)` yields the next token, `None` marks
     /// end-of-source. Multiple calls with no intervening
     /// [`bump`](Self::bump) return the same token.
-    pub(crate) fn peek(&self) -> Option<Token> {
+    pub(crate) fn peek(&self) -> Option<erl_tokenize::Token> {
         self.source.tokens().get(self.index).copied()
     }
 
@@ -98,7 +95,7 @@ impl Cursor {
     /// lexical token stay unread; a following [`bump`](Self::bump)
     /// yields them in source order before reaching the lexical token.
     /// `None` when no lexical token remains.
-    pub(crate) fn peek_lexical(&self) -> Option<Token> {
+    pub(crate) fn peek_lexical(&self) -> Option<erl_tokenize::Token> {
         let tokens = self.source.tokens();
         let mut i = self.index;
         while let Some(token) = tokens.get(i) {
@@ -113,7 +110,7 @@ impl Cursor {
     /// Consumes and returns the next token, including hidden tokens.
     ///
     /// `Some(token)` yields the token, `None` marks end-of-source.
-    pub(crate) fn bump(&mut self) -> Option<Token> {
+    pub(crate) fn bump(&mut self) -> Option<erl_tokenize::Token> {
         let token = self.source.tokens().get(self.index).copied();
         if token.is_some() {
             self.index += 1;
@@ -138,9 +135,6 @@ impl Cursor {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    use erl_tokenize::TokenKind;
-
     use crate::source::{Source, SourceStore};
 
     fn make_cursor(text: &str) -> Cursor {
@@ -168,7 +162,11 @@ mod tests {
         }
         assert_eq!(
             kinds,
-            [TokenKind::Atom, TokenKind::Whitespace, TokenKind::Atom]
+            [
+                erl_tokenize::TokenKind::Atom,
+                erl_tokenize::TokenKind::Whitespace,
+                erl_tokenize::TokenKind::Atom
+            ]
         );
         assert!(cursor.is_at_eof());
     }
@@ -195,15 +193,15 @@ mod tests {
     fn peek_lexical_skips_hidden_tokens() {
         let mut cursor = make_cursor("% cmt\nfoo");
         let lexical = cursor.peek_lexical().expect("token available");
-        assert_eq!(lexical.kind(), TokenKind::Atom);
+        assert_eq!(lexical.kind(), erl_tokenize::TokenKind::Atom);
 
         // Bumps still yield comment, whitespace, atom in source order.
         let a = cursor.bump().expect("token available");
         let b = cursor.bump().expect("token available");
         let c = cursor.bump().expect("token available");
-        assert_eq!(a.kind(), TokenKind::Comment);
-        assert_eq!(b.kind(), TokenKind::Whitespace);
-        assert_eq!(c.kind(), TokenKind::Atom);
+        assert_eq!(a.kind(), erl_tokenize::TokenKind::Comment);
+        assert_eq!(b.kind(), erl_tokenize::TokenKind::Whitespace);
+        assert_eq!(c.kind(), erl_tokenize::TokenKind::Atom);
         assert_eq!(c.start(), lexical.start());
         assert!(cursor.is_at_eof());
     }
@@ -219,7 +217,7 @@ mod tests {
         cursor.restore(saved);
         let after_restore = cursor.bump().expect("token available");
         assert_ne!(first.start(), after_restore.start());
-        assert_eq!(after_restore.kind(), TokenKind::Whitespace);
+        assert_eq!(after_restore.kind(), erl_tokenize::TokenKind::Whitespace);
 
         while cursor.bump().is_some() {}
         assert!(cursor.is_at_eof());
@@ -236,10 +234,10 @@ mod tests {
 
         cursor.restore(inner);
         let after_inner = cursor.bump().expect("token available");
-        assert_eq!(after_inner.kind(), TokenKind::Whitespace);
+        assert_eq!(after_inner.kind(), erl_tokenize::TokenKind::Whitespace);
 
         cursor.restore(outer);
         let after_outer = cursor.bump().expect("token available");
-        assert_eq!(after_outer.kind(), TokenKind::Atom);
+        assert_eq!(after_outer.kind(), erl_tokenize::TokenKind::Atom);
     }
 }

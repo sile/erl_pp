@@ -76,7 +76,7 @@ pub enum Event {
     /// [`PreprocessError`]. If the caller uses emptiness for an
     /// unknown macro, a downstream parser may see a hole and report a
     /// grammar error. The diagnostic belongs to the caller. See
-    /// [`crate::docs::otp_differences`].
+    /// [`docs::otp_differences`](crate::docs::otp_differences).
     AwaitingMacroExpansion(MacroCall),
 
     /// The preprocessor is crossing a conditional branch boundary

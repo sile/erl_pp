@@ -17,9 +17,6 @@
 //! The internal [`ParseError`] emitted by the directive parser stays
 //! `pub(crate)`; it is turned into [`PreprocessError`] by a `From`
 //! conversion when it crosses the public API boundary.
-
-use erl_tokenize::TokenKind;
-
 use crate::source::SourceSpan;
 use crate::source_string::SourceString;
 
@@ -51,7 +48,7 @@ pub(crate) enum ParseFailure {
         /// Span of the offending token.
         span: SourceSpan,
         /// Kind of the offending token.
-        kind: TokenKind,
+        kind: erl_tokenize::TokenKind,
     },
     /// The source ended before the directive was complete.
     UnexpectedEof,
@@ -117,7 +114,7 @@ pub enum PreprocessError {
         /// Span of the offending token.
         span: SourceSpan,
         /// Kind of the offending token.
-        kind: TokenKind,
+        kind: erl_tokenize::TokenKind,
     },
     /// The directive parser committed to a known directive but the
     /// source ended before the directive was complete.

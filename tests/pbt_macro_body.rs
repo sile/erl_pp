@@ -12,12 +12,6 @@
 //! `erl_pp::Preprocessor::step`, and inspects the emitted event.
 
 use std::cell::Cell;
-
-use noprop::{
-    Ratio, Runner, TestCaseContext, TestResult, sample_ascii_printable_char, sample_weighted_index,
-    sample_with_boundaries,
-};
-
 // ---------------------------------------------------------------------------
 // AST + renderer
 
@@ -95,16 +89,16 @@ fn wrap_children(out: &mut String, open: &str, close: &str, children: &[Node]) {
 const MAX_DEPTH: usize = 4;
 const MAX_CHILDREN: usize = 4;
 
-fn sample_leaf(ctx: &mut TestCaseContext) -> Node {
-    let idx = sample_weighted_index(ctx, &[1; LEAVES.len()]);
+fn sample_leaf(ctx: &mut noprop::TestCaseContext) -> Node {
+    let idx = noprop::sample_weighted_index(ctx, &[1; LEAVES.len()]);
     Node::Leaf(LEAVES[idx])
 }
 
 /// Draws a container node (never `Leaf`, `Comma`, or `CloseParen`).
-fn sample_container(ctx: &mut TestCaseContext, depth_budget: usize) -> Node {
+fn sample_container(ctx: &mut noprop::TestCaseContext, depth_budget: usize) -> Node {
     // 6 container kinds with equal weight.
     let children = sample_children(ctx, depth_budget);
-    match sample_weighted_index(ctx, &[1, 1, 1, 1, 1, 1]) {
+    match noprop::sample_weighted_index(ctx, &[1, 1, 1, 1, 1, 1]) {
         0 => Node::Parens(children),
         1 => Node::Brackets(children),
         2 => Node::Braces(children),
@@ -114,23 +108,28 @@ fn sample_container(ctx: &mut TestCaseContext, depth_budget: usize) -> Node {
     }
 }
 
-fn sample_node(ctx: &mut TestCaseContext, depth_budget: usize) -> Node {
+fn sample_node(ctx: &mut noprop::TestCaseContext, depth_budget: usize) -> Node {
     if depth_budget == 0 {
         return sample_leaf(ctx);
     }
     // Bias toward containers so we exercise delimiter handling, but
     // keep a leaf branch to terminate recursion cases early.
-    match sample_weighted_index(ctx, &[3, 1]) {
+    match noprop::sample_weighted_index(ctx, &[3, 1]) {
         0 => sample_container(ctx, depth_budget - 1),
         _ => sample_leaf(ctx),
     }
 }
 
-fn sample_children(ctx: &mut TestCaseContext, depth_budget: usize) -> Vec<Node> {
-    let count = sample_with_boundaries(ctx, &[0usize, 1, MAX_CHILDREN], Ratio::one_nth(5), |ctx| {
-        // sample_usize_in for the interior distribution.
-        noprop::sample_usize_in(ctx, 0..=MAX_CHILDREN)
-    });
+fn sample_children(ctx: &mut noprop::TestCaseContext, depth_budget: usize) -> Vec<Node> {
+    let count = noprop::sample_with_boundaries(
+        ctx,
+        &[0usize, 1, MAX_CHILDREN],
+        noprop::Ratio::one_nth(5),
+        |ctx| {
+            // sample_usize_in for the interior distribution.
+            noprop::sample_usize_in(ctx, 0..=MAX_CHILDREN)
+        },
+    );
     let mut children = Vec::new();
     for i in 0..count {
         if i > 0 {
@@ -144,7 +143,7 @@ fn sample_children(ctx: &mut TestCaseContext, depth_budget: usize) -> Vec<Node> 
 /// Injects a bare `)` at a random leaf position inside `node` (only
 /// modifies container children; the top-level node is never replaced
 /// so the outer shape stays a container).
-fn inject_close_paren(ctx: &mut TestCaseContext, node: &mut Node) {
+fn inject_close_paren(ctx: &mut noprop::TestCaseContext, node: &mut Node) {
     let children = match node {
         Node::Parens(c)
         | Node::Brackets(c)
@@ -165,7 +164,7 @@ fn inject_close_paren(ctx: &mut TestCaseContext, node: &mut Node) {
         // Recurse into an existing child with some probability so we
         // reach a nested container's interior; otherwise replace this
         // slot with `)` directly.
-        if matches!(sample_weighted_index(ctx, &[1, 1]), 0) {
+        if matches!(noprop::sample_weighted_index(ctx, &[1, 1]), 0) {
             inject_close_paren(ctx, &mut children[idx]);
         } else {
             children.insert(idx, Node::CloseParen);
@@ -211,9 +210,9 @@ enum DriveError {
 // Properties
 
 #[test]
-fn round_trip_balanced_body_parses_successfully() -> TestResult {
+fn round_trip_balanced_body_parses_successfully() -> noprop::TestResult {
     let seed = noprop::seed_from_env_or_time("ERL_PP_SEED")?;
-    let mut runner = Runner::new(seed);
+    let mut runner = noprop::Runner::new(seed);
     let saw_container = Cell::new(0usize);
     let saw_leaf_only = Cell::new(0usize);
 
@@ -253,9 +252,9 @@ fn round_trip_balanced_body_parses_successfully() -> TestResult {
 }
 
 #[test]
-fn injected_close_paren_still_parses() -> TestResult {
+fn injected_close_paren_still_parses() -> noprop::TestResult {
     let seed = noprop::seed_from_env_or_time("ERL_PP_SEED")?;
-    let mut runner = Runner::new(seed);
+    let mut runner = noprop::Runner::new(seed);
     let saw_injected = Cell::new(0usize);
 
     runner.run(256, |ctx| {
@@ -288,9 +287,9 @@ fn injected_close_paren_still_parses() -> TestResult {
 }
 
 #[test]
-fn adversarial_tail_only_outer_close_paren_dot_terminates() -> TestResult {
+fn adversarial_tail_only_outer_close_paren_dot_terminates() -> noprop::TestResult {
     let seed = noprop::seed_from_env_or_time("ERL_PP_SEED")?;
-    let mut runner = Runner::new(seed);
+    let mut runner = noprop::Runner::new(seed);
     let saw_tail = Cell::new(0usize);
 
     runner.run(256, |ctx| {
@@ -301,14 +300,14 @@ fn adversarial_tail_only_outer_close_paren_dot_terminates() -> TestResult {
         let mut body = String::from("foo");
         let tail_len = noprop::sample_usize_in(ctx, 0..=6);
         for _ in 0..tail_len {
-            match sample_weighted_index(ctx, &[3, 2, 1, 1]) {
+            match noprop::sample_weighted_index(ctx, &[3, 2, 1, 1]) {
                 0 => body.push(')'),
                 1 => body.push(' '),
                 2 => {
                     // Trailing comment ends at newline, so keep it
                     // followed by whitespace to stay inside the body.
                     body.push_str("% ");
-                    body.push(sample_ascii_printable_char(ctx));
+                    body.push(noprop::sample_ascii_printable_char(ctx));
                     body.push('\n');
                 }
                 _ => body.push('\t'),

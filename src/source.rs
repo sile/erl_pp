@@ -6,9 +6,6 @@
 
 use std::num::NonZeroU32;
 use std::sync::{Arc, RwLock};
-
-use erl_tokenize::{Position, Token};
-
 /// Identifier of a [`Source`] inside a [`SourceStore`].
 ///
 /// Values are only meaningful inside the store that issued them; do
@@ -52,12 +49,12 @@ impl SourceId {
 /// when your caller scans manually and keeps going after lexical errors
 /// (formatters, linters, and language servers that tolerate partial
 /// input often do this). Lexical errors from [`Source::from_text`] are
-/// returned to the caller; they never reach [`crate::Preprocessor::step`].
+/// returned to the caller; they never reach [`Preprocessor::step`](crate::Preprocessor::step).
 #[derive(Debug, Clone)]
 pub struct Source {
     display_name: Arc<str>,
     text: Arc<str>,
-    tokens: Arc<Vec<Token>>,
+    tokens: Arc<Vec<erl_tokenize::Token>>,
 }
 
 impl Source {
@@ -68,7 +65,7 @@ impl Source {
     /// offsets are indexed into that same string). No consistency
     /// check is performed; passing tokens scanned from a different
     /// text produces incorrect spans and decoded values.
-    pub fn new<N, T>(display_name: N, text: T, tokens: Vec<Token>) -> Self
+    pub fn new<N, T>(display_name: N, text: T, tokens: Vec<erl_tokenize::Token>) -> Self
     where
         N: Into<Arc<str>>,
         T: Into<Arc<str>>,
@@ -92,7 +89,7 @@ impl Source {
 
     /// Returns the pre-scanned token stream (in source order,
     /// including hidden tokens like comments and whitespace).
-    pub fn tokens(&self) -> &[Token] {
+    pub fn tokens(&self) -> &[erl_tokenize::Token] {
         &self.tokens
     }
 
@@ -104,7 +101,7 @@ impl Source {
     /// tokens from another path, or when you scan manually and resume
     /// past lexical errors for partial-error tolerance (e.g. formatters,
     /// linters, or LSP servers). Lexical errors are returned here;
-    /// they never reach [`crate::Preprocessor::step`].
+    /// they never reach [`Preprocessor::step`](crate::Preprocessor::step).
     pub fn from_text<N, T>(display_name: N, text: T) -> Result<Self, erl_tokenize::Error>
     where
         N: Into<Arc<str>>,
@@ -113,7 +110,7 @@ impl Source {
         let text = text.into();
         let display_name = display_name.into();
         let mut tokens = Vec::new();
-        let mut position = Position::new();
+        let mut position = erl_tokenize::Position::new();
         loop {
             match erl_tokenize::scan_token(&text, position)? {
                 None => break,
@@ -197,14 +194,18 @@ pub struct SourceSpan {
     /// Identifier of the source that this span lies in.
     pub source_id: SourceId,
     /// Inclusive start position within the source.
-    pub start: Position,
+    pub start: erl_tokenize::Position,
     /// Exclusive end position within the source.
-    pub end: Position,
+    pub end: erl_tokenize::Position,
 }
 
 impl SourceSpan {
     /// Creates a span from its components.
-    pub const fn new(source_id: SourceId, start: Position, end: Position) -> Self {
+    pub const fn new(
+        source_id: SourceId,
+        start: erl_tokenize::Position,
+        end: erl_tokenize::Position,
+    ) -> Self {
         Self {
             source_id,
             start,

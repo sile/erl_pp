@@ -1,6 +1,6 @@
 //! Bundled source-token payload.
 //!
-//! Each [`SourceToken`] carries the raw [`Token`] together with the
+//! Each [`SourceToken`] carries the raw [`erl_tokenize::Token`] together with the
 //! [`Arc<Source>`] it indexes, its [`SourceId`], and its
 //! [`Origin`](crate::Origin). [`Source`] is the buffer the token's offsets
 //! refer to; [`Origin`](crate::Origin) is why the token appears (written in
@@ -13,14 +13,11 @@
 //! accumulate the tokens themselves; the preprocessor does not retain
 //! them internally.
 
-use std::sync::Arc;
-
-use erl_tokenize::{Token, TokenValue};
-
 use crate::origin::Origin;
 use crate::source::{Source, SourceId, SourceSpan};
+use std::sync::Arc;
 
-/// A scanned [`Token`] together with the [`Source`] it indexes and
+/// A scanned [`erl_tokenize::Token`] together with the [`Source`] it indexes and
 /// the [`Origin`] the preprocessor assigned to it.
 ///
 /// [`Source`] is the buffer the token's offsets refer to, not a claim
@@ -32,7 +29,7 @@ use crate::source::{Source, SourceId, SourceSpan};
 /// inspect a token without borrowing back into the preprocessor.
 #[derive(Debug, Clone)]
 pub struct SourceToken {
-    token: Token,
+    token: erl_tokenize::Token,
     source: Arc<Source>,
     source_id: SourceId,
     origin: Origin,
@@ -45,7 +42,7 @@ impl SourceToken {
     /// these; external callers observe them as the payload of
     /// [`Event::Token`](crate::Event::Token).
     pub(crate) fn new(
-        token: Token,
+        token: erl_tokenize::Token,
         source: Arc<Source>,
         source_id: SourceId,
         origin: Origin,
@@ -58,8 +55,8 @@ impl SourceToken {
         }
     }
 
-    /// Returns the underlying [`Token`].
-    pub fn token(&self) -> &Token {
+    /// Returns the underlying [`erl_tokenize::Token`].
+    pub fn token(&self) -> &erl_tokenize::Token {
         &self.token
     }
 
@@ -74,9 +71,9 @@ impl SourceToken {
     /// Decodes the value of this token.
     ///
     /// See [`erl_tokenize::Token::value`] for the borrowed/owned
-    /// contract of each variant. The returned [`TokenValue`] borrows
+    /// contract of each variant. The returned [`erl_tokenize::TokenValue`] borrows
     /// from the [`Source`] this bundle owns a handle to.
-    pub fn value(&self) -> TokenValue<'_> {
+    pub fn value(&self) -> erl_tokenize::TokenValue<'_> {
         self.token.value(self.source.text())
     }
 
@@ -105,12 +102,10 @@ mod tests {
 
     use std::assert_matches;
 
-    use erl_tokenize::{Position, scan_token};
-
     use crate::source::SourceStore;
 
-    fn scan_one(text: &str) -> Token {
-        scan_token(text, Position::new())
+    fn scan_one(text: &str) -> erl_tokenize::Token {
+        erl_tokenize::scan_token(text, erl_tokenize::Position::new())
             .expect("scan failed")
             .expect("expected at least one token")
     }
@@ -129,7 +124,10 @@ mod tests {
 
         assert_eq!(*tok.token(), token);
         assert_eq!(tok.text(), "foo");
-        assert_matches!(tok.value(), TokenValue::Atom(a) if a.as_ref() == "foo");
+        assert_matches!(
+            tok.value(),
+            erl_tokenize::TokenValue::Atom(a) if a.as_ref() == "foo"
+        );
         assert!(Arc::ptr_eq(tok.source(), &source));
         let span = tok.source_span();
         assert_eq!(span.source_id, source_id);

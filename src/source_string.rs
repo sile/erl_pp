@@ -51,9 +51,6 @@ impl fmt::Display for SourceString {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    use erl_tokenize::Position;
-
     use crate::source::{Source, SourceStore};
 
     fn dummy_span() -> SourceSpan {
@@ -61,7 +58,11 @@ mod tests {
         let id = store.append(
             Source::from_text("m.erl", "foo").expect("test input must scan without lex errors"),
         );
-        SourceSpan::new(id, Position::new(), Position::new())
+        SourceSpan::new(
+            id,
+            erl_tokenize::Position::new(),
+            erl_tokenize::Position::new(),
+        )
     }
 
     #[test]
