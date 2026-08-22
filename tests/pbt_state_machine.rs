@@ -9,6 +9,7 @@
 mod pbt_harness;
 
 use std::assert_matches;
+
 use noprop::{Ratio, Runner, TestCaseContext, TestResult};
 
 use pbt_harness::{
