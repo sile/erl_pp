@@ -2187,7 +2187,9 @@ mod tests {
     use crate::error::PreprocessError;
 
     fn make(text: &str) -> Preprocessor {
-        Preprocessor::new([Source::from_text("main.erl", text).expect("test input must scan without lex errors")])
+        Preprocessor::new([
+            Source::from_text("main.erl", text).expect("test input must scan without lex errors")
+        ])
     }
 
     fn define_source(text: &str) -> Source {
@@ -2235,7 +2237,8 @@ mod tests {
     #[test]
     fn resume_macro_expansion_while_scanning_is_unexpected_response() {
         let mut pp = make("foo");
-        let response = Source::from_text("<synth:test>", "").expect("test input must scan without lex errors");
+        let response =
+            Source::from_text("<synth:test>", "").expect("test input must scan without lex errors");
         assert_eq!(
             pp.resume_macro_expansion(response)
                 .expect_err("protocol error expected"),
@@ -2248,7 +2251,8 @@ mod tests {
         let mut pp = make("");
         // Drain to Completed.
         drain(&mut pp);
-        let response = Source::from_text("<synth:test>", "").expect("test input must scan without lex errors");
+        let response =
+            Source::from_text("<synth:test>", "").expect("test input must scan without lex errors");
         assert_eq!(
             pp.resume_macro_expansion(response)
                 .expect_err("protocol error expected"),
@@ -2312,7 +2316,8 @@ mod tests {
             Event::AwaitingMacroExpansion(req) => req,
             other => panic!("expected AwaitingMacroExpansion, got {other:?}"),
         };
-        let response = Source::from_text("<synth:UNKNOWN>", "bar").expect("test input must scan without lex errors");
+        let response = Source::from_text("<synth:UNKNOWN>", "bar")
+            .expect("test input must scan without lex errors");
         pp.resume_macro_expansion(response).expect("resume accepts");
         // The response token surfaces before the trailing dot.
         let ppt = match pp.step().expect("no protocol errors") {
@@ -2339,7 +2344,8 @@ mod tests {
             Event::AwaitingMacroExpansion(req) => req,
             other => panic!("expected AwaitingMacroExpansion, got {other:?}"),
         };
-        let empty_response = Source::from_text("<synth:UNKNOWN>", "").expect("test input must scan without lex errors");
+        let empty_response = Source::from_text("<synth:UNKNOWN>", "")
+            .expect("test input must scan without lex errors");
         pp.resume_macro_expansion(empty_response)
             .expect("resume accepts");
         // Next token is the trailing dot, no error event surfaces.
@@ -2362,8 +2368,11 @@ mod tests {
             match pp.step().expect("no protocol errors") {
                 Event::AwaitingMacroExpansion(req) => {
                     assert_eq!(req.name.as_str(), "BAR");
-                    pp.resume_macro_expansion(Source::from_text("<synth:BAR>", "x").expect("test input must scan without lex errors"))
-                        .expect("resume accepts");
+                    pp.resume_macro_expansion(
+                        Source::from_text("<synth:BAR>", "x")
+                            .expect("test input must scan without lex errors"),
+                    )
+                    .expect("resume accepts");
                 }
                 Event::Token(t) => texts.push(t.text().to_string()),
                 Event::Complete => break,
@@ -2705,7 +2714,8 @@ mod tests {
     fn source_sequence_scans_in_order_and_carries_macros() {
         let mut pp = Preprocessor::new([
             define_source("-define(FOO, 1)."),
-            Source::from_text("main.erl", "?FOO.").expect("test input must scan without lex errors"),
+            Source::from_text("main.erl", "?FOO.")
+                .expect("test input must scan without lex errors"),
         ]);
         assert!(pp.macros().is_empty());
         let mut saw_defined = false;
@@ -2842,7 +2852,8 @@ mod tests {
                 other => panic!("unexpected event before AwaitingMacroExpansion: {other:?}"),
             }
         }
-        let response = Source::from_text("<synth:FOO>", "?BAR").expect("test input must scan without lex errors");
+        let response = Source::from_text("<synth:FOO>", "?BAR")
+            .expect("test input must scan without lex errors");
         pp.resume_macro_expansion(response).expect("resume ok");
         loop {
             match pp.step().expect("no protocol error") {
@@ -3051,7 +3062,8 @@ mod tests {
             Event::AwaitingMacroExpansion(req) => assert_eq!(req.name.as_str(), "FOO"),
             other => panic!("expected AwaitingMacroExpansion, got {other:?}"),
         }
-        let response = Source::from_text("<synth:FOO>", "?FOO").expect("test input must scan without lex errors");
+        let response = Source::from_text("<synth:FOO>", "?FOO")
+            .expect("test input must scan without lex errors");
         pp.resume_macro_expansion(response).expect("resume ok");
         let (name, _arity, chain) = expect_circular(&mut pp);
         assert_eq!(name, "FOO");

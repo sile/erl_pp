@@ -219,7 +219,8 @@ mod tests {
 
     #[test]
     fn clone_shares_text() {
-        let src = Source::from_text("main.erl", "foo").expect("test input must scan without lex errors");
+        let src =
+            Source::from_text("main.erl", "foo").expect("test input must scan without lex errors");
         let cloned = src.clone();
         assert!(std::ptr::eq(src.text(), cloned.text()));
         assert!(std::ptr::eq(src.display_name(), cloned.display_name()));
@@ -231,7 +232,8 @@ mod tests {
 
     #[test]
     fn from_text_scans_tokens() {
-        let src = Source::from_text("main.erl", "foo bar").expect("test input must scan without lex errors");
+        let src = Source::from_text("main.erl", "foo bar")
+            .expect("test input must scan without lex errors");
         // foo, whitespace, bar
         assert_eq!(src.tokens().len(), 3);
     }
@@ -240,7 +242,8 @@ mod tests {
     fn new_accepts_external_tokens() {
         // Same tokens as would come from from_text but constructed via
         // Source::new to prove the two paths converge.
-        let scanned = Source::from_text("main.erl", "foo bar").expect("test input must scan without lex errors");
+        let scanned = Source::from_text("main.erl", "foo bar")
+            .expect("test input must scan without lex errors");
         let by_new = Source::new("main.erl", "foo bar", scanned.tokens().to_vec());
         assert_eq!(by_new.tokens().len(), scanned.tokens().len());
     }
@@ -250,8 +253,12 @@ mod tests {
         let store = SourceStore::new();
         assert!(store.is_empty());
 
-        let id_a = store.append(Source::from_text("a.erl", "a").expect("test input must scan without lex errors"));
-        let id_b = store.append(Source::from_text("b.erl", "bb").expect("test input must scan without lex errors"));
+        let id_a = store.append(
+            Source::from_text("a.erl", "a").expect("test input must scan without lex errors"),
+        );
+        let id_b = store.append(
+            Source::from_text("b.erl", "bb").expect("test input must scan without lex errors"),
+        );
         assert_ne!(id_a, id_b);
         assert_eq!(store.len(), 2);
 
@@ -263,12 +270,17 @@ mod tests {
     #[test]
     fn stable_addresses_after_further_append() {
         let store = SourceStore::new();
-        let id = store.append(Source::from_text("a.erl", "hello").expect("test input must scan without lex errors"));
+        let id = store.append(
+            Source::from_text("a.erl", "hello").expect("test input must scan without lex errors"),
+        );
         let first = store.get(id);
         let first_ptr = first.text().as_ptr();
 
         for i in 0..64 {
-            store.append(Source::from_text(format!("f{i}.erl"), format!("body {i}")).expect("test input must scan without lex errors"));
+            store.append(
+                Source::from_text(format!("f{i}.erl"), format!("body {i}"))
+                    .expect("test input must scan without lex errors"),
+            );
         }
 
         let after = store.get(id);
@@ -282,10 +294,16 @@ mod tests {
         let store = Arc::new(SourceStore::new());
         let fork = Arc::clone(&store);
 
-        let id = store.append(Source::from_text("main.erl", "-module(m).").expect("test input must scan without lex errors"));
+        let id = store.append(
+            Source::from_text("main.erl", "-module(m).")
+                .expect("test input must scan without lex errors"),
+        );
         assert_eq!(fork.get(id).text(), "-module(m).");
 
-        let fork_id = fork.append(Source::from_text("inc.hrl", "-define(X, 1).").expect("test input must scan without lex errors"));
+        let fork_id = fork.append(
+            Source::from_text("inc.hrl", "-define(X, 1).")
+                .expect("test input must scan without lex errors"),
+        );
         assert_eq!(store.get(fork_id).text(), "-define(X, 1).");
         assert_eq!(store.len(), 2);
         assert_eq!(fork.len(), 2);
