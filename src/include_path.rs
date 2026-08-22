@@ -456,7 +456,7 @@ mod tests {
 
     fn dummy_include(kind: IncludeKind, path: &str) -> IncludeDirective {
         let store = SourceStore::new();
-        let id = store.append(Source::from_text("m.erl", "-include(...)."));
+        let id = store.append(Source::from_text("m.erl", "-include(...).").expect("test input must scan without lex errors"));
         let span = SourceSpan::new(id, Position::new(), Position::new());
         IncludeDirective {
             kind,

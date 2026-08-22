@@ -809,7 +809,7 @@ mod tests {
 
     fn parse(text: &str) -> (Cursor, Result<Option<Directive>, ParseError>) {
         let store = SourceStore::new();
-        let id = store.append(Source::from_text("main.erl", text));
+        let id = store.append(Source::from_text("main.erl", text).expect("test input must scan without lex errors"));
         let mut cursor = Cursor::new(id, store.get(id));
         let result = parse_directive(&mut cursor);
         (cursor, result)
@@ -1041,7 +1041,7 @@ mod tests {
     #[test]
     fn source_id_on_span_matches_cursor() {
         let store = SourceStore::new();
-        let id = store.append(Source::from_text("main.erl", "-endif."));
+        let id = store.append(Source::from_text("main.erl", "-endif.").expect("test input must scan without lex errors"));
         let mut cursor = Cursor::new(id, store.get(id));
         let d = parse_directive(&mut cursor)
             .expect("parse should not error")

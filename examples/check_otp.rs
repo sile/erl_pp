@@ -102,15 +102,14 @@ fn run_one(
             };
         }
     };
-    let tokens = match scan_source(&src) {
-        Ok(t) => t,
+    let source = match erl_pp::Source::from_text(display, src) {
+        Ok(source) => source,
         Err(e) => {
             return FileOutcome::Failed {
                 reason: format!("scan_token: {e}"),
             };
         }
     };
-    let source = erl_pp::Source::new(display.to_string(), src, tokens);
     let mut pp = erl_pp::Preprocessor::new([source]);
 
     let mut events = 0usize;
@@ -177,21 +176,6 @@ fn run_one(
     }
 }
 
-fn scan_source(text: &str) -> Result<Vec<erl_tokenize::Token>, String> {
-    let mut tokens = Vec::new();
-    let mut pos = erl_tokenize::Position::new();
-    loop {
-        match erl_tokenize::scan_token(text, pos) {
-            Ok(Some(t)) => {
-                pos = t.end();
-                tokens.push(t);
-            }
-            Ok(None) => return Ok(tokens),
-            Err(e) => return Err(format!("{e}")),
-        }
-    }
-}
-
 fn resolve_include(
     include: &erl_pp::IncludeDirective,
     include_paths: &[PathBuf],
@@ -200,11 +184,8 @@ fn resolve_include(
     let raw_path = include.path.as_str();
     match erl_pp::open_include(include, include_paths, erl_libs) {
         Ok(path) => match fs::read_to_string(&path) {
-            Ok(text) => match scan_source(&text) {
-                Ok(tokens) => (
-                    erl_pp::Source::new(path.to_string_lossy().into_owned(), text, tokens),
-                    None,
-                ),
+            Ok(text) => match erl_pp::Source::from_text(path.to_string_lossy().into_owned(), text) {
+                Ok(source) => (source, None),
                 Err(e) => (
                     empty_source(raw_path),
                     Some(format!(

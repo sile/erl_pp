@@ -61,25 +61,9 @@ impl LabelSet {
 // erl_pp::Source construction
 // ============================================================
 
-/// Tokenize `text` with `erl_tokenize::scan_token`. Panics on
-/// tokenization failure — property generators produce well-formed
-/// programs, so lexical failures indicate a generator bug.
-pub fn scan_all(text: &str) -> Vec<erl_tokenize::Token> {
-    let mut tokens = Vec::new();
-    let mut position = erl_tokenize::Position::new();
-    while let Some(t) =
-        erl_tokenize::scan_token(text, position).expect("generated source scans cleanly")
-    {
-        position = t.end();
-        tokens.push(t);
-    }
-    tokens
-}
-
 /// Build an in-memory [`erl_pp::Source`] with the given display name and text.
 pub fn build_source(name: &str, text: &str) -> erl_pp::Source {
-    let tokens = scan_all(text);
-    erl_pp::Source::new(name, text.to_string(), tokens)
+    erl_pp::Source::from_text(name, text).expect("generated source scans cleanly")
 }
 
 // ============================================================

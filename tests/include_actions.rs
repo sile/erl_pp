@@ -9,15 +9,7 @@
 use std::sync::Arc;
 
 fn build_source(name: &str, text: &str) -> erl_pp::Source {
-    let mut tokens = Vec::new();
-    let mut position = erl_tokenize::Position::new();
-    while let Some(t) =
-        erl_tokenize::scan_token(text, position).expect("test input scans without lex errors")
-    {
-        position = t.end();
-        tokens.push(t);
-    }
-    erl_pp::Source::new(name, text.to_string(), tokens)
+    erl_pp::Source::from_text(name, text).expect("test input scans without lex errors")
 }
 
 fn make(text: &str) -> erl_pp::Preprocessor {

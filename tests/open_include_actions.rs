@@ -45,19 +45,9 @@ impl Drop for TempDir {
     }
 }
 
-fn scan_all(text: &str) -> Vec<erl_tokenize::Token> {
-    let mut tokens = Vec::new();
-    let mut position = erl_tokenize::Position::new();
-    while let Some(t) = erl_tokenize::scan_token(text, position).expect("tokenize test input") {
-        position = t.end();
-        tokens.push(t);
-    }
-    tokens
-}
-
 fn take_include_directive(source_text: &str) -> erl_pp::IncludeDirective {
-    let tokens = scan_all(source_text);
-    let source = erl_pp::Source::new("caller.erl", source_text.to_string(), tokens);
+    let source = erl_pp::Source::from_text("caller.erl", source_text.to_string())
+        .expect("tokenize test input");
     let mut pp = erl_pp::Preprocessor::new([source]);
     loop {
         match pp.step().expect("no protocol error") {

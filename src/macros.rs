@@ -451,7 +451,7 @@ mod tests {
 
     fn source(text: &str) -> (Arc<Source>, SourceId, Arc<SourceStore>) {
         let store = Arc::new(SourceStore::new());
-        let source_id = store.append(Source::from_text("m.erl", text));
+        let source_id = store.append(Source::from_text("m.erl", text).expect("test input must scan without lex errors"));
         let source = store.get(source_id);
         (source, source_id, store)
     }
